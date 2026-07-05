@@ -3,7 +3,7 @@
 mod commands;
 
 use clap::{Parser, Subcommand};
-use commands::{build, query, summary, validate};
+use commands::{build, eval, query, summary, validate};
 use std::process::ExitCode;
 
 #[derive(Parser)]
@@ -21,6 +21,8 @@ struct Cli {
 enum Commands {
     /// Build a prior book from a JSONL observation log.
     Build(build::BuildArgs),
+    /// Evaluate prior quality on held-out data.
+    Eval(eval::EvalArgs),
     /// Query a prior book for candidate actions from a state.
     Query(query::QueryArgs),
     /// Summarize a prior book's coverage and confidence.
@@ -34,6 +36,7 @@ fn main() -> ExitCode {
 
     let result = match cli.command {
         Commands::Build(args) => build::run(args),
+        Commands::Eval(args) => eval::run(args),
         Commands::Query(args) => query::run(args),
         Commands::Summary(args) => summary::run(args),
         Commands::Validate(args) => validate::run(args),

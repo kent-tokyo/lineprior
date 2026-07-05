@@ -120,6 +120,39 @@ about 13x less, for the same 1,000,000-observation input and identical output.
 
 Smaller, checked-in benchmarks live in `crates/lineprior/benches/scoring.rs` (run with `cargo bench -p lineprior`), covering both the eager `build_prior_book` and the streaming `build_prior_book_from_reader` at 1k/10k/50k-observation scales. A dedicated regression test (`crates/lineprior/tests/streaming_memory.rs`, Linux-only, runs in CI) fails if peak memory ever creeps back up toward the old per-observation scaling.
 
+## Evaluating a prior
+
+A prior is only useful if it actually ranks the right action highly on data it wasn't built
+from. `lineprior eval` holds out part of the observation log, builds a prior from the rest, and
+reports ranking-quality metrics on the held-out slice:
+
+```bash
+lineprior eval observations.jsonl \
+  --split-by sequence --train-ratio 0.8 --top-k 1,3,5 --out eval.json
+```
+
+The split is by `sequence_id`, not by individual observation, so every step of the same sequence
+lands on the same side — otherwise later steps could leak information about earlier ones across
+the train/test boundary. The split is a deterministic hash of the id, so re-running `eval` with
+the same `--train-ratio` reproduces the same split.
+
+Headline fields in the JSON report:
+
+- `top1_hit_rate` / `topk_hit_rate`: how often the actual action taken was the prior's #1 pick
+  (or within its top-k), among test observations where the prior had any candidate at all.
+- `mean_reciprocal_rank`: the same idea averaged over rank (`1/rank`, `0` if the action wasn't
+  among the candidates), a softer signal than a hard hit/miss cutoff.
+- `coverage` vs. `fallback_rate`: these intentionally do **not** sum to 1. `coverage` is
+  state-weighted (the fraction of *distinct* test states for which the prior returned any
+  candidate); `fallback_rate` is observation-weighted (the fraction of *test observations* whose
+  state had none). One rarely-seen state with no candidates barely moves `fallback_rate` but still
+  costs a full point of `coverage` — the report also includes the raw counts each rate is computed
+  from, so either framing can be double-checked directly.
+
+`lineprior eval --help` lists the full set of `build`-equivalent tuning flags (`--min-count`,
+`--smoothing-alpha`, etc.) — `eval` builds its train-side prior under the same knobs a real
+`build` run would use, so the two stay comparable.
+
 ## Academic positioning
 
 `lineprior` is an engineering-oriented Rust implementation inspired by existing ideas in case-based planning, plan reuse, sequence prediction, variable-order Markov models, and policy-guided search. It is not a new theoretical algorithm.

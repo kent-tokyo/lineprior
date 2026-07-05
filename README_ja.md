@@ -115,6 +115,38 @@ time ./target/release/lineprior build large.jsonl --out /dev/null --min-count 1
 
 チェックイン済みの小規模なベンチマークは `crates/lineprior/benches/scoring.rs` にあります(`cargo bench -p lineprior` で実行)。一括読み込み型の `build_prior_book` とストリーミング型の `build_prior_book_from_reader` の両方を、1,000 / 10,000 / 50,000 件の観測規模でカバーしています。専用のリグレッションテスト(`crates/lineprior/tests/streaming_memory.rs`、Linux限定、CIで実行)は、ピークメモリが以前の観測数比例のスケーリングに戻った場合に失敗するようになっています。
 
+## prior の性能を評価する
+
+prior は、まだ見ていないデータに対しても実際の行動を上位にランクできて初めて意味があります。
+`lineprior eval` は観測ログの一部を保留(held-out)にし、残りから prior を構築し、保留分に対する
+ランキング品質の指標を報告します。
+
+```bash
+lineprior eval observations.jsonl \
+  --split-by sequence --train-ratio 0.8 --top-k 1,3,5 --out eval.json
+```
+
+分割は個々の観測単位ではなく `sequence_id` 単位で行います。同じ系列のすべてのステップを同じ側に
+揃えることで、後のステップが前のステップの情報を train/test の境界を越えて漏らすことを防ぎます。
+分割は id の決定的なハッシュに基づくため、同じ `--train-ratio` で再実行すれば同じ分割が再現され
+ます。
+
+JSON レポートの主要なフィールド:
+
+- `top1_hit_rate` / `topk_hit_rate`: prior が何らかの候補を返せたテスト観測のうち、実際に取られ
+  た行動が prior の1位予測(またはtop-k以内)だった割合。
+- `mean_reciprocal_rank`: 同じ考え方を順位で平均したもの(`1/順位`、候補に入っていなければ `0`)。
+  ヒット/ミスの二値判定より緩やかなシグナルです。
+- `coverage` と `fallback_rate`: これらは意図的に合計が1になりません。`coverage` は状態重み付け
+  (prior が何らかの候補を返せた「異なるテスト状態」の割合)、`fallback_rate` は観測重み付け(候補
+  が1つもなかった「テスト観測」の割合)です。滅多に出現しない候補なし状態は `fallback_rate` をほ
+  とんど動かしませんが、`coverage` は丸ごと1点分下げます — レポートには各レートの元になった生の
+  カウントも含まれているので、どちらの見方でも直接検算できます。
+
+`lineprior eval --help` で `build` と同等のチューニングフラグ(`--min-count`、
+`--smoothing-alpha` など)が一覧できます — `eval` は実際の `build` 実行と同じノブで train 側の
+prior を構築するため、両者は比較可能なままです。
+
 ## 学術的な位置づけ
 
 `lineprior` は、case-based planning(事例ベース計画)、plan reuse(計画の再利用)、sequence prediction(系列予測)、variable-order Markov models(可変次数マルコフモデル)、policy-guided search(方策誘導探索)といった既存のアイデアに着想を得た、工学的な Rust 実装です。新しい理論的アルゴリズムではありません。

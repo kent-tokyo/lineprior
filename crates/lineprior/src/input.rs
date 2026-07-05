@@ -86,6 +86,17 @@ fn build_observation(raw: RawObservation, line: usize) -> Result<Observation> {
     })
 }
 
+/// Deserializes and validates one JSONL line, sharing the exact defaults
+/// and validation rules every streaming entry point in this module needs.
+pub(crate) fn parse_line(line: &str, line_no: usize) -> Result<Observation> {
+    serde_json::from_str::<RawObservation>(line)
+        .map_err(|source| Error::Json {
+            line: line_no,
+            source,
+        })
+        .and_then(|raw| build_observation(raw, line_no))
+}
+
 /// Streams JSONL observations from `reader`, one line at a time so memory
 /// stays bounded regardless of input size.
 ///
@@ -102,14 +113,7 @@ pub fn parse_jsonl(reader: impl Read, strict: bool) -> Result<ParseOutcome> {
         }
         let line_no = index + 1;
 
-        let record = serde_json::from_str::<RawObservation>(&line)
-            .map_err(|source| Error::Json {
-                line: line_no,
-                source,
-            })
-            .and_then(|raw| build_observation(raw, line_no));
-
-        match record {
+        match parse_line(&line, line_no) {
             Ok(observation) => outcome.observations.push(observation),
             Err(err) if strict => return Err(err),
             Err(err) => outcome.warnings.push(Warning {
@@ -160,14 +164,7 @@ pub fn build_prior_book_from_reader(
         }
         let line_no = index + 1;
 
-        let record = serde_json::from_str::<RawObservation>(&line)
-            .map_err(|source| Error::Json {
-                line: line_no,
-                source,
-            })
-            .and_then(|raw| build_observation(raw, line_no));
-
-        match record {
+        match parse_line(&line, line_no) {
             Ok(observation) => acc.observe(&observation),
             Err(err) if strict => return Err(err),
             Err(err) => warnings.push(Warning {

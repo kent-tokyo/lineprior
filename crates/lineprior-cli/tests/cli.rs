@@ -96,3 +96,72 @@ fn query_command_finds_known_state_and_returns_nothing_for_unseen() {
 
     let _ = std::fs::remove_file(&out);
 }
+
+/// Enough distinct sequences that an 80/20 hash split reliably yields a
+/// non-empty test set, unlike the small hand-written fixtures above.
+fn write_eval_fixture(path: &std::path::Path) {
+    let mut jsonl = String::new();
+    for i in 0..60 {
+        jsonl.push_str(&format!(
+            "{{\"sequence_id\":\"seq-{i}\",\"step\":0,\"state\":\"s\",\"action\":\"a\",\"outcome\":\"success\"}}\n"
+        ));
+    }
+    std::fs::write(path, jsonl).unwrap();
+}
+
+#[test]
+fn eval_command_prints_a_valid_json_report_to_stdout() {
+    let input = temp_path("eval_input.jsonl");
+    write_eval_fixture(&input);
+
+    let output = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args(["eval", input.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert!(report["num_train_observations"].as_u64().unwrap() > 0);
+    assert!(report["num_test_observations"].as_u64().unwrap() > 0);
+    assert_eq!(report["top1_hit_rate"], 1.0);
+
+    let _ = std::fs::remove_file(&input);
+}
+
+#[test]
+fn eval_command_writes_out_file_matching_stdout() {
+    let input = temp_path("eval_input_out.jsonl");
+    let out = temp_path("eval_report.json");
+    write_eval_fixture(&input);
+
+    let stdout_run = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args(["eval", input.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(stdout_run.status.success());
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "eval",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let from_stdout = String::from_utf8(stdout_run.stdout).unwrap();
+    let from_file = std::fs::read_to_string(&out).unwrap();
+    assert_eq!(
+        from_stdout.trim(),
+        from_file.trim(),
+        "--out content should match stdout content for the same input"
+    );
+
+    let _ = std::fs::remove_file(&input);
+    let _ = std::fs::remove_file(&out);
+}
