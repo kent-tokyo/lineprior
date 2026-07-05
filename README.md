@@ -95,8 +95,8 @@ For a real domain example: [`examples/shogi_opening.jsonl`](./examples/shogi_ope
 Measured on an Apple M4 (macOS 26.5.1), release build, 1,000,000 observations across 50,000 unique `(state, action)` pairs (1,000 states × 50 actions):
 
 ```text
-wall-clock:        2.07s
-peak RSS:          ~199 MB
+wall-clock:        1.71s
+peak RSS:          ~15.4 MB
 ```
 
 Reproduce with:
@@ -111,9 +111,14 @@ cargo build --release
 time ./target/release/lineprior build large.jsonl --out /dev/null --min-count 1
 ```
 
-**Known limitation:** AGENTS.md's MVP performance goal calls for memory "bounded proportional to unique `(state, action)` pairs." The current implementation does not meet this — `parse_jsonl` fully materializes all observations into memory before aggregation, so peak memory scales with total observation count, not unique pairs. Fixing this would mean reworking `parse_jsonl`'s public API from an eager `Vec` into a streaming iterator and updating every caller; that's a real API redesign, tracked as a follow-up rather than done here.
+Memory is now genuinely bounded by unique `(state, action)` pairs rather than total observation
+count, matching AGENTS.md's MVP performance goal: the CLI's `build` command streams straight from
+the input file into the prior book via `build_prior_book_from_reader`, folding each observation
+into a bounded accumulator as it's parsed instead of collecting a `Vec<Observation>` first. Peak
+RSS on the measurement above dropped from ~199MB (the old, fully-materializing path) to ~15.4MB —
+about 13x less, for the same 1,000,000-observation input and identical output.
 
-Smaller, checked-in benchmarks live in `crates/lineprior/benches/scoring.rs` (run with `cargo bench -p lineprior`), covering `build_prior_book` at 1k/10k/50k-observation scales for regular regression tracking.
+Smaller, checked-in benchmarks live in `crates/lineprior/benches/scoring.rs` (run with `cargo bench -p lineprior`), covering both the eager `build_prior_book` and the streaming `build_prior_book_from_reader` at 1k/10k/50k-observation scales. A dedicated regression test (`crates/lineprior/tests/streaming_memory.rs`, Linux-only, runs in CI) fails if peak memory ever creeps back up toward the old per-observation scaling.
 
 ## Academic positioning
 

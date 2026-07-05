@@ -17,38 +17,54 @@ struct ActionStats {
     weighted_score_count: f64,
 }
 
-/// Aggregates observations into a [`PriorBook`], applying filters,
-/// smoothing, normalization, and ranking per AGENTS.md's scoring model.
+/// Folds observations into a [`PriorBook`] one at a time, so memory stays
+/// bounded by the number of unique `(state, action)` pairs rather than the
+/// number of observations fed in. This is what lets [`crate::input::build_prior_book_from_reader`]
+/// stream a JSONL file straight into a prior book without ever collecting
+/// a `Vec<Observation>` -- the same accumulator backs both that streaming
+/// entry point and the eager [`build_prior_book`] below, so they can never
+/// drift apart in scoring behavior.
 ///
-/// Two passes happen here: first we fold observations into per-action
-/// totals *and* dataset-wide totals, then we score each action using the
-/// dataset-wide totals as the smoothing target. This order is required
-/// because smoothing needs the global rate before any single action's
-/// score can be finalized.
-pub fn build_prior_book(observations: &[Observation], config: &BuildConfig) -> Result<PriorBook> {
-    if observations.is_empty() {
-        return Err(Error::NoObservations);
+/// Smoothing needs the dataset-wide rate before any single action's score
+/// can be finalized, so this is a two-phase object: [`Self::observe`] folds
+/// in per-action totals *and* dataset-wide totals as observations arrive,
+/// then [`Self::finish`] uses the now-complete dataset-wide totals as the
+/// smoothing target for every action.
+pub(crate) struct PriorAccumulator<'a> {
+    stats: HashMap<String, HashMap<String, ActionStats>>,
+    global_weighted_successes: f64,
+    global_weighted_trials: f64,
+    global_weighted_score_sum: f64,
+    global_weighted_score_count: f64,
+    config: &'a BuildConfig,
+}
+
+impl<'a> PriorAccumulator<'a> {
+    pub(crate) fn new(config: &'a BuildConfig) -> Self {
+        Self {
+            stats: HashMap::new(),
+            global_weighted_successes: 0.0,
+            global_weighted_trials: 0.0,
+            global_weighted_score_sum: 0.0,
+            global_weighted_score_count: 0.0,
+            config,
+        }
     }
 
-    let mut stats: HashMap<String, HashMap<String, ActionStats>> = HashMap::new();
-    let mut global_weighted_successes = 0.0;
-    let mut global_weighted_trials = 0.0;
-    let mut global_weighted_score_sum = 0.0;
-    let mut global_weighted_score_count = 0.0;
-
-    for obs in observations {
-        if let Some(max_step) = config.max_step
+    pub(crate) fn observe(&mut self, obs: &Observation) {
+        if let Some(max_step) = self.config.max_step
             && obs.step > max_step
         {
-            continue;
+            return;
         }
-        if let Some(required_tags) = &config.tag_filter
+        if let Some(required_tags) = &self.config.tag_filter
             && !required_tags.iter().any(|tag| obs.tags.contains(tag))
         {
-            continue;
+            return;
         }
 
-        let entry = stats
+        let entry = self
+            .stats
             .entry(obs.state.clone())
             .or_default()
             .entry(obs.action.clone())
@@ -58,115 +74,149 @@ pub fn build_prior_book(observations: &[Observation], config: &BuildConfig) -> R
 
         if obs.outcome != Outcome::Unknown {
             entry.weighted_trials += obs.weight;
-            global_weighted_trials += obs.weight;
+            self.global_weighted_trials += obs.weight;
             // A draw earns partial credit rather than scoring like a loss;
             // both the per-action and dataset-wide totals must move
             // together since the latter is the smoothing target the
             // former shrinks toward.
             let success_credit = match obs.outcome {
                 Outcome::Success => 1.0,
-                Outcome::Draw => config.draw_value,
+                Outcome::Draw => self.config.draw_value,
                 Outcome::Failure | Outcome::Unknown => 0.0,
             };
             entry.weighted_successes += success_credit * obs.weight;
-            global_weighted_successes += success_credit * obs.weight;
+            self.global_weighted_successes += success_credit * obs.weight;
         }
 
         if let Some(score) = obs.score {
             entry.weighted_score_sum += obs.weight * score;
             entry.weighted_score_count += obs.weight;
-            global_weighted_score_sum += obs.weight * score;
-            global_weighted_score_count += obs.weight;
+            self.global_weighted_score_sum += obs.weight * score;
+            self.global_weighted_score_count += obs.weight;
         }
     }
 
-    if stats.is_empty() {
+    /// Always succeeds -- an accumulator that never observed anything (or
+    /// whose observations were entirely filtered out) simply yields an
+    /// empty [`PriorBook`]. Whether "empty" should be treated as an error
+    /// is a decision for each caller, not this shared core: the eager
+    /// [`build_prior_book`] below turns it into [`Error::NoObservations`]
+    /// for backward compatibility, while the streaming
+    /// [`crate::input::build_prior_book_from_reader`] returns it as-is so
+    /// that any warnings collected during parsing are never discarded
+    /// just because the result happened to end up empty.
+    pub(crate) fn finish(self) -> PriorBook {
+        // `None` here means "this dataset has no outcome/score data at
+        // all", which drops that scoring term for every action rather
+        // than treating a single action's missing data as a bad (zero)
+        // signal.
+        let global_success_rate =
+            ratio(self.global_weighted_successes, self.global_weighted_trials);
+        let global_mean_score = ratio(
+            self.global_weighted_score_sum,
+            self.global_weighted_score_count,
+        );
+
+        let mut entries: HashMap<String, Vec<PriorAction>> = HashMap::new();
+
+        for (state, actions) in self.stats {
+            let kept: Vec<(String, ActionStats)> = actions
+                .into_iter()
+                .filter(|(_, stat)| stat.count >= self.config.min_count)
+                .filter(|(_, stat)| stat.weighted_count >= self.config.min_weighted_count)
+                .filter(|(_, stat)| {
+                    confidence(stat.weighted_count, self.config.confidence_k)
+                        >= self.config.min_confidence
+                })
+                .collect();
+            if kept.is_empty() {
+                continue;
+            }
+
+            let raw_scores: Vec<f64> = kept
+                .iter()
+                .map(|(_, stat)| {
+                    let smoothed_success = global_success_rate.map(|global| {
+                        shrink_toward(
+                            stat.weighted_successes,
+                            stat.weighted_trials,
+                            self.config.smoothing_alpha,
+                            global,
+                        )
+                    });
+                    let smoothed_score = global_mean_score.map(|global| {
+                        shrink_toward(
+                            stat.weighted_score_sum,
+                            stat.weighted_score_count,
+                            self.config.smoothing_alpha,
+                            global,
+                        )
+                    });
+                    raw_score(
+                        stat.weighted_count,
+                        smoothed_success,
+                        smoothed_score,
+                        self.config,
+                    )
+                })
+                .collect();
+
+            let priors = normalize(&raw_scores);
+
+            let mut actions_out: Vec<PriorAction> = kept
+                .into_iter()
+                .zip(priors)
+                .map(|((action, stat), prior)| PriorAction {
+                    action,
+                    count: stat.count,
+                    weighted_count: stat.weighted_count,
+                    success_rate: ratio(stat.weighted_successes, stat.weighted_trials),
+                    mean_score: ratio(stat.weighted_score_sum, stat.weighted_score_count),
+                    prior,
+                    confidence: confidence(stat.weighted_count, self.config.confidence_k),
+                })
+                .collect();
+
+            if let Some(max_actions) = self.config.max_actions_per_state {
+                actions_out.sort_by(|a, b| {
+                    b.prior
+                        .partial_cmp(&a.prior)
+                        .unwrap_or(Ordering::Equal)
+                        .then_with(|| a.action.cmp(&b.action))
+                });
+                actions_out.truncate(max_actions);
+            }
+
+            entries.insert(state, actions_out);
+        }
+
+        PriorBook { entries }
+    }
+}
+
+/// Aggregates observations into a [`PriorBook`], applying filters,
+/// smoothing, normalization, and ranking per AGENTS.md's scoring model.
+///
+/// This eager form takes an already-collected slice; prefer
+/// [`crate::input::build_prior_book_from_reader`] when reading directly
+/// from a JSONL source, since it folds each observation in as it's parsed
+/// instead of holding them all in memory first.
+pub fn build_prior_book(observations: &[Observation], config: &BuildConfig) -> Result<PriorBook> {
+    if observations.is_empty() {
         return Err(Error::NoObservations);
     }
 
-    // `None` here means "this dataset has no outcome/score data at all",
-    // which drops that scoring term for every action rather than treating
-    // a single action's missing data as a bad (zero) signal.
-    let global_success_rate = ratio(global_weighted_successes, global_weighted_trials);
-    let global_mean_score = ratio(global_weighted_score_sum, global_weighted_score_count);
-
-    let mut entries: HashMap<String, Vec<PriorAction>> = HashMap::new();
-
-    for (state, actions) in stats {
-        let kept: Vec<(String, ActionStats)> = actions
-            .into_iter()
-            .filter(|(_, stat)| stat.count >= config.min_count)
-            .filter(|(_, stat)| stat.weighted_count >= config.min_weighted_count)
-            .filter(|(_, stat)| {
-                confidence(stat.weighted_count, config.confidence_k) >= config.min_confidence
-            })
-            .collect();
-        if kept.is_empty() {
-            continue;
-        }
-
-        let raw_scores: Vec<f64> = kept
-            .iter()
-            .map(|(_, stat)| {
-                let smoothed_success = global_success_rate.map(|global| {
-                    shrink_toward(
-                        stat.weighted_successes,
-                        stat.weighted_trials,
-                        config.smoothing_alpha,
-                        global,
-                    )
-                });
-                let smoothed_score = global_mean_score.map(|global| {
-                    shrink_toward(
-                        stat.weighted_score_sum,
-                        stat.weighted_score_count,
-                        config.smoothing_alpha,
-                        global,
-                    )
-                });
-                raw_score(
-                    stat.weighted_count,
-                    smoothed_success,
-                    smoothed_score,
-                    config,
-                )
-            })
-            .collect();
-
-        let priors = normalize(&raw_scores);
-
-        let mut actions_out: Vec<PriorAction> = kept
-            .into_iter()
-            .zip(priors)
-            .map(|((action, stat), prior)| PriorAction {
-                action,
-                count: stat.count,
-                weighted_count: stat.weighted_count,
-                success_rate: ratio(stat.weighted_successes, stat.weighted_trials),
-                mean_score: ratio(stat.weighted_score_sum, stat.weighted_score_count),
-                prior,
-                confidence: confidence(stat.weighted_count, config.confidence_k),
-            })
-            .collect();
-
-        if let Some(max_actions) = config.max_actions_per_state {
-            actions_out.sort_by(|a, b| {
-                b.prior
-                    .partial_cmp(&a.prior)
-                    .unwrap_or(Ordering::Equal)
-                    .then_with(|| a.action.cmp(&b.action))
-            });
-            actions_out.truncate(max_actions);
-        }
-
-        entries.insert(state, actions_out);
+    let mut acc = PriorAccumulator::new(config);
+    for obs in observations {
+        acc.observe(obs);
     }
+    let book = acc.finish();
 
-    if entries.is_empty() {
+    if book.entries.is_empty() {
         return Err(Error::NoObservations);
     }
 
-    Ok(PriorBook { entries })
+    Ok(book)
 }
 
 #[cfg(test)]

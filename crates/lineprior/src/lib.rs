@@ -17,7 +17,7 @@ mod score;
 
 pub use build::build_prior_book;
 pub use error::{Error, Result, Warning};
-pub use input::{ParseOutcome, parse_jsonl};
+pub use input::{BuildOutput, ParseOutcome, build_prior_book_from_reader, parse_jsonl};
 pub use model::{
     BuildConfig, DEFAULT_CONFIDENCE_K, DEFAULT_DRAW_VALUE, Observation, Outcome, PriorAction,
     PriorBook, PriorEntry,

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Args;
-use lineprior::{BuildConfig, build_prior_book, parse_jsonl, save_prior_book};
+use lineprior::{BuildConfig, build_prior_book_from_reader, save_prior_book};
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
@@ -66,17 +66,6 @@ pub fn run(args: BuildArgs) -> Result<ExitCode> {
         }
     };
 
-    let parsed = match parse_jsonl(file, args.strict) {
-        Ok(parsed) => parsed,
-        Err(err) => {
-            eprintln!("error: {err}");
-            return Ok(super::exit_code_for_lineprior_error(&err));
-        }
-    };
-    for warning in &parsed.warnings {
-        eprintln!("warning: {warning}");
-    }
-
     let config = BuildConfig {
         min_count: args.min_count,
         min_weighted_count: args.min_weighted_count,
@@ -94,19 +83,30 @@ pub fn run(args: BuildArgs) -> Result<ExitCode> {
         ..BuildConfig::default()
     };
 
-    let book = match build_prior_book(&parsed.observations, &config) {
-        Ok(book) => book,
+    // Streams straight from the file into the prior book -- memory stays
+    // bounded by unique (state, action) pairs, not the number of lines
+    // read, instead of collecting every observation into a Vec first.
+    let output = match build_prior_book_from_reader(file, args.strict, &config) {
+        Ok(output) => output,
         Err(err) => {
             eprintln!("error: {err}");
             return Ok(super::exit_code_for_lineprior_error(&err));
         }
     };
+    for warning in &output.warnings {
+        eprintln!("warning: {warning}");
+    }
+
+    if output.book.entries.is_empty() {
+        eprintln!("error: no usable data");
+        return Ok(ExitCode::from(2));
+    }
 
     let out_file =
         File::create(&args.out).with_context(|| format!("creating {}", args.out.display()))?;
-    save_prior_book(&book, BufWriter::new(out_file)).context("writing prior book")?;
+    save_prior_book(&output.book, BufWriter::new(out_file)).context("writing prior book")?;
 
-    if !parsed.warnings.is_empty() {
+    if !output.warnings.is_empty() {
         return Ok(ExitCode::from(1));
     }
     Ok(ExitCode::from(0))

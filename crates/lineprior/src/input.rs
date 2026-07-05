@@ -1,5 +1,5 @@
 use crate::error::{Error, Result, Warning};
-use crate::model::{Observation, Outcome};
+use crate::model::{BuildConfig, Observation, Outcome, PriorBook};
 use serde::Deserialize;
 use std::io::{BufRead, BufReader, Read};
 
@@ -122,6 +122,67 @@ pub fn parse_jsonl(reader: impl Read, strict: bool) -> Result<ParseOutcome> {
     Ok(outcome)
 }
 
+/// Result of [`build_prior_book_from_reader`]: the built book plus any
+/// non-fatal warnings collected along the way. `book` may legitimately be
+/// empty (no observations, or everything got filtered out) -- callers
+/// that want "empty means an error" should check `book.entries.is_empty()`
+/// themselves, the same way [`crate::report::summarize`]'s callers do.
+#[derive(Debug)]
+pub struct BuildOutput {
+    pub book: PriorBook,
+    pub warnings: Vec<Warning>,
+}
+
+/// Parses and aggregates a JSONL observation stream in one pass, without
+/// ever collecting a `Vec<Observation>` -- peak memory stays bounded by
+/// the number of unique `(state, action)` pairs, not the number of lines
+/// read. Prefer this over `parse_jsonl` + `build_prior_book` for anything
+/// beyond small, already-in-memory inputs.
+///
+/// Strict mode still aborts (returning `Err`) on the first invalid record,
+/// matching `parse_jsonl`. Non-strict mode never returns `Err` for bad
+/// records or an empty/fully-filtered result -- warnings and an empty
+/// `book` carry that information back to the caller instead, so a
+/// diagnostic build never silently loses the warnings that explain why it
+/// came back empty.
+pub fn build_prior_book_from_reader(
+    reader: impl Read,
+    strict: bool,
+    config: &BuildConfig,
+) -> Result<BuildOutput> {
+    let mut acc = crate::build::PriorAccumulator::new(config);
+    let mut warnings = Vec::new();
+
+    for (index, line) in BufReader::new(reader).lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let line_no = index + 1;
+
+        let record = serde_json::from_str::<RawObservation>(&line)
+            .map_err(|source| Error::Json {
+                line: line_no,
+                source,
+            })
+            .and_then(|raw| build_observation(raw, line_no));
+
+        match record {
+            Ok(observation) => acc.observe(&observation),
+            Err(err) if strict => return Err(err),
+            Err(err) => warnings.push(Warning {
+                line: line_no,
+                message: err.to_string(),
+            }),
+        }
+    }
+
+    Ok(BuildOutput {
+        book: acc.finish(),
+        warnings,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,5 +293,90 @@ mod tests {
         assert_eq!(outcome.observations.len(), 2);
         assert_eq!(outcome.observations[0].sequence_id, "c");
         assert_eq!(outcome.observations[1].sequence_id, "c");
+    }
+
+    // build_prior_book_from_reader: parity with the eager parse_jsonl +
+    // build_prior_book path, plus the behavior that's deliberately
+    // different (see build.rs::PriorAccumulator::finish doc comment).
+
+    #[test]
+    fn build_prior_book_from_reader_matches_eager_path_on_non_empty_input() {
+        // Exercises max_step, tag filtering, and draw_value together: the
+        // "late" and untagged "b" observations both get filtered out
+        // (by max_step and tags respectively) via a different code path
+        // in each API, so this also proves the filters agree.
+        let jsonl = concat!(
+            "{\"sequence_id\":\"c1\",\"step\":0,\"state\":\"s\",\"action\":\"a\",\"outcome\":\"success\",\"weight\":1.0,\"tags\":[\"trusted\"]}\n",
+            "{\"sequence_id\":\"c2\",\"step\":0,\"state\":\"s\",\"action\":\"a\",\"outcome\":\"draw\",\"weight\":1.0,\"tags\":[\"trusted\"]}\n",
+            "{\"sequence_id\":\"c3\",\"step\":0,\"state\":\"s\",\"action\":\"b\",\"outcome\":\"failure\",\"weight\":2.0}\n",
+            "{\"sequence_id\":\"c4\",\"step\":99,\"state\":\"s\",\"action\":\"late\",\"outcome\":\"success\",\"weight\":1.0,\"tags\":[\"trusted\"]}\n",
+        );
+        let config = BuildConfig {
+            max_step: Some(10),
+            draw_value: 0.3,
+            min_weighted_count: 0.5,
+            tag_filter: Some(vec!["trusted".to_string()]),
+            ..BuildConfig::default()
+        };
+
+        let eager = {
+            let parsed = parse(jsonl, true).unwrap();
+            crate::build::build_prior_book(&parsed.observations, &config).unwrap()
+        };
+        let streaming = build_prior_book_from_reader(jsonl.as_bytes(), true, &config).unwrap();
+
+        assert!(!streaming.book.entries.is_empty());
+        assert_eq!(eager.entries_sorted(), streaming.book.entries_sorted());
+    }
+
+    #[test]
+    fn build_prior_book_from_reader_collects_warnings_in_non_strict_mode() {
+        let jsonl = "{\"sequence_id\":\"c1\",\"step\":0,\"state\":\"s\",\"action\":\"a\"}\n{\"state\":\"\",\"action\":\"a\",\"sequence_id\":\"c2\",\"step\":1}\n";
+        let output =
+            build_prior_book_from_reader(jsonl.as_bytes(), false, &BuildConfig::default()).unwrap();
+
+        assert_eq!(output.warnings.len(), 1);
+        assert_eq!(output.warnings[0].line, 2);
+        assert_eq!(output.book.entries["s"].len(), 1);
+        assert_eq!(output.book.entries["s"][0].action, "a");
+    }
+
+    #[test]
+    fn build_prior_book_from_reader_strict_mode_aborts_on_first_invalid_record() {
+        let jsonl = "{\"sequence_id\":\"c1\",\"step\":0,\"state\":\"s\",\"action\":\"a\"}\n{\"state\":\"\",\"action\":\"a\",\"sequence_id\":\"c2\",\"step\":1}\n";
+        let err = build_prior_book_from_reader(jsonl.as_bytes(), true, &BuildConfig::default())
+            .unwrap_err();
+        assert!(matches!(err, Error::EmptyState { line: 2 }));
+    }
+
+    #[test]
+    fn build_prior_book_from_reader_returns_empty_book_when_input_is_empty() {
+        let output =
+            build_prior_book_from_reader("".as_bytes(), true, &BuildConfig::default()).unwrap();
+        assert!(output.book.entries.is_empty());
+        assert!(output.warnings.is_empty());
+    }
+
+    #[test]
+    fn build_prior_book_from_reader_returns_empty_book_when_everything_is_filtered_out() {
+        let jsonl = "{\"sequence_id\":\"c1\",\"step\":99,\"state\":\"s\",\"action\":\"a\"}\n";
+        let config = BuildConfig {
+            max_step: Some(1),
+            ..BuildConfig::default()
+        };
+        let output = build_prior_book_from_reader(jsonl.as_bytes(), true, &config).unwrap();
+        assert!(output.book.entries.is_empty());
+    }
+
+    #[test]
+    fn empty_input_deliberately_diverges_from_the_eager_path() {
+        // The eager path treats empty input as an error (unchanged,
+        // existing behavior)...
+        assert!(crate::build::build_prior_book(&[], &BuildConfig::default()).is_err());
+        // ...but build_prior_book_from_reader does not, so a real run's
+        // warnings are never discarded just because the result is empty.
+        let output =
+            build_prior_book_from_reader("".as_bytes(), true, &BuildConfig::default()).unwrap();
+        assert!(output.book.entries.is_empty());
     }
 }
