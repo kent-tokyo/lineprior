@@ -59,10 +59,17 @@ pub fn build_prior_book(observations: &[Observation], config: &BuildConfig) -> R
         if obs.outcome != Outcome::Unknown {
             entry.weighted_trials += obs.weight;
             global_weighted_trials += obs.weight;
-            if obs.outcome == Outcome::Success {
-                entry.weighted_successes += obs.weight;
-                global_weighted_successes += obs.weight;
-            }
+            // A draw earns partial credit rather than scoring like a loss;
+            // both the per-action and dataset-wide totals must move
+            // together since the latter is the smoothing target the
+            // former shrinks toward.
+            let success_credit = match obs.outcome {
+                Outcome::Success => 1.0,
+                Outcome::Draw => config.draw_value,
+                Outcome::Failure | Outcome::Unknown => 0.0,
+            };
+            entry.weighted_successes += success_credit * obs.weight;
+            global_weighted_successes += success_credit * obs.weight;
         }
 
         if let Some(score) = obs.score {
@@ -89,6 +96,10 @@ pub fn build_prior_book(observations: &[Observation], config: &BuildConfig) -> R
         let kept: Vec<(String, ActionStats)> = actions
             .into_iter()
             .filter(|(_, stat)| stat.count >= config.min_count)
+            .filter(|(_, stat)| stat.weighted_count >= config.min_weighted_count)
+            .filter(|(_, stat)| {
+                confidence(stat.weighted_count, config.confidence_k) >= config.min_confidence
+            })
             .collect();
         if kept.is_empty() {
             continue;
@@ -231,6 +242,157 @@ mod tests {
         let book = build_prior_book(&observations, &config).unwrap();
         assert!(book.entries["s"].iter().all(|a| a.action != "rare"));
         assert!(book.entries["s"].iter().any(|a| a.action == "common"));
+    }
+
+    #[test]
+    fn applies_min_weighted_count_filter_independent_of_raw_count() {
+        let observations = vec![
+            obs(
+                "c1",
+                0,
+                "s",
+                "many_tiny",
+                Outcome::Unknown,
+                None,
+                0.01,
+                vec![],
+            ),
+            obs(
+                "c2",
+                0,
+                "s",
+                "many_tiny",
+                Outcome::Unknown,
+                None,
+                0.01,
+                vec![],
+            ),
+            obs(
+                "c3",
+                0,
+                "s",
+                "few_heavy",
+                Outcome::Unknown,
+                None,
+                10.0,
+                vec![],
+            ),
+        ];
+        let config = BuildConfig {
+            min_weighted_count: 1.0,
+            ..Default::default()
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+        assert!(book.entries["s"].iter().all(|a| a.action != "many_tiny"));
+        assert!(book.entries["s"].iter().any(|a| a.action == "few_heavy"));
+    }
+
+    #[test]
+    fn applies_min_confidence_filter() {
+        let observations = vec![
+            obs(
+                "c1",
+                0,
+                "s",
+                "unproven",
+                Outcome::Unknown,
+                None,
+                1.0,
+                vec![],
+            ),
+            obs(
+                "c2",
+                0,
+                "s",
+                "proven",
+                Outcome::Unknown,
+                None,
+                100.0,
+                vec![],
+            ),
+        ];
+        let config = BuildConfig {
+            min_confidence: 0.5,
+            ..Default::default()
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+        assert!(book.entries["s"].iter().all(|a| a.action != "unproven"));
+        assert!(book.entries["s"].iter().any(|a| a.action == "proven"));
+    }
+
+    #[test]
+    fn draw_earns_partial_success_credit_via_draw_value() {
+        let observations = vec![
+            obs("c1", 0, "s", "a", Outcome::Success, None, 1.0, vec![]),
+            obs("c2", 0, "s", "a", Outcome::Draw, None, 1.0, vec![]),
+        ];
+        // Default draw_value = 0.5: one success + one draw over 2 trials
+        // is credited as (1.0 + 0.5) / 2 = 0.75, not 0.5 (draw-as-loss).
+        let book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        assert_eq!(action(&book, "s", "a").success_rate, Some(0.75));
+    }
+
+    #[test]
+    fn draw_value_zero_reproduces_draw_as_failure_behavior() {
+        let observations = vec![
+            obs("c1", 0, "s", "a", Outcome::Success, None, 1.0, vec![]),
+            obs("c2", 0, "s", "a", Outcome::Draw, None, 1.0, vec![]),
+        ];
+        let config = BuildConfig {
+            draw_value: 0.0,
+            ..Default::default()
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+        assert_eq!(action(&book, "s", "a").success_rate, Some(0.5));
+    }
+
+    #[test]
+    fn draw_credit_also_shifts_the_shared_global_smoothing_rate() {
+        // "steady" has a plain 1-success/1-failure record untouched by
+        // draw_value directly. "drawer" has a single draw. Both actions
+        // share the same state, so their priors are normalized against
+        // each other -- if draw credit only applied locally to "drawer"
+        // and never reached the *global* rate, "steady"'s prior share
+        // would stay fixed as draw_value changes. It shouldn't.
+        let observations = vec![
+            obs("c1", 0, "s", "steady", Outcome::Success, None, 1.0, vec![]),
+            obs("c2", 0, "s", "steady", Outcome::Failure, None, 1.0, vec![]),
+            obs("c3", 0, "s", "drawer", Outcome::Draw, None, 1.0, vec![]),
+        ];
+        let base = BuildConfig {
+            count_weight: 0.0,
+            score_weight: 0.0,
+            success_weight: 1.0,
+            smoothing_alpha: 5.0,
+            ..Default::default()
+        };
+
+        let credited_as_failure = build_prior_book(
+            &observations,
+            &BuildConfig {
+                draw_value: 0.0,
+                ..base.clone()
+            },
+        )
+        .unwrap();
+        let credited_as_partial = build_prior_book(
+            &observations,
+            &BuildConfig {
+                draw_value: 0.5,
+                ..base
+            },
+        )
+        .unwrap();
+
+        // "steady" never has a draw of its own, so if draw credit didn't
+        // reach the global accumulator, its prior would be identical in
+        // both runs. It isn't: expected 48/83 with draw_value=0 vs 0.5
+        // with draw_value=0.5 (worked out from the smoothing formula).
+        let steady_prior_failure = action(&credited_as_failure, "s", "steady").prior;
+        let steady_prior_partial = action(&credited_as_partial, "s", "steady").prior;
+        assert!((steady_prior_failure - 48.0 / 83.0).abs() < 1e-6);
+        assert!((steady_prior_partial - 0.5).abs() < 1e-6);
+        assert!((steady_prior_failure - steady_prior_partial).abs() > 0.05);
     }
 
     #[test]

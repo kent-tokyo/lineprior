@@ -19,7 +19,8 @@ pub use build::build_prior_book;
 pub use error::{Error, Result, Warning};
 pub use input::{ParseOutcome, parse_jsonl};
 pub use model::{
-    BuildConfig, DEFAULT_CONFIDENCE_K, Observation, Outcome, PriorAction, PriorBook, PriorEntry,
+    BuildConfig, DEFAULT_CONFIDENCE_K, DEFAULT_DRAW_VALUE, Observation, Outcome, PriorAction,
+    PriorBook, PriorEntry,
 };
-pub use query::load_prior_book;
+pub use query::{load_prior_book, save_prior_book};
 pub use report::{StateEntropy, SummaryReport, state_entropy, summarize};

@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use clap::Args;
-use lineprior::{BuildConfig, build_prior_book, parse_jsonl};
+use lineprior::{BuildConfig, build_prior_book, parse_jsonl, save_prior_book};
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::BufWriter;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -18,6 +18,14 @@ pub struct BuildArgs {
     /// Minimum observation count for an action to appear in the output.
     #[arg(long, default_value_t = 1)]
     min_count: u64,
+
+    /// Minimum weighted count for an action to appear in the output.
+    #[arg(long, default_value_t = 0.0)]
+    min_weighted_count: f64,
+
+    /// Minimum confidence (see --confidence-k) for an action to appear in the output.
+    #[arg(long, default_value_t = 0.0)]
+    min_confidence: f64,
 
     /// Drop observations with `step` greater than this value.
     #[arg(long)]
@@ -39,6 +47,10 @@ pub struct BuildArgs {
     /// Keep only observations carrying at least one of these tags (comma-separated).
     #[arg(long, value_delimiter = ',')]
     tags: Vec<String>,
+
+    /// Success credit for a Draw outcome (0.0 scores like a loss, 1.0 like a win).
+    #[arg(long, default_value_t = lineprior::DEFAULT_DRAW_VALUE)]
+    draw_value: f64,
 
     /// Fail on the first invalid record instead of skipping it with a warning.
     #[arg(long)]
@@ -67,10 +79,13 @@ pub fn run(args: BuildArgs) -> Result<ExitCode> {
 
     let config = BuildConfig {
         min_count: args.min_count,
+        min_weighted_count: args.min_weighted_count,
+        min_confidence: args.min_confidence,
         max_step: args.max_step,
         smoothing_alpha: args.smoothing_alpha,
         max_actions_per_state: args.max_actions_per_state,
         confidence_k: args.confidence_k,
+        draw_value: args.draw_value,
         tag_filter: if args.tags.is_empty() {
             None
         } else {
@@ -89,12 +104,7 @@ pub fn run(args: BuildArgs) -> Result<ExitCode> {
 
     let out_file =
         File::create(&args.out).with_context(|| format!("creating {}", args.out.display()))?;
-    let mut writer = BufWriter::new(out_file);
-    for entry in book.entries_sorted() {
-        serde_json::to_writer(&mut writer, &entry).context("writing prior book")?;
-        writer.write_all(b"\n").context("writing prior book")?;
-    }
-    writer.flush().context("writing prior book")?;
+    save_prior_book(&book, BufWriter::new(out_file)).context("writing prior book")?;
 
     if !parsed.warnings.is_empty() {
         return Ok(ExitCode::from(1));

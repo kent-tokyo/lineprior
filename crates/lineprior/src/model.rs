@@ -42,10 +42,21 @@ impl Outcome {
 /// This prevents one-off successes from dominating the prior.
 pub const DEFAULT_CONFIDENCE_K: f64 = 20.0;
 
+/// A draw is a genuine partial outcome in adversarial games (chess, shogi),
+/// not a loss -- we default to crediting it as half a win rather than
+/// scoring it identically to a failure.
+pub const DEFAULT_DRAW_VALUE: f64 = 0.5;
+
 /// Tuning knobs for [`crate::build::build_prior_book`].
 #[derive(Debug, Clone)]
 pub struct BuildConfig {
     pub min_count: u64,
+    /// Minimum weighted count for an action to appear in the output.
+    /// `0.0` means no filtering beyond `min_count`.
+    pub min_weighted_count: f64,
+    /// Minimum confidence (see [`DEFAULT_CONFIDENCE_K`]) for an action to
+    /// appear in the output. `0.0` means no filtering.
+    pub min_confidence: f64,
     pub max_step: Option<u32>,
     pub smoothing_alpha: f64,
     pub score_weight: f64,
@@ -53,6 +64,9 @@ pub struct BuildConfig {
     pub count_weight: f64,
     pub max_actions_per_state: Option<usize>,
     pub confidence_k: f64,
+    /// Success credit given to a `Draw` outcome, between 0.0 (scores like
+    /// a failure) and 1.0 (scores like a win).
+    pub draw_value: f64,
     /// Keep only observations carrying at least one of these tags.
     /// `None` means no tag filtering.
     pub tag_filter: Option<Vec<String>>,
@@ -62,6 +76,8 @@ impl Default for BuildConfig {
     fn default() -> Self {
         Self {
             min_count: 1,
+            min_weighted_count: 0.0,
+            min_confidence: 0.0,
             max_step: None,
             smoothing_alpha: 5.0,
             score_weight: 1.0,
@@ -69,6 +85,7 @@ impl Default for BuildConfig {
             count_weight: 1.0,
             max_actions_per_state: None,
             confidence_k: DEFAULT_CONFIDENCE_K,
+            draw_value: DEFAULT_DRAW_VALUE,
             tag_filter: None,
         }
     }
@@ -80,6 +97,8 @@ pub struct PriorAction {
     pub action: String,
     pub count: u64,
     pub weighted_count: f64,
+    /// Raw (unsmoothed) rate: successes count as 1.0, draws count as
+    /// `BuildConfig::draw_value` (default 0.5), failures as 0.0.
     pub success_rate: Option<f64>,
     pub mean_score: Option<f64>,
     pub prior: f64,

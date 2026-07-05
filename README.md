@@ -1,5 +1,7 @@
 # lineprior
 
+[日本語](./README_ja.md) / English
+
 `lineprior` is a Rust library and CLI for building domain-agnostic **action priors** from historical action sequences. Given a state, it answers:
 
 > What actions have historically worked well from here?
@@ -25,7 +27,7 @@ lineprior build observations.jsonl \
   --smoothing-alpha 5.0
 ```
 
-Useful flags: `--max-step` (drop observations past a given step), `--max-actions-per-state` (keep only the top N candidates), `--tags` (keep only observations carrying at least one of the given tags, comma-separated), `--confidence-k` (tune how fast confidence grows with sample size), `--strict` (fail on the first invalid record instead of skipping it with a warning).
+Useful flags: `--max-step` (drop observations past a given step), `--max-actions-per-state` (keep only the top N candidates), `--tags` (keep only observations carrying at least one of the given tags, comma-separated), `--confidence-k` (tune how fast confidence grows with sample size), `--min-weighted-count` / `--min-confidence` (filter on the weighted count or heuristic confidence directly, instead of just the raw `--min-count`), `--draw-value` (success credit for a `draw` outcome — default `0.5`, since a draw is a genuine partial outcome in adversarial games, not a loss), `--strict` (fail on the first invalid record instead of skipping it with a warning).
 
 ## Querying a prior book
 
@@ -61,7 +63,7 @@ One JSON object per state, actions ranked by descending prior:
 {"state":"state_a","actions":[{"action":"action_x","count":3,"weighted_count":3.0,"success_rate":0.667,"mean_score":0.633,"prior":0.557,"confidence":0.130}]}
 ```
 
-`success_rate` and `mean_score` are the raw, unsmoothed observed rates (for transparency); `prior` is the smoothed, normalized ranking score; `confidence` is a heuristic sample-size indicator, not a statistical guarantee.
+`success_rate` and `mean_score` are the raw, unsmoothed observed rates (for transparency); `prior` is the smoothed, normalized ranking score; `confidence` is a heuristic sample-size indicator, not a statistical guarantee. `success_rate` credits a `success` outcome as 1.0, a `draw` as `--draw-value` (default 0.5), and a `failure` as 0.0.
 
 ## Limitations
 
@@ -85,6 +87,33 @@ Optimization:
 ```
 
 Domain-specific mappings (e.g. a chess/shogi position as `state`, a UCI/USI move as `action`) belong in adapters outside this crate, not in `lineprior` itself.
+
+For a real domain example: [`examples/shogi_opening.jsonl`](./examples/shogi_opening.jsonl) uses `state` = an SFEN string and `action` = a USI move, the mapping described in AGENTS.md's Sekirei integration notes. Its generated prior ([`examples/shogi_prior.jsonl`](./examples/shogi_prior.jsonl)) ranks `7g7f` above `2g2f` despite `2g2f`'s raw observed rate being higher (100% vs. 83%) — `7g7f` has one more supporting observation, and smoothing correctly refuses to let `2g2f`'s smaller sample outrank it on a single-observation-driven perfect record.
+
+## Performance
+
+Measured on an Apple M4 (macOS 26.5.1), release build, 1,000,000 observations across 50,000 unique `(state, action)` pairs (1,000 states × 50 actions):
+
+```text
+wall-clock:        2.07s
+peak RSS:          ~199 MB
+```
+
+Reproduce with:
+
+```bash
+awk 'BEGIN{
+  for (s=0; s<1000; s++) for (a=0; a<50; a++) for (i=0; i<20; i++)
+    printf "{\"sequence_id\":\"seq_%d_%d_%d\",\"step\":0,\"state\":\"state_%05d\",\"action\":\"action_%03d\",\"outcome\":\"%s\",\"score\":%.2f,\"weight\":1.0}\n", \
+      s, a, i, s, a, (i % 3 == 0 ? "failure" : "success"), 0.5 + (i % 10) * 0.01
+}' > large.jsonl
+cargo build --release
+time ./target/release/lineprior build large.jsonl --out /dev/null --min-count 1
+```
+
+**Known limitation:** AGENTS.md's MVP performance goal calls for memory "bounded proportional to unique `(state, action)` pairs." The current implementation does not meet this — `parse_jsonl` fully materializes all observations into memory before aggregation, so peak memory scales with total observation count, not unique pairs. Fixing this would mean reworking `parse_jsonl`'s public API from an eager `Vec` into a streaming iterator and updating every caller; that's a real API redesign, tracked as a follow-up rather than done here.
+
+Smaller, checked-in benchmarks live in `crates/lineprior/benches/scoring.rs` (run with `cargo bench -p lineprior`), covering `build_prior_book` at 1k/10k/50k-observation scales for regular regression tracking.
 
 ## Academic positioning
 

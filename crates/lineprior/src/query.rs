@@ -1,7 +1,7 @@
 use crate::error::{Error, Result};
 use crate::model::{PriorBook, PriorEntry};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 
 /// Reads a prior book back from the JSONL format emitted by `build`.
 /// Querying itself is `PriorBook::query` -- an unseen state returns no
@@ -22,6 +22,22 @@ pub fn load_prior_book(reader: impl Read) -> Result<PriorBook> {
     }
 
     Ok(PriorBook { entries })
+}
+
+/// Writes a prior book as JSONL, one line per state, in the same
+/// deterministic order as [`PriorBook::entries_sorted`]. The inverse of
+/// [`load_prior_book`].
+///
+/// Flushes before returning -- a buffered writer's `Drop` swallows flush
+/// errors, so a late write failure (e.g. a full disk) must surface here.
+pub fn save_prior_book(book: &PriorBook, mut writer: impl Write) -> Result<()> {
+    for entry in book.entries_sorted() {
+        serde_json::to_writer(&mut writer, &entry)
+            .map_err(|e| Error::Io(std::io::Error::other(e)))?;
+        writer.write_all(b"\n")?;
+    }
+    writer.flush()?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -60,5 +76,15 @@ mod tests {
         let top1 = book.query("s", Some(1));
         assert_eq!(top1.len(), 1);
         assert_eq!(top1[0].action, "a");
+    }
+
+    #[test]
+    fn save_then_load_round_trips_a_prior_book() {
+        let book = sample_book();
+        let mut buf: Vec<u8> = Vec::new();
+        save_prior_book(&book, &mut buf).unwrap();
+
+        let reloaded = load_prior_book(buf.as_slice()).unwrap();
+        assert_eq!(reloaded.query("s", None), book.query("s", None));
     }
 }
