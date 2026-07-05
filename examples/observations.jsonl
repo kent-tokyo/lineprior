@@ -1,0 +1,7 @@
+{"sequence_id":"case-001","step":0,"state":"state_a","action":"action_x","outcome":"success","score":0.9,"weight":1.0,"tags":["trusted"]}
+{"sequence_id":"case-002","step":0,"state":"state_a","action":"action_x","outcome":"success","score":0.8,"weight":1.0,"tags":["trusted"]}
+{"sequence_id":"case-003","step":0,"state":"state_a","action":"action_x","outcome":"failure","score":0.2,"weight":1.0,"tags":["trusted"]}
+{"sequence_id":"case-004","step":0,"state":"state_a","action":"action_y","outcome":"success","score":1.0,"weight":1.0}
+{"sequence_id":"case-005","step":1,"state":"state_b","action":"action_z","outcome":"success","score":0.7,"weight":2.0}
+{"sequence_id":"case-006","step":1,"state":"state_b","action":"action_z","outcome":"failure","score":0.3,"weight":1.0}
+{"sequence_id":"case-007","step":1,"state":"state_b","action":"action_w","outcome":"unknown","weight":1.0}

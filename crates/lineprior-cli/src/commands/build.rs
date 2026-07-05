@@ -1,0 +1,103 @@
+use anyhow::{Context, Result};
+use clap::Args;
+use lineprior::{BuildConfig, build_prior_book, parse_jsonl};
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+#[derive(Args)]
+pub struct BuildArgs {
+    /// Input JSONL observation log.
+    input: PathBuf,
+
+    /// Output path for the prior book JSONL.
+    #[arg(long)]
+    out: PathBuf,
+
+    /// Minimum observation count for an action to appear in the output.
+    #[arg(long, default_value_t = 1)]
+    min_count: u64,
+
+    /// Drop observations with `step` greater than this value.
+    #[arg(long)]
+    max_step: Option<u32>,
+
+    /// Smoothing strength: higher values pull low-sample rates further
+    /// toward the dataset-wide rate.
+    #[arg(long, default_value_t = 5.0)]
+    smoothing_alpha: f64,
+
+    /// Keep only the top N ranked actions per state.
+    #[arg(long)]
+    max_actions_per_state: Option<usize>,
+
+    /// Confidence half-life `k` in `confidence = weighted_count / (weighted_count + k)`.
+    #[arg(long, default_value_t = lineprior::DEFAULT_CONFIDENCE_K)]
+    confidence_k: f64,
+
+    /// Keep only observations carrying at least one of these tags (comma-separated).
+    #[arg(long, value_delimiter = ',')]
+    tags: Vec<String>,
+
+    /// Fail on the first invalid record instead of skipping it with a warning.
+    #[arg(long)]
+    strict: bool,
+}
+
+pub fn run(args: BuildArgs) -> Result<ExitCode> {
+    let file = match File::open(&args.input) {
+        Ok(f) => f,
+        Err(err) => {
+            eprintln!("error: opening {}: {err}", args.input.display());
+            return Ok(ExitCode::from(3));
+        }
+    };
+
+    let parsed = match parse_jsonl(file, args.strict) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return Ok(super::exit_code_for_lineprior_error(&err));
+        }
+    };
+    for warning in &parsed.warnings {
+        eprintln!("warning: {warning}");
+    }
+
+    let config = BuildConfig {
+        min_count: args.min_count,
+        max_step: args.max_step,
+        smoothing_alpha: args.smoothing_alpha,
+        max_actions_per_state: args.max_actions_per_state,
+        confidence_k: args.confidence_k,
+        tag_filter: if args.tags.is_empty() {
+            None
+        } else {
+            Some(args.tags)
+        },
+        ..BuildConfig::default()
+    };
+
+    let book = match build_prior_book(&parsed.observations, &config) {
+        Ok(book) => book,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return Ok(super::exit_code_for_lineprior_error(&err));
+        }
+    };
+
+    let out_file =
+        File::create(&args.out).with_context(|| format!("creating {}", args.out.display()))?;
+    let mut writer = BufWriter::new(out_file);
+    for entry in book.entries_sorted() {
+        serde_json::to_writer(&mut writer, &entry).context("writing prior book")?;
+        writer.write_all(b"\n").context("writing prior book")?;
+    }
+    writer.flush().context("writing prior book")?;
+
+    if !parsed.warnings.is_empty() {
+        return Ok(ExitCode::from(1));
+    }
+    Ok(ExitCode::from(0))
+}

@@ -1,0 +1,461 @@
+use crate::error::{Error, Result};
+use crate::model::{BuildConfig, Observation, Outcome, PriorAction, PriorBook};
+use crate::score::{confidence, normalize, ratio, raw_score, shrink_toward};
+use std::cmp::Ordering;
+use std::collections::HashMap;
+
+/// Running totals for one `(state, action)` pair.
+#[derive(Debug, Default, Clone)]
+struct ActionStats {
+    count: u64,
+    weighted_count: f64,
+    /// Weighted successes / weighted trials, where a "trial" is any
+    /// observation with a decisive (non-unknown) outcome.
+    weighted_successes: f64,
+    weighted_trials: f64,
+    weighted_score_sum: f64,
+    weighted_score_count: f64,
+}
+
+/// Aggregates observations into a [`PriorBook`], applying filters,
+/// smoothing, normalization, and ranking per AGENTS.md's scoring model.
+///
+/// Two passes happen here: first we fold observations into per-action
+/// totals *and* dataset-wide totals, then we score each action using the
+/// dataset-wide totals as the smoothing target. This order is required
+/// because smoothing needs the global rate before any single action's
+/// score can be finalized.
+pub fn build_prior_book(observations: &[Observation], config: &BuildConfig) -> Result<PriorBook> {
+    if observations.is_empty() {
+        return Err(Error::NoObservations);
+    }
+
+    let mut stats: HashMap<String, HashMap<String, ActionStats>> = HashMap::new();
+    let mut global_weighted_successes = 0.0;
+    let mut global_weighted_trials = 0.0;
+    let mut global_weighted_score_sum = 0.0;
+    let mut global_weighted_score_count = 0.0;
+
+    for obs in observations {
+        if let Some(max_step) = config.max_step
+            && obs.step > max_step
+        {
+            continue;
+        }
+        if let Some(required_tags) = &config.tag_filter
+            && !required_tags.iter().any(|tag| obs.tags.contains(tag))
+        {
+            continue;
+        }
+
+        let entry = stats
+            .entry(obs.state.clone())
+            .or_default()
+            .entry(obs.action.clone())
+            .or_default();
+        entry.count += 1;
+        entry.weighted_count += obs.weight;
+
+        if obs.outcome != Outcome::Unknown {
+            entry.weighted_trials += obs.weight;
+            global_weighted_trials += obs.weight;
+            if obs.outcome == Outcome::Success {
+                entry.weighted_successes += obs.weight;
+                global_weighted_successes += obs.weight;
+            }
+        }
+
+        if let Some(score) = obs.score {
+            entry.weighted_score_sum += obs.weight * score;
+            entry.weighted_score_count += obs.weight;
+            global_weighted_score_sum += obs.weight * score;
+            global_weighted_score_count += obs.weight;
+        }
+    }
+
+    if stats.is_empty() {
+        return Err(Error::NoObservations);
+    }
+
+    // `None` here means "this dataset has no outcome/score data at all",
+    // which drops that scoring term for every action rather than treating
+    // a single action's missing data as a bad (zero) signal.
+    let global_success_rate = ratio(global_weighted_successes, global_weighted_trials);
+    let global_mean_score = ratio(global_weighted_score_sum, global_weighted_score_count);
+
+    let mut entries: HashMap<String, Vec<PriorAction>> = HashMap::new();
+
+    for (state, actions) in stats {
+        let kept: Vec<(String, ActionStats)> = actions
+            .into_iter()
+            .filter(|(_, stat)| stat.count >= config.min_count)
+            .collect();
+        if kept.is_empty() {
+            continue;
+        }
+
+        let raw_scores: Vec<f64> = kept
+            .iter()
+            .map(|(_, stat)| {
+                let smoothed_success = global_success_rate.map(|global| {
+                    shrink_toward(
+                        stat.weighted_successes,
+                        stat.weighted_trials,
+                        config.smoothing_alpha,
+                        global,
+                    )
+                });
+                let smoothed_score = global_mean_score.map(|global| {
+                    shrink_toward(
+                        stat.weighted_score_sum,
+                        stat.weighted_score_count,
+                        config.smoothing_alpha,
+                        global,
+                    )
+                });
+                raw_score(
+                    stat.weighted_count,
+                    smoothed_success,
+                    smoothed_score,
+                    config,
+                )
+            })
+            .collect();
+
+        let priors = normalize(&raw_scores);
+
+        let mut actions_out: Vec<PriorAction> = kept
+            .into_iter()
+            .zip(priors)
+            .map(|((action, stat), prior)| PriorAction {
+                action,
+                count: stat.count,
+                weighted_count: stat.weighted_count,
+                success_rate: ratio(stat.weighted_successes, stat.weighted_trials),
+                mean_score: ratio(stat.weighted_score_sum, stat.weighted_score_count),
+                prior,
+                confidence: confidence(stat.weighted_count, config.confidence_k),
+            })
+            .collect();
+
+        if let Some(max_actions) = config.max_actions_per_state {
+            actions_out.sort_by(|a, b| {
+                b.prior
+                    .partial_cmp(&a.prior)
+                    .unwrap_or(Ordering::Equal)
+                    .then_with(|| a.action.cmp(&b.action))
+            });
+            actions_out.truncate(max_actions);
+        }
+
+        entries.insert(state, actions_out);
+    }
+
+    if entries.is_empty() {
+        return Err(Error::NoObservations);
+    }
+
+    Ok(PriorBook { entries })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Test-only helper; a builder would be overkill for fixture data.
+    #[allow(clippy::too_many_arguments)]
+    fn obs(
+        sequence_id: &str,
+        step: u32,
+        state: &str,
+        action: &str,
+        outcome: Outcome,
+        score: Option<f64>,
+        weight: f64,
+        tags: Vec<&str>,
+    ) -> Observation {
+        Observation {
+            sequence_id: sequence_id.to_string(),
+            step,
+            state: state.to_string(),
+            action: action.to_string(),
+            outcome,
+            score,
+            weight,
+            tags: tags.into_iter().map(str::to_string).collect(),
+        }
+    }
+
+    fn action<'a>(book: &'a PriorBook, state: &str, action: &str) -> &'a PriorAction {
+        book.entries[state]
+            .iter()
+            .find(|a| a.action == action)
+            .unwrap()
+    }
+
+    #[test]
+    fn aggregates_counts_and_weighted_counts() {
+        let observations = vec![
+            obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![]),
+            obs("c2", 0, "s", "a", Outcome::Unknown, None, 2.5, vec![]),
+        ];
+        let book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        let a = action(&book, "s", "a");
+        assert_eq!(a.count, 2);
+        assert_eq!(a.weighted_count, 3.5);
+    }
+
+    #[test]
+    fn computes_success_rate_and_mean_score() {
+        let observations = vec![
+            obs("c1", 0, "s", "a", Outcome::Success, Some(1.0), 1.0, vec![]),
+            obs("c2", 0, "s", "a", Outcome::Failure, Some(0.0), 1.0, vec![]),
+        ];
+        let book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        let a = action(&book, "s", "a");
+        assert_eq!(a.success_rate, Some(0.5));
+        assert_eq!(a.mean_score, Some(0.5));
+    }
+
+    #[test]
+    fn applies_min_count_filter() {
+        let observations = vec![
+            obs("c1", 0, "s", "rare", Outcome::Unknown, None, 1.0, vec![]),
+            obs("c2", 0, "s", "common", Outcome::Unknown, None, 1.0, vec![]),
+            obs("c3", 0, "s", "common", Outcome::Unknown, None, 1.0, vec![]),
+        ];
+        let config = BuildConfig {
+            min_count: 2,
+            ..Default::default()
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+        assert!(book.entries["s"].iter().all(|a| a.action != "rare"));
+        assert!(book.entries["s"].iter().any(|a| a.action == "common"));
+    }
+
+    #[test]
+    fn smoothing_pulls_a_lone_success_toward_the_global_rate() {
+        let observations = vec![
+            obs("c1", 0, "s", "lucky", Outcome::Success, None, 1.0, vec![]),
+            obs("c2", 0, "s", "steady", Outcome::Success, None, 1.0, vec![]),
+            obs("c3", 0, "s", "steady", Outcome::Failure, None, 1.0, vec![]),
+            obs("c4", 0, "s", "steady", Outcome::Success, None, 1.0, vec![]),
+            obs("c5", 0, "s", "steady", Outcome::Failure, None, 1.0, vec![]),
+        ];
+        let base = BuildConfig {
+            count_weight: 0.0,
+            score_weight: 0.0,
+            success_weight: 1.0,
+            min_count: 1,
+            ..Default::default()
+        };
+
+        let unsmoothed = build_prior_book(
+            &observations,
+            &BuildConfig {
+                smoothing_alpha: 0.0,
+                ..base.clone()
+            },
+        )
+        .unwrap();
+        let heavily_smoothed = build_prior_book(
+            &observations,
+            &BuildConfig {
+                smoothing_alpha: 50.0,
+                ..base
+            },
+        )
+        .unwrap();
+
+        let lucky_unsmoothed = action(&unsmoothed, "s", "lucky").prior;
+        let lucky_smoothed = action(&heavily_smoothed, "s", "lucky").prior;
+        assert!(
+            lucky_smoothed < lucky_unsmoothed,
+            "smoothing should temper a lone perfect record: {lucky_smoothed} should be < {lucky_unsmoothed}"
+        );
+    }
+
+    #[test]
+    fn normalizes_priors_to_sum_to_one_per_state() {
+        let observations = vec![
+            obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![]),
+            obs("c2", 0, "s", "b", Outcome::Unknown, None, 3.0, vec![]),
+        ];
+        let book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        let sum: f64 = book.entries["s"].iter().map(|a| a.prior).sum();
+        assert!((sum - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn deterministic_output_ordering_is_stable_across_runs() {
+        let observations = vec![
+            obs("c1", 0, "s2", "a", Outcome::Unknown, None, 1.0, vec![]),
+            obs("c2", 0, "s1", "b", Outcome::Unknown, None, 5.0, vec![]),
+            obs("c3", 0, "s1", "a", Outcome::Unknown, None, 1.0, vec![]),
+        ];
+        let config = BuildConfig::default();
+        let first = build_prior_book(&observations, &config).unwrap();
+        let second = build_prior_book(&observations, &config).unwrap();
+
+        let first_json = serde_json::to_string(&first.entries_sorted()).unwrap();
+        let second_json = serde_json::to_string(&second.entries_sorted()).unwrap();
+        assert_eq!(first_json, second_json);
+
+        let sorted = first.entries_sorted();
+        assert_eq!(sorted[0].state, "s1");
+        assert_eq!(sorted[1].state, "s2");
+        // Within s1, "b" (weight 5) outranks "a" (weight 1).
+        assert_eq!(sorted[0].actions[0].action, "b");
+    }
+
+    #[test]
+    fn query_unseen_state_returns_no_candidates() {
+        let observations = vec![obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])];
+        let book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        assert!(book.query("nonexistent", None).is_empty());
+    }
+
+    #[test]
+    fn query_known_state_returns_candidates() {
+        let observations = vec![obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])];
+        let book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        assert_eq!(book.query("s", None).len(), 1);
+    }
+
+    #[test]
+    fn empty_input_is_an_error() {
+        let err = build_prior_book(&[], &BuildConfig::default()).unwrap_err();
+        assert!(matches!(err, Error::NoObservations));
+    }
+
+    #[test]
+    fn all_unknown_outcomes_drops_success_rate_entirely() {
+        let observations = vec![
+            obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![]),
+            obs("c2", 0, "s", "b", Outcome::Unknown, None, 1.0, vec![]),
+        ];
+        let book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        assert!(book.entries["s"].iter().all(|a| a.success_rate.is_none()));
+    }
+
+    #[test]
+    fn all_failures_reports_zero_success_rate_not_none() {
+        let observations = vec![obs("c1", 0, "s", "a", Outcome::Failure, None, 1.0, vec![])];
+        let book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        assert_eq!(action(&book, "s", "a").success_rate, Some(0.0));
+    }
+
+    #[test]
+    fn all_successes_reports_full_success_rate() {
+        let observations = vec![obs("c1", 0, "s", "a", Outcome::Success, None, 1.0, vec![])];
+        let book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        assert_eq!(action(&book, "s", "a").success_rate, Some(1.0));
+    }
+
+    #[test]
+    fn one_observation_builds_successfully() {
+        let observations = vec![obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])];
+        let book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        assert_eq!(action(&book, "s", "a").count, 1);
+    }
+
+    #[test]
+    fn extremely_large_counts_do_not_overflow_or_panic() {
+        let observations: Vec<Observation> = (0..50_000)
+            .map(|i| {
+                obs(
+                    &format!("c{i}"),
+                    0,
+                    "s",
+                    "a",
+                    Outcome::Success,
+                    None,
+                    1.0,
+                    vec![],
+                )
+            })
+            .collect();
+        let book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        let a = action(&book, "s", "a");
+        assert_eq!(a.count, 50_000);
+        assert!(a.confidence > 0.999);
+    }
+
+    #[test]
+    fn duplicate_sequence_ids_are_all_counted() {
+        let observations = vec![
+            obs("dup", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![]),
+            obs("dup", 1, "s", "a", Outcome::Unknown, None, 1.0, vec![]),
+        ];
+        let book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        assert_eq!(action(&book, "s", "a").count, 2);
+    }
+
+    #[test]
+    fn multiple_actions_per_state_all_appear() {
+        let observations = vec![
+            obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![]),
+            obs("c2", 0, "s", "b", Outcome::Unknown, None, 1.0, vec![]),
+            obs("c3", 0, "s", "c", Outcome::Unknown, None, 1.0, vec![]),
+        ];
+        let book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        assert_eq!(book.entries["s"].len(), 3);
+    }
+
+    #[test]
+    fn max_step_filters_out_later_steps() {
+        let observations = vec![
+            obs("c1", 0, "s", "early", Outcome::Unknown, None, 1.0, vec![]),
+            obs("c2", 99, "s", "late", Outcome::Unknown, None, 1.0, vec![]),
+        ];
+        let config = BuildConfig {
+            max_step: Some(10),
+            ..Default::default()
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+        assert!(book.entries["s"].iter().all(|a| a.action != "late"));
+    }
+
+    #[test]
+    fn tag_filter_keeps_only_matching_observations() {
+        let observations = vec![
+            obs(
+                "c1",
+                0,
+                "s",
+                "trusted",
+                Outcome::Unknown,
+                None,
+                1.0,
+                vec!["trusted"],
+            ),
+            obs(
+                "c2",
+                0,
+                "s",
+                "untrusted",
+                Outcome::Unknown,
+                None,
+                1.0,
+                vec![],
+            ),
+        ];
+        let config = BuildConfig {
+            tag_filter: Some(vec!["trusted".to_string()]),
+            ..Default::default()
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+        assert!(book.entries["s"].iter().all(|a| a.action != "untrusted"));
+    }
+
+    #[test]
+    fn no_observations_survive_filtering_is_an_error() {
+        let observations = vec![obs("c1", 99, "s", "a", Outcome::Unknown, None, 1.0, vec![])];
+        let config = BuildConfig {
+            max_step: Some(1),
+            ..Default::default()
+        };
+        let err = build_prior_book(&observations, &config).unwrap_err();
+        assert!(matches!(err, Error::NoObservations));
+    }
+}
