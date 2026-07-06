@@ -1,26 +1,72 @@
 use crate::error::{Error, Result};
-use crate::model::{PriorBook, PriorEntry};
+use crate::model::{BuildConfig, PriorAction, PriorBook, PriorEntry};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 
-/// Reads a prior book back from the JSONL format emitted by `build`.
-/// Querying itself is `PriorBook::query` -- an unseen state returns no
-/// candidates rather than an error or an invented action.
-pub fn load_prior_book(reader: impl Read) -> Result<PriorBook> {
-    let mut entries: HashMap<String, Vec<crate::model::PriorAction>> = HashMap::new();
+/// Matches `PriorBook::entries`'s shape.
+type Entries = HashMap<String, Vec<PriorAction>>;
 
-    for (index, line) in BufReader::new(reader).lines().enumerate() {
+/// Deserializes one line of a saved prior book.
+fn parse_entry_line(line: &str, line_no: usize) -> Result<PriorEntry> {
+    serde_json::from_str(line).map_err(|source| Error::Json {
+        line: line_no,
+        source,
+    })
+}
+
+/// Optional first line of a book saved via [`save_prior_book_with_config`]:
+/// a fingerprint of the `BuildConfig` used to build it. Schema-disjoint
+/// from [`PriorEntry`] (each requires a field the other lacks), so a
+/// header can never be mistaken for a state entry or vice versa.
+#[derive(Serialize, Deserialize)]
+struct BookHeader {
+    build_config_fingerprint: u64,
+}
+
+/// Shared by [`load_prior_book`] and [`load_prior_book_with_config`]: reads
+/// every line, transparently skipping a leading header if present (whether
+/// or not the caller cares to validate it), and returns whatever
+/// fingerprint it found alongside the parsed entries.
+fn load_entries(reader: impl Read) -> Result<(Entries, Option<u64>)> {
+    let mut entries: Entries = HashMap::new();
+    let mut fingerprint = None;
+    let mut lines = BufReader::new(reader).lines().enumerate();
+
+    if let Some((index, line)) = lines.next() {
+        let line = line?;
+        if !line.trim().is_empty() {
+            match serde_json::from_str::<BookHeader>(&line) {
+                Ok(header) => fingerprint = Some(header.build_config_fingerprint),
+                Err(_) => {
+                    let entry = parse_entry_line(&line, index + 1)?;
+                    entries.insert(entry.state, entry.actions);
+                }
+            }
+        }
+    }
+
+    for (index, line) in lines {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
-        let entry: PriorEntry = serde_json::from_str(&line).map_err(|source| Error::Json {
-            line: index + 1,
-            source,
-        })?;
+        let entry = parse_entry_line(&line, index + 1)?;
         entries.insert(entry.state, entry.actions);
     }
 
+    Ok((entries, fingerprint))
+}
+
+/// Reads a prior book back from the JSONL format emitted by `build`.
+/// Querying itself is `PriorBook::query` -- an unseen state returns no
+/// candidates rather than an error or an invented action.
+///
+/// Tolerates (and ignores) a leading config-fingerprint header written by
+/// [`save_prior_book_with_config`]; use [`load_prior_book_with_config`] to
+/// actually validate it against an expected `BuildConfig`.
+pub fn load_prior_book(reader: impl Read) -> Result<PriorBook> {
+    let (entries, _fingerprint) = load_entries(reader)?;
     Ok(PriorBook { entries })
 }
 
@@ -38,6 +84,57 @@ pub fn save_prior_book(book: &PriorBook, mut writer: impl Write) -> Result<()> {
     }
     writer.flush()?;
     Ok(())
+}
+
+/// Deterministic fingerprint of a [`BuildConfig`], stable *within a given
+/// lineprior version* (it hashes a JSON encoding, and serde_json's exact
+/// byte layout for floats is not itself guaranteed forever-stable across
+/// serde_json versions -- unlike `eval`'s sequence-id hash, which only
+/// ever hashes raw string bytes and so carries a stronger cross-version
+/// guarantee). Good enough to detect a stale cached prior book within one
+/// project's lifetime; not meant as a long-term archival checksum.
+pub fn build_config_fingerprint(config: &BuildConfig) -> u64 {
+    let canonical = serde_json::to_vec(config).expect("BuildConfig always serializes");
+    crate::hash::fnv1a(&canonical)
+}
+
+/// Like [`save_prior_book`], but also writes a leading header line with
+/// `config`'s fingerprint, so a later [`load_prior_book_with_config`] call
+/// can detect whether the book was built under different config values
+/// than the caller currently expects.
+pub fn save_prior_book_with_config(
+    book: &PriorBook,
+    config: &BuildConfig,
+    mut writer: impl Write,
+) -> Result<()> {
+    let header = BookHeader {
+        build_config_fingerprint: build_config_fingerprint(config),
+    };
+    serde_json::to_writer(&mut writer, &header).map_err(|e| Error::Io(std::io::Error::other(e)))?;
+    writer.write_all(b"\n")?;
+    save_prior_book(book, writer)
+}
+
+/// Like [`load_prior_book`], but also checks the file's embedded
+/// `BuildConfig` fingerprint (if any) against `expected_config`'s
+/// fingerprint. Returns [`Error::BuildConfigMismatch`] if the file has a
+/// header and it doesn't match -- otherwise a stale cached book could
+/// silently be reused as if its `confidence`/`prior` values were computed
+/// under the caller's current config. A file with no header (saved by
+/// plain [`save_prior_book`], or by a version of lineprior that predates
+/// this) is accepted unconditionally -- there's nothing to compare against.
+pub fn load_prior_book_with_config(
+    reader: impl Read,
+    expected_config: &BuildConfig,
+) -> Result<PriorBook> {
+    let (entries, fingerprint) = load_entries(reader)?;
+    if let Some(found) = fingerprint {
+        let expected = build_config_fingerprint(expected_config);
+        if found != expected {
+            return Err(Error::BuildConfigMismatch { expected, found });
+        }
+    }
+    Ok(PriorBook { entries })
 }
 
 #[cfg(test)]
@@ -85,6 +182,74 @@ mod tests {
         save_prior_book(&book, &mut buf).unwrap();
 
         let reloaded = load_prior_book(buf.as_slice()).unwrap();
+        assert_eq!(reloaded.query("s", None), book.query("s", None));
+    }
+
+    #[test]
+    fn build_config_fingerprint_is_deterministic() {
+        let config = BuildConfig::default();
+        assert_eq!(
+            build_config_fingerprint(&config),
+            build_config_fingerprint(&config)
+        );
+    }
+
+    #[test]
+    fn build_config_fingerprint_is_sensitive_to_config_changes() {
+        let a = BuildConfig::default();
+        let b = BuildConfig {
+            smoothing_alpha: a.smoothing_alpha + 1.0,
+            ..a.clone()
+        };
+        assert_ne!(build_config_fingerprint(&a), build_config_fingerprint(&b));
+    }
+
+    #[test]
+    fn load_prior_book_skips_a_config_header_transparently() {
+        let book = sample_book();
+        let mut buf: Vec<u8> = Vec::new();
+        save_prior_book_with_config(&book, &BuildConfig::default(), &mut buf).unwrap();
+
+        // Plain load_prior_book never validates the header, just tolerates it.
+        let reloaded = load_prior_book(buf.as_slice()).unwrap();
+        assert_eq!(reloaded.query("s", None), book.query("s", None));
+    }
+
+    #[test]
+    fn load_prior_book_with_config_succeeds_when_config_matches() {
+        let book = sample_book();
+        let config = BuildConfig::default();
+        let mut buf: Vec<u8> = Vec::new();
+        save_prior_book_with_config(&book, &config, &mut buf).unwrap();
+
+        let reloaded = load_prior_book_with_config(buf.as_slice(), &config).unwrap();
+        assert_eq!(reloaded.query("s", None), book.query("s", None));
+    }
+
+    #[test]
+    fn load_prior_book_with_config_errors_when_config_differs() {
+        let book = sample_book();
+        let saved_with = BuildConfig::default();
+        let mut buf: Vec<u8> = Vec::new();
+        save_prior_book_with_config(&book, &saved_with, &mut buf).unwrap();
+
+        let expected_now = BuildConfig {
+            smoothing_alpha: saved_with.smoothing_alpha + 1.0,
+            ..saved_with
+        };
+        let err = load_prior_book_with_config(buf.as_slice(), &expected_now).unwrap_err();
+        assert!(matches!(err, Error::BuildConfigMismatch { .. }));
+    }
+
+    #[test]
+    fn load_prior_book_with_config_accepts_a_plain_headerless_file() {
+        let book = sample_book();
+        let mut buf: Vec<u8> = Vec::new();
+        save_prior_book(&book, &mut buf).unwrap(); // no header written
+
+        // Nothing to compare against, so any config is "compatible".
+        let reloaded =
+            load_prior_book_with_config(buf.as_slice(), &BuildConfig::default()).unwrap();
         assert_eq!(reloaded.query("s", None), book.query("s", None));
     }
 }

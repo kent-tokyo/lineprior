@@ -10,13 +10,14 @@
 mod build;
 mod error;
 mod eval;
+mod hash;
 mod input;
 mod model;
 mod query;
 mod report;
 mod score;
 
-pub use build::build_prior_book;
+pub use build::{BuildStats, build_prior_book};
 pub use error::{Error, Result, Warning};
 pub use eval::{EvalConfig, EvalOutput, EvalReport, TopKHitRate, evaluate};
 pub use input::{BuildOutput, ParseOutcome, build_prior_book_from_reader, parse_jsonl};
@@ -24,5 +25,8 @@ pub use model::{
     BuildConfig, DEFAULT_CONFIDENCE_K, DEFAULT_DRAW_VALUE, Observation, Outcome, PriorAction,
     PriorBook, PriorEntry,
 };
-pub use query::{load_prior_book, save_prior_book};
+pub use query::{
+    build_config_fingerprint, load_prior_book, load_prior_book_with_config, save_prior_book,
+    save_prior_book_with_config,
+};
 pub use report::{StateEntropy, SummaryReport, state_entropy, summarize};

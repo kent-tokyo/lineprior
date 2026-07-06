@@ -36,6 +36,12 @@ pub enum Error {
 
     #[error("no observations remain after parsing and filtering")]
     NoObservations,
+
+    #[error(
+        "prior book was built with a different config than expected \
+         (expected fingerprint {expected}, found {found})"
+    )]
+    BuildConfigMismatch { expected: u64, found: u64 },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

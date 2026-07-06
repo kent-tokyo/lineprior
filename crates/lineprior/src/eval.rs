@@ -381,26 +381,16 @@ pub struct EvalOutput {
     pub warnings: Vec<Warning>,
 }
 
-/// FNV-1a: fast, and -- unlike `std::collections::hash_map::DefaultHasher`,
-/// whose docs disclaim the algorithm across Rust releases -- has a fixed
-/// public specification that never changes. The train/test split must stay
-/// reproducible if eval is re-run after a toolchain upgrade, so a hash
-/// stdlib doesn't promise to keep stable isn't safe to use here.
-fn fnv1a_hash(s: &str) -> u64 {
-    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-    const PRIME: u64 = 0x100000001b3;
-    s.bytes().fold(OFFSET_BASIS, |hash, byte| {
-        (hash ^ byte as u64).wrapping_mul(PRIME)
-    })
-}
-
 /// Deterministically assigns `sequence_id` to the train split with
 /// probability `train_ratio`, based purely on the id's own hash -- every
 /// observation in the same sequence lands on the same side (no leakage)
 /// without needing to look at the rest of the dataset, and streams fine
-/// since each line can be classified independently.
+/// since each line can be classified independently. The train/test split
+/// must stay reproducible if eval is re-run after a toolchain upgrade,
+/// hence `crate::hash::fnv1a` rather than a stdlib hasher (see its doc
+/// comment).
 fn is_train(sequence_id: &str, train_ratio: f64) -> bool {
-    let bucket = fnv1a_hash(sequence_id) % 100;
+    let bucket = crate::hash::fnv1a(sequence_id.as_bytes()) % 100;
     let train_pct = (train_ratio * 100.0).round().clamp(0.0, 100.0) as u64;
     bucket < train_pct
 }

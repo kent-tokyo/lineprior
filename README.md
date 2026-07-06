@@ -29,6 +29,8 @@ lineprior build observations.jsonl \
 
 Useful flags: `--max-step` (drop observations past a given step), `--max-actions-per-state` (keep only the top N candidates), `--tags` (keep only observations carrying at least one of the given tags, comma-separated), `--confidence-k` (tune how fast confidence grows with sample size), `--min-weighted-count` / `--min-confidence` (filter on the weighted count or heuristic confidence directly, instead of just the raw `--min-count`), `--draw-value` (success credit for a `draw` outcome — default `0.5`, since a draw is a genuine partial outcome in adversarial games, not a loss), `--strict` (fail on the first invalid record instead of skipping it with a warning).
 
+`build` also prints a one-line summary of what its filters actually did, e.g. `stats: 950/1000 observations kept, 42/50 candidates kept (5 by min_count, ...)` — useful for sanity-checking your own pre-filtering (e.g. a domain-specific ply/depth cutoff) against `--min-count`/etc. without re-deriving the numbers by hand. As a library, this is `BuildOutput.stats` (a `BuildStats`) returned alongside the book by `build_prior_book_from_reader`.
+
 ## Querying a prior book
 
 ```bash
@@ -36,6 +38,8 @@ lineprior query prior.jsonl --state state_a --top-k 5
 ```
 
 An unseen state prints nothing and still exits `0` — that's the expected fallback behavior, not an error.
+
+As a library, `PriorBook::candidates()` gives you every `(state, action)` candidate across the whole book as a flat `Vec<(String, PriorAction)>`, for callers filtering or sampling candidates directly (e.g. building a domain-specific "opening suite") instead of working through the nested per-state structure `entries_sorted()` returns.
 
 ## Other commands
 
@@ -64,6 +68,26 @@ One JSON object per state, actions ranked by descending prior:
 ```
 
 `success_rate` and `mean_score` are the raw, unsmoothed observed rates (for transparency); `prior` is the smoothed, normalized ranking score; `confidence` is a heuristic sample-size indicator, not a statistical guarantee. `success_rate` credits a `success` outcome as 1.0, a `draw` as `--draw-value` (default 0.5), and a `failure` as 0.0.
+
+`lineprior build`'s CLI output (and the library's `save_prior_book_with_config`) prepends a header line carrying a fingerprint of the `BuildConfig` used to build it, e.g. `{"build_config_fingerprint":3697336692924021039}`. `load_prior_book`/`lineprior query`/`lineprior summary` all skip this line transparently — it doesn't change how you read a prior book day to day.
+
+## Detecting a stale cached prior book
+
+If you cache a prior book on disk and rebuild it later under different `BuildConfig` values (a different `--smoothing-alpha`, `--confidence-k`, etc.), the raw `confidence`/`prior` numbers in the old file were computed under the *old* config's semantics — reusing it silently can be misleading. As a library:
+
+```rust
+// When saving, embed the config that produced it:
+save_prior_book_with_config(&book, &config, writer)?;
+
+// Later, check a cached file against your current config before trusting it:
+match load_prior_book_with_config(reader, &config) {
+    Ok(book) => { /* config matches (or the file predates this check) */ }
+    Err(Error::BuildConfigMismatch { .. }) => { /* stale -- rebuild */ }
+    Err(e) => { /* other error */ }
+}
+```
+
+A file saved via plain `save_prior_book` (or by a version of lineprior that predates this) has no fingerprint to compare against, so `load_prior_book_with_config` accepts it unconditionally — there's nothing to detect drift against. The fingerprint is stable *within a given lineprior version*, not guaranteed forever-stable across upgrades (it hashes a JSON encoding of `BuildConfig`, and floats' exact byte layout isn't itself a cross-version guarantee) — it's meant to catch a stale cache within one project's lifetime, not serve as a long-term archival checksum.
 
 ## Limitations
 

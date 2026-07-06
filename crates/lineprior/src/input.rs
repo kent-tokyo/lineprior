@@ -135,6 +135,7 @@ pub fn parse_jsonl(reader: impl Read, strict: bool) -> Result<ParseOutcome> {
 pub struct BuildOutput {
     pub book: PriorBook,
     pub warnings: Vec<Warning>,
+    pub stats: crate::build::BuildStats,
 }
 
 /// Parses and aggregates a JSONL observation stream in one pass, without
@@ -174,9 +175,11 @@ pub fn build_prior_book_from_reader(
         }
     }
 
+    let (book, stats) = acc.finish_with_stats();
     Ok(BuildOutput {
-        book: acc.finish(),
+        book,
         warnings,
+        stats,
     })
 }
 

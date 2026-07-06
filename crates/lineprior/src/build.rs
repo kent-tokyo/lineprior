@@ -1,6 +1,7 @@
 use crate::error::{Error, Result};
 use crate::model::{BuildConfig, Observation, Outcome, PriorAction, PriorBook};
 use crate::score::{confidence, normalize, ratio, raw_score, shrink_toward};
+use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -15,6 +16,48 @@ struct ActionStats {
     weighted_trials: f64,
     weighted_score_sum: f64,
     weighted_score_count: f64,
+}
+
+/// What a build actually did to the input, independent of the resulting
+/// [`PriorBook`] -- lets a caller check whether their own pre-filtering
+/// (e.g. a domain-specific ply/depth cutoff) combined with `BuildConfig`'s
+/// thresholds behaved as expected, without re-deriving these numbers by
+/// hand from the input.
+///
+/// Invariant:
+///
+/// ```text
+/// candidates_before_filtering
+///     == candidates_kept
+///     + candidates_dropped_by_min_count
+///     + candidates_dropped_by_min_weighted_count
+///     + candidates_dropped_by_min_confidence
+///     + candidates_dropped_by_max_actions_per_state
+/// ```
+///
+/// A candidate failing more than one of the first three thresholds is
+/// counted against whichever it hits first, in that order (matching the
+/// order they're applied).
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct BuildStats {
+    /// Observations folded into the accumulator (survived `max_step` /
+    /// `tag_filter`).
+    pub observations_kept: u64,
+    /// Observations dropped by `max_step` or `tag_filter` before ever
+    /// contributing to any `(state, action)` pair's statistics.
+    pub observations_dropped_by_step_or_tag_filter: u64,
+    /// Distinct `(state, action)` pairs that accumulated at least one
+    /// observation, before `min_count` / `min_weighted_count` /
+    /// `min_confidence` / `max_actions_per_state`.
+    pub candidates_before_filtering: u64,
+    pub candidates_dropped_by_min_count: u64,
+    pub candidates_dropped_by_min_weighted_count: u64,
+    pub candidates_dropped_by_min_confidence: u64,
+    /// Candidates that passed every threshold above but were truncated by
+    /// `max_actions_per_state`'s per-state cap.
+    pub candidates_dropped_by_max_actions_per_state: u64,
+    /// `(state, action)` pairs that made it into the final book.
+    pub candidates_kept: u64,
 }
 
 /// Folds observations into a [`PriorBook`] one at a time, so memory stays
@@ -36,6 +79,8 @@ pub(crate) struct PriorAccumulator<'a> {
     global_weighted_trials: f64,
     global_weighted_score_sum: f64,
     global_weighted_score_count: f64,
+    observations_kept: u64,
+    observations_dropped_by_step_or_tag_filter: u64,
     config: &'a BuildConfig,
 }
 
@@ -47,6 +92,8 @@ impl<'a> PriorAccumulator<'a> {
             global_weighted_trials: 0.0,
             global_weighted_score_sum: 0.0,
             global_weighted_score_count: 0.0,
+            observations_kept: 0,
+            observations_dropped_by_step_or_tag_filter: 0,
             config,
         }
     }
@@ -55,13 +102,16 @@ impl<'a> PriorAccumulator<'a> {
         if let Some(max_step) = self.config.max_step
             && obs.step > max_step
         {
+            self.observations_dropped_by_step_or_tag_filter += 1;
             return;
         }
         if let Some(required_tags) = &self.config.tag_filter
             && !required_tags.iter().any(|tag| obs.tags.contains(tag))
         {
+            self.observations_dropped_by_step_or_tag_filter += 1;
             return;
         }
+        self.observations_kept += 1;
 
         let entry = self
             .stats
@@ -105,7 +155,16 @@ impl<'a> PriorAccumulator<'a> {
     /// [`crate::input::build_prior_book_from_reader`] returns it as-is so
     /// that any warnings collected during parsing are never discarded
     /// just because the result happened to end up empty.
+    ///
+    /// Thin wrapper over [`Self::finish_with_stats`] for callers that
+    /// don't need [`BuildStats`], so there's one real implementation.
     pub(crate) fn finish(self) -> PriorBook {
+        self.finish_with_stats().0
+    }
+
+    /// Like [`Self::finish`], but also reports what got dropped and why
+    /// (see [`BuildStats`]).
+    pub(crate) fn finish_with_stats(self) -> (PriorBook, BuildStats) {
         // `None` here means "this dataset has no outcome/score data at
         // all", which drops that scoring term for every action rather
         // than treating a single action's missing data as a bad (zero)
@@ -118,17 +177,38 @@ impl<'a> PriorAccumulator<'a> {
         );
 
         let mut entries: HashMap<String, Vec<PriorAction>> = HashMap::new();
+        let mut candidates_before_filtering: u64 = 0;
+        let mut candidates_dropped_by_min_count: u64 = 0;
+        let mut candidates_dropped_by_min_weighted_count: u64 = 0;
+        let mut candidates_dropped_by_min_confidence: u64 = 0;
+        let mut candidates_dropped_by_max_actions_per_state: u64 = 0;
 
         for (state, actions) in self.stats {
-            let kept: Vec<(String, ActionStats)> = actions
-                .into_iter()
-                .filter(|(_, stat)| stat.count >= self.config.min_count)
-                .filter(|(_, stat)| stat.weighted_count >= self.config.min_weighted_count)
-                .filter(|(_, stat)| {
-                    confidence(stat.weighted_count, self.config.confidence_k)
-                        >= self.config.min_confidence
-                })
-                .collect();
+            candidates_before_filtering += actions.len() as u64;
+
+            // Explicit classify-loop rather than three chained `.filter()`
+            // calls: behaviorally identical (a chained filter already
+            // short-circuits per item at the first failing predicate), but
+            // this lets each dropped candidate be counted against the
+            // specific threshold that rejected it.
+            let mut kept: Vec<(String, ActionStats)> = Vec::new();
+            for (action, stat) in actions {
+                if stat.count < self.config.min_count {
+                    candidates_dropped_by_min_count += 1;
+                    continue;
+                }
+                if stat.weighted_count < self.config.min_weighted_count {
+                    candidates_dropped_by_min_weighted_count += 1;
+                    continue;
+                }
+                if confidence(stat.weighted_count, self.config.confidence_k)
+                    < self.config.min_confidence
+                {
+                    candidates_dropped_by_min_confidence += 1;
+                    continue;
+                }
+                kept.push((action, stat));
+            }
             if kept.is_empty() {
                 continue;
             }
@@ -184,13 +264,30 @@ impl<'a> PriorAccumulator<'a> {
                         .unwrap_or(Ordering::Equal)
                         .then_with(|| a.action.cmp(&b.action))
                 });
+                if actions_out.len() > max_actions {
+                    candidates_dropped_by_max_actions_per_state +=
+                        (actions_out.len() - max_actions) as u64;
+                }
                 actions_out.truncate(max_actions);
             }
 
             entries.insert(state, actions_out);
         }
 
-        PriorBook { entries }
+        let candidates_kept: u64 = entries.values().map(|v| v.len() as u64).sum();
+        let stats = BuildStats {
+            observations_kept: self.observations_kept,
+            observations_dropped_by_step_or_tag_filter: self
+                .observations_dropped_by_step_or_tag_filter,
+            candidates_before_filtering,
+            candidates_dropped_by_min_count,
+            candidates_dropped_by_min_weighted_count,
+            candidates_dropped_by_min_confidence,
+            candidates_dropped_by_max_actions_per_state,
+            candidates_kept,
+        };
+
+        (PriorBook { entries }, stats)
     }
 }
 
@@ -669,5 +766,111 @@ mod tests {
         };
         let err = build_prior_book(&observations, &config).unwrap_err();
         assert!(matches!(err, Error::NoObservations));
+    }
+
+    #[test]
+    fn build_stats_invariant_holds_and_every_drop_bucket_is_exact() {
+        let mut observations = vec![
+            // Dropped by max_step before ever becoming a candidate at all.
+            obs(
+                "late",
+                99,
+                "other_state",
+                "whatever",
+                Outcome::Unknown,
+                None,
+                1.0,
+                vec![],
+            ),
+            // count=1 < min_count=2.
+            obs(
+                "r1",
+                0,
+                "s",
+                "too_rare",
+                Outcome::Unknown,
+                None,
+                1.0,
+                vec![],
+            ),
+        ];
+        // count=3 (passes min_count), weighted_count=1.5 < min_weighted_count=5.0.
+        for i in 0..3 {
+            observations.push(obs(
+                &format!("l{i}"),
+                0,
+                "s",
+                "too_light",
+                Outcome::Unknown,
+                None,
+                0.5,
+                vec![],
+            ));
+        }
+        // count=3, weighted_count=6.0 (passes min_count/min_weighted_count),
+        // confidence = 6/(6+20) ~= 0.23 < min_confidence=0.3.
+        for i in 0..3 {
+            observations.push(obs(
+                &format!("u{i}"),
+                0,
+                "s",
+                "unproven",
+                Outcome::Unknown,
+                None,
+                2.0,
+                vec![],
+            ));
+        }
+        // Three candidates that survive every threshold; max_actions_per_state=2
+        // truncates exactly one of them.
+        for name in ["surv_a", "surv_b", "surv_c"] {
+            for i in 0..10 {
+                observations.push(obs(
+                    &format!("{name}_{i}"),
+                    0,
+                    "s",
+                    name,
+                    Outcome::Unknown,
+                    None,
+                    10.0,
+                    vec![],
+                ));
+            }
+        }
+
+        let config = BuildConfig {
+            min_count: 2,
+            min_weighted_count: 5.0,
+            min_confidence: 0.3,
+            max_step: Some(10),
+            max_actions_per_state: Some(2),
+            ..Default::default()
+        };
+
+        let mut acc = PriorAccumulator::new(&config);
+        for o in &observations {
+            acc.observe(o);
+        }
+        let (book, stats) = acc.finish_with_stats();
+
+        assert_eq!(stats.observations_dropped_by_step_or_tag_filter, 1);
+        assert_eq!(stats.observations_kept, observations.len() as u64 - 1);
+
+        assert_eq!(stats.candidates_before_filtering, 6);
+        assert_eq!(stats.candidates_dropped_by_min_count, 1);
+        assert_eq!(stats.candidates_dropped_by_min_weighted_count, 1);
+        assert_eq!(stats.candidates_dropped_by_min_confidence, 1);
+        assert_eq!(stats.candidates_dropped_by_max_actions_per_state, 1);
+        assert_eq!(stats.candidates_kept, 2);
+        assert_eq!(book.entries["s"].len(), 2);
+
+        assert_eq!(
+            stats.candidates_before_filtering,
+            stats.candidates_kept
+                + stats.candidates_dropped_by_min_count
+                + stats.candidates_dropped_by_min_weighted_count
+                + stats.candidates_dropped_by_min_confidence
+                + stats.candidates_dropped_by_max_actions_per_state
+        );
     }
 }

@@ -48,7 +48,7 @@ pub const DEFAULT_CONFIDENCE_K: f64 = 20.0;
 pub const DEFAULT_DRAW_VALUE: f64 = 0.5;
 
 /// Tuning knobs for [`crate::build::build_prior_book`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BuildConfig {
     pub min_count: u64,
     /// Minimum weighted count for an action to appear in the output.
@@ -161,5 +161,69 @@ impl PriorBook {
             actions.truncate(k);
         }
         actions
+    }
+
+    /// Flat, deterministically-ordered `(state, action)` candidates across
+    /// the whole book -- for callers that want to filter or sample raw
+    /// candidates directly (e.g. building a domain-specific "opening
+    /// suite") instead of working through the nested per-state structure
+    /// `entries_sorted` returns. Same ordering guarantee as `entries_sorted`.
+    pub fn candidates(&self) -> Vec<(String, PriorAction)> {
+        self.entries_sorted()
+            .into_iter()
+            .flat_map(|entry| {
+                let state = entry.state;
+                entry
+                    .actions
+                    .into_iter()
+                    .map(move |action| (state.clone(), action))
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn action(name: &str, count: u64, prior: f64, confidence: f64) -> PriorAction {
+        PriorAction {
+            action: name.to_string(),
+            count,
+            weighted_count: count as f64,
+            success_rate: None,
+            mean_score: None,
+            prior,
+            confidence,
+        }
+    }
+
+    #[test]
+    fn candidates_flattens_every_state_action_pair_in_entries_sorted_order() {
+        let mut entries = HashMap::new();
+        entries.insert(
+            "s2".to_string(),
+            vec![action("y", 3, 0.6, 0.3), action("z", 1, 0.4, 0.1)],
+        );
+        entries.insert("s1".to_string(), vec![action("x", 5, 1.0, 0.5)]);
+        let book = PriorBook { entries };
+
+        let expected: Vec<(String, PriorAction)> = book
+            .entries_sorted()
+            .into_iter()
+            .flat_map(|entry| {
+                entry
+                    .actions
+                    .into_iter()
+                    .map(move |action| (entry.state.clone(), action))
+            })
+            .collect();
+
+        assert_eq!(book.candidates(), expected);
+        assert_eq!(book.candidates().len(), 3);
+        assert_eq!(
+            book.candidates()[0],
+            ("s1".to_string(), action("x", 5, 1.0, 0.5))
+        );
     }
 }
