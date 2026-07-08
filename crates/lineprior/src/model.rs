@@ -47,6 +47,33 @@ pub const DEFAULT_CONFIDENCE_K: f64 = 20.0;
 /// scoring it identically to a failure.
 pub const DEFAULT_DRAW_VALUE: f64 = 0.5;
 
+/// z=1.96 is the two-sided-95% value conventionally used (Evan Miller /
+/// Reddit-ranking style) as a *one-sided* Wilson lower bound -- slightly
+/// more conservative than a strict one-sided 95% bound (which would use
+/// ~1.64), which is the right direction for a "how much should I trust
+/// this" score.
+pub const DEFAULT_CONFIDENCE_Z: f64 = 1.96;
+
+/// How [`PriorAction::confidence`] is computed. See [`crate::score::confidence`]
+/// and [`crate::score::wilson_lower_bound`] for the underlying formulas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfidenceMode {
+    /// `weighted_count / (weighted_count + confidence_k)` -- a sample-size
+    /// heuristic, blind to outcome. Not a statistical guarantee, but works
+    /// even for datasets with no outcome/score data at all.
+    #[default]
+    Heuristic,
+    /// Wilson score interval lower bound on the action's success rate. A
+    /// real statistical lower bound, but requires outcome data -- falls
+    /// back to [`ConfidenceMode::Heuristic`] for an action with none.
+    WilsonLowerBound,
+    /// `Heuristic * WilsonLowerBound`, so both low sample size *and* a
+    /// weak success rate pull confidence down. Same fallback as
+    /// `WilsonLowerBound` when there's no outcome data.
+    Hybrid,
+}
+
 /// Tuning knobs for [`crate::build::build_prior_book`].
 #[derive(Debug, Clone, Serialize)]
 pub struct BuildConfig {
@@ -56,6 +83,14 @@ pub struct BuildConfig {
     pub min_weighted_count: f64,
     /// Minimum confidence (see [`DEFAULT_CONFIDENCE_K`]) for an action to
     /// appear in the output. `0.0` means no filtering.
+    ///
+    /// Which confidence this filters on depends on `confidence_mode`: under
+    /// `Heuristic` it's a pure sample-size floor, blind to outcome. Under
+    /// `WilsonLowerBound`/`Hybrid` it's success-rate-aware, so a high-count
+    /// but mostly-failing action that used to pass this filter can now be
+    /// dropped by it -- switching `confidence_mode` on an existing
+    /// `min_confidence` threshold is a real behavior change, not just an
+    /// additive one.
     pub min_confidence: f64,
     pub max_step: Option<u32>,
     pub smoothing_alpha: f64,
@@ -64,6 +99,16 @@ pub struct BuildConfig {
     pub count_weight: f64,
     pub max_actions_per_state: Option<usize>,
     pub confidence_k: f64,
+    /// How `confidence` is computed. Defaults to [`ConfidenceMode::Heuristic`]
+    /// for backward compatibility and for score-only datasets with no
+    /// outcome labels.
+    pub confidence_mode: ConfidenceMode,
+    /// z-score for `ConfidenceMode::WilsonLowerBound`/`Hybrid`'s Wilson lower
+    /// bound. Inert under `Heuristic`, but still folded into
+    /// [`crate::build_config_fingerprint`] -- changing it (or upgrading to a
+    /// lineprior version that adds it) changes the fingerprint even when the
+    /// resulting `confidence` values don't, which is expected.
+    pub confidence_z: f64,
     /// Success credit given to a `Draw` outcome, between 0.0 (scores like
     /// a failure) and 1.0 (scores like a win).
     pub draw_value: f64,
@@ -85,6 +130,8 @@ impl Default for BuildConfig {
             count_weight: 1.0,
             max_actions_per_state: None,
             confidence_k: DEFAULT_CONFIDENCE_K,
+            confidence_mode: ConfidenceMode::Heuristic,
+            confidence_z: DEFAULT_CONFIDENCE_Z,
             draw_value: DEFAULT_DRAW_VALUE,
             tag_filter: None,
         }

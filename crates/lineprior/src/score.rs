@@ -63,6 +63,42 @@ pub fn confidence(weighted_count: f64, k: f64) -> f64 {
     weighted_count / (weighted_count + k)
 }
 
+/// Kish's effective sample size for a sum of (possibly unequal) trial
+/// weights: `sum_weights^2 / sum_weights_squared`. For uniform weight=1.0
+/// trials this equals the plain count; uneven weights reduce it, since a
+/// few heavily-weighted trials carry less *information* than the same sum
+/// spread evenly across many trials.
+pub fn effective_sample_size(sum_weights: f64, sum_weights_squared: f64) -> f64 {
+    if sum_weights_squared > 0.0 {
+        sum_weights * sum_weights / sum_weights_squared
+    } else {
+        0.0
+    }
+}
+
+/// Wilson score interval lower bound for proportion `successes /
+/// effective_trials`. `effective_trials` need not be an integer count --
+/// see [`effective_sample_size`] for the weighted/fractional-outcome case,
+/// an engineering approximation rather than an exact interval in that case.
+/// Returns `None` when `effective_trials <= 0.0` (no data to bound).
+pub fn wilson_lower_bound(successes: f64, effective_trials: f64, z: f64) -> Option<f64> {
+    if effective_trials <= 0.0 {
+        return None;
+    }
+    // Clamped defensively: an out-of-[0,1] `p_hat` (e.g. from a
+    // misconfigured draw_value) would otherwise make the radicand negative
+    // and NaN silently slip past min_confidence filtering.
+    let p_hat = (successes / effective_trials).clamp(0.0, 1.0);
+    let z2 = z * z;
+    let denom = 1.0 + z2 / effective_trials;
+    let center = p_hat + z2 / (2.0 * effective_trials);
+    let margin = z
+        * ((p_hat * (1.0 - p_hat) / effective_trials)
+            + z2 / (4.0 * effective_trials * effective_trials))
+            .sqrt();
+    Some(((center - margin) / denom).clamp(0.0, 1.0))
+}
+
 /// Shannon entropy (in bits) of a discrete distribution. Callers use this
 /// to gauge whether one action dominates (low entropy, prior is useful) or
 /// many actions compete (high entropy, fallback search may be safer).
@@ -125,5 +161,62 @@ mod tests {
     #[test]
     fn entropy_is_maximal_for_a_uniform_two_way_split() {
         assert!((entropy_bits(&[0.5, 0.5]) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn effective_sample_size_uniform_weights_equals_count() {
+        // 5 trials of weight 1.0 each: sum_w=5, sum_w_sq=5, n_eff=25/5=5.
+        assert_eq!(effective_sample_size(5.0, 5.0), 5.0);
+    }
+
+    #[test]
+    fn effective_sample_size_nonuniform_weights_is_smaller_than_count() {
+        // Weights [10, 1, 1, 1, 1]: sum_w=14, sum_w_sq=104, n_eff=196/104.
+        let n_eff = effective_sample_size(14.0, 104.0);
+        assert!(
+            n_eff < 5.0,
+            "n_eff={n_eff} should be well below the raw count 5"
+        );
+        assert!((n_eff - 196.0 / 104.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn effective_sample_size_zero_weight_is_zero() {
+        assert_eq!(effective_sample_size(0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn wilson_lower_bound_is_conservative_for_one_of_one() {
+        // A single success shouldn't read as near-certain.
+        let bound = wilson_lower_bound(1.0, 1.0, 1.96).unwrap();
+        assert!((bound - 0.2065).abs() < 1e-3);
+    }
+
+    #[test]
+    fn wilson_lower_bound_grows_with_more_consistent_data() {
+        let lucky = wilson_lower_bound(1.0, 1.0, 1.96).unwrap();
+        let proven = wilson_lower_bound(90.0, 100.0, 1.96).unwrap();
+        assert!(proven > lucky);
+    }
+
+    #[test]
+    fn wilson_lower_bound_all_failures_is_near_zero() {
+        let bound = wilson_lower_bound(0.0, 100.0, 1.96).unwrap();
+        assert!(bound < 0.05);
+    }
+
+    #[test]
+    fn wilson_lower_bound_none_when_no_effective_trials() {
+        assert_eq!(wilson_lower_bound(0.0, 0.0, 1.96), None);
+    }
+
+    #[test]
+    fn wilson_lower_bound_clamps_out_of_range_p_hat_instead_of_nan() {
+        // successes > effective_trials shouldn't happen with well-formed
+        // input, but a misconfigured draw_value could produce it -- must
+        // clamp rather than propagate NaN through sqrt() of a negative.
+        let bound = wilson_lower_bound(2.0, 1.0, 1.96).unwrap();
+        assert!(bound.is_finite());
+        assert!((0.0..=1.0).contains(&bound));
     }
 }

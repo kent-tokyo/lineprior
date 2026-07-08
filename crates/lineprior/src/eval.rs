@@ -102,7 +102,7 @@ mod tests {
     fn topk_hit_rate_and_mrr_match_hand_computed_ranks() {
         let book = sample_book();
         let top_k = vec![1, 2, 3];
-        let mut acc = EvalAccumulator::new(&top_k);
+        let mut acc = EvalAccumulator::new(&top_k, 0, &[]);
 
         acc.observe(&book, &obs("s", "a")); // rank 1
         acc.observe(&book, &obs("s", "b")); // rank 2
@@ -138,7 +138,7 @@ mod tests {
     fn unseen_state_counts_as_fallback_not_evaluated() {
         let book = sample_book(); // only has state "s"
         let top_k = vec![1];
-        let mut acc = EvalAccumulator::new(&top_k);
+        let mut acc = EvalAccumulator::new(&top_k, 0, &[]);
 
         acc.observe(&book, &obs("unseen_state", "a"));
 
@@ -197,6 +197,7 @@ mod tests {
         let eval_config = EvalConfig {
             train_ratio,
             top_k: vec![1],
+            ..EvalConfig::default()
         };
         let output = evaluate(
             jsonl.as_bytes(),
@@ -238,6 +239,107 @@ mod tests {
         );
         assert_eq!(output.report.score_lift, None); // no `score` field anywhere
         assert!(output.warnings.is_empty());
+    }
+
+    /// Three single-candidate states so each observation's #1 confidence is
+    /// fully controlled: "s1" 0.05 (bin 0 of 10), "s2" 0.55 (bin 5), "s3"
+    /// 1.0 (edge case -- must clamp into the last bin, not overflow it).
+    fn calibration_fixture_book() -> PriorBook {
+        let action_with_confidence = |confidence: f64| PriorAction {
+            action: "a".into(),
+            count: 1,
+            weighted_count: 1.0,
+            success_rate: None,
+            mean_score: None,
+            prior: 1.0,
+            confidence,
+        };
+        let mut entries = HashMap::new();
+        entries.insert("s1".to_string(), vec![action_with_confidence(0.05)]);
+        entries.insert("s2".to_string(), vec![action_with_confidence(0.55)]);
+        entries.insert("s3".to_string(), vec![action_with_confidence(1.0)]);
+        PriorBook { entries }
+    }
+
+    #[test]
+    fn calibration_bins_are_deterministic_length_and_bucketed_correctly() {
+        let book = calibration_fixture_book();
+        let top_k = vec![1];
+        let mut acc = EvalAccumulator::new(&top_k, 10, &[]);
+
+        acc.observe(&book, &obs("s1", "a")); // hit, confidence 0.05 -> bin 0
+        acc.observe(&book, &obs("s2", "b")); // miss, confidence 0.55 -> bin 5
+        acc.observe(&book, &obs("s3", "a")); // hit, confidence 1.0 -> clamped into last bin 9
+
+        let report = acc.finish(0);
+        assert_eq!(report.confidence_calibration.len(), 10); // always calibration_bins entries
+
+        let bin0 = &report.confidence_calibration[0];
+        assert!((bin0.min_confidence - 0.0).abs() < 1e-9);
+        assert!((bin0.max_confidence - 0.1).abs() < 1e-9);
+        assert_eq!(bin0.num_evaluated, 1);
+        assert_eq!(bin0.top1_hit_rate, Some(1.0));
+        assert_eq!(bin0.mean_reciprocal_rank, Some(1.0));
+
+        let bin5 = &report.confidence_calibration[5];
+        assert_eq!(bin5.num_evaluated, 1);
+        assert_eq!(bin5.top1_hit_rate, Some(0.0));
+        assert_eq!(bin5.mean_reciprocal_rank, Some(0.0));
+
+        let bin9 = &report.confidence_calibration[9]; // confidence == 1.0 lands here, not out of bounds
+        assert_eq!(bin9.num_evaluated, 1);
+        assert_eq!(bin9.top1_hit_rate, Some(1.0));
+
+        let bin1 = &report.confidence_calibration[1];
+        assert_eq!(bin1.num_evaluated, 0);
+        assert_eq!(bin1.top1_hit_rate, None);
+        assert_eq!(bin1.mean_reciprocal_rank, None);
+    }
+
+    #[test]
+    fn threshold_sweep_matches_hand_computed_fixture() {
+        let book = calibration_fixture_book();
+        let top_k = vec![1];
+        let thresholds = vec![0.1, 0.6];
+        let mut acc = EvalAccumulator::new(&top_k, 0, &thresholds);
+
+        acc.observe(&book, &obs("s1", "a")); // confidence 0.05: below both thresholds
+        acc.observe(&book, &obs("s2", "b")); // confidence 0.55: covers 0.1 only, miss
+        acc.observe(&book, &obs("s3", "a")); // confidence 1.0: covers both, hit
+
+        let report = acc.finish(0);
+        assert_eq!(report.threshold_sweep.len(), 2); // always thresholds.len() entries, in request order
+
+        let at_0_1 = &report.threshold_sweep[0];
+        assert_eq!(at_0_1.min_confidence, 0.1);
+        assert!((at_0_1.covered_fraction - 2.0 / 3.0).abs() < 1e-9); // s2, s3
+        assert!((at_0_1.abstained_fraction - 1.0 / 3.0).abs() < 1e-9);
+        assert_eq!(at_0_1.top1_hit_rate, Some(0.5)); // 1 hit (s3) of 2 covered
+        assert_eq!(at_0_1.mean_reciprocal_rank, Some(0.5)); // (0.0 + 1.0) / 2
+
+        let at_0_6 = &report.threshold_sweep[1];
+        assert_eq!(at_0_6.min_confidence, 0.6);
+        assert!((at_0_6.covered_fraction - 1.0 / 3.0).abs() < 1e-9); // s3 only
+        assert!((at_0_6.abstained_fraction - 2.0 / 3.0).abs() < 1e-9);
+        assert_eq!(at_0_6.top1_hit_rate, Some(1.0));
+        assert_eq!(at_0_6.mean_reciprocal_rank, Some(1.0));
+    }
+
+    #[test]
+    fn calibration_and_threshold_sweep_are_empty_when_not_requested() {
+        // Default EvalConfig (calibration_bins: None, thresholds: empty) --
+        // backward compat for existing callers.
+        let train = "{\"sequence_id\":\"x\",\"step\":0,\"state\":\"s\",\"action\":\"a\",\"outcome\":\"success\"}\n";
+        let output = evaluate(
+            train.as_bytes(),
+            train.as_bytes(),
+            true,
+            &BuildConfig::default(),
+            &EvalConfig::default(),
+        )
+        .unwrap();
+        assert!(output.report.confidence_calibration.is_empty());
+        assert!(output.report.threshold_sweep.is_empty());
     }
 
     #[test]
@@ -296,6 +398,12 @@ pub struct EvalConfig {
     pub train_ratio: f64,
     /// Which top-k hit rates to report, e.g. `[1, 3, 5]`.
     pub top_k: Vec<usize>,
+    /// Number of equal-width bins over `[0, 1]` for `confidence_calibration`.
+    /// `None` (or `Some(0)`) skips calibration reporting (`confidence_calibration`
+    /// comes back empty).
+    pub calibration_bins: Option<usize>,
+    /// Confidence thresholds to sweep for `threshold_sweep`. Empty skips it.
+    pub thresholds: Vec<f64>,
 }
 
 impl Default for EvalConfig {
@@ -303,6 +411,8 @@ impl Default for EvalConfig {
         Self {
             train_ratio: 0.8,
             top_k: vec![1, 3, 5],
+            calibration_bins: None,
+            thresholds: Vec::new(),
         }
     }
 }
@@ -313,6 +423,47 @@ impl Default for EvalConfig {
 pub struct TopKHitRate {
     pub k: usize,
     pub hit_rate: Option<f64>,
+}
+
+/// Ranking quality for one equal-width confidence bin of the #1 candidate,
+/// among evaluated test observations whose top1 confidence fell in
+/// `[min_confidence, max_confidence)` (the last bin is closed on both ends).
+/// Always exactly `EvalConfig::calibration_bins` entries, in ascending bin
+/// order, regardless of whether a given bin saw any observations.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CalibrationBin {
+    pub min_confidence: f64,
+    pub max_confidence: f64,
+    pub num_evaluated: u64,
+    pub top1_hit_rate: Option<f64>,
+    pub mean_reciprocal_rank: Option<f64>,
+}
+
+/// Selective-prediction metrics at one confidence threshold: if the caller
+/// only acted when the #1 candidate's confidence was `>= min_confidence`,
+/// how often would they have predicted at all, and how good were those
+/// predictions? Always exactly `EvalConfig::thresholds.len()` entries, in
+/// the requested order.
+///
+/// `covered_fraction`/`abstained_fraction` are a *different* weighting
+/// convention than [`EvalReport::coverage`]/[`EvalReport::fallback_rate`]:
+/// both are observation-weighted here and sum to 1 by construction
+/// (`abstained_fraction = 1.0 - covered_fraction`), whereas the top-level
+/// fields deliberately don't (state- vs. observation-weighted). Named
+/// differently on purpose so the two pairs are never confused for each other
+/// in the same JSON report.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ThresholdSweepEntry {
+    pub min_confidence: f64,
+    /// Fraction of *all* test observations where the state had a candidate
+    /// and its #1 confidence was `>= min_confidence`.
+    pub covered_fraction: f64,
+    /// `1.0 - covered_fraction`.
+    pub abstained_fraction: f64,
+    /// Accuracy among covered observations only (`None` if none were covered).
+    pub top1_hit_rate: Option<f64>,
+    /// Mean reciprocal rank among covered observations only.
+    pub mean_reciprocal_rank: Option<f64>,
 }
 
 /// Ranking-quality report produced by [`evaluate`].
@@ -367,6 +518,12 @@ pub struct EvalReport {
     /// least one scored observation. Tests whether following the prior's
     /// top pick correlates with a better observed outcome.
     pub score_lift: Option<f64>,
+    /// Ranking quality bucketed by the #1 candidate's confidence. Empty
+    /// unless [`EvalConfig::calibration_bins`] was set.
+    pub confidence_calibration: Vec<CalibrationBin>,
+    /// Coverage/accuracy tradeoff at each requested confidence threshold.
+    /// Empty unless [`EvalConfig::thresholds`] was non-empty.
+    pub threshold_sweep: Vec<ThresholdSweepEntry>,
 }
 
 /// Result of [`evaluate`]: the report plus warnings from the train pass.
@@ -395,10 +552,31 @@ fn is_train(sequence_id: &str, train_ratio: f64) -> bool {
     bucket < train_pct
 }
 
+/// Online per-bin totals for `confidence_calibration` -- sized to
+/// `EvalConfig::calibration_bins`, never to the number of observations.
+#[derive(Debug, Default, Clone, Copy)]
+struct CalibrationBinAcc {
+    num_evaluated: u64,
+    hit_count: u64,
+    reciprocal_rank_sum: f64,
+}
+
+/// Online per-threshold totals for `threshold_sweep` -- sized to
+/// `EvalConfig::thresholds.len()`, never to the number of observations.
+#[derive(Debug, Default, Clone, Copy)]
+struct ThresholdAcc {
+    covered_count: u64,
+    hit_count: u64,
+    reciprocal_rank_sum: f64,
+}
+
 /// Pass-2 bookkeeping: ranks each test observation's actual action against
 /// the trained prior's candidates for its state, accumulating the sums
 /// [`EvalReport`] is built from. Mirrors [`PriorAccumulator`]'s
-/// new/observe/finish shape.
+/// new/observe/finish shape. Memory stays bounded by `top_k.len()` +
+/// `calibration_bins` + `thresholds.len()`, never by the number of
+/// observations -- calibration/threshold-sweep bucketing happens online,
+/// the same way every other metric here does.
 struct EvalAccumulator<'a> {
     top_k: &'a [usize],
     num_test_observations: u64,
@@ -419,10 +597,19 @@ struct EvalAccumulator<'a> {
     score_count_on_hit: u64,
     score_sum_on_miss: f64,
     score_count_on_miss: u64,
+    calibration_bin_width: f64,
+    calibration: Vec<CalibrationBinAcc>,
+    thresholds: &'a [f64],
+    threshold_accs: Vec<ThresholdAcc>,
 }
 
 impl<'a> EvalAccumulator<'a> {
-    fn new(top_k: &'a [usize]) -> Self {
+    fn new(top_k: &'a [usize], calibration_bins: usize, thresholds: &'a [f64]) -> Self {
+        let calibration_bin_width = if calibration_bins > 0 {
+            1.0 / calibration_bins as f64
+        } else {
+            0.0
+        };
         Self {
             top_k,
             num_test_observations: 0,
@@ -443,6 +630,10 @@ impl<'a> EvalAccumulator<'a> {
             score_count_on_hit: 0,
             score_sum_on_miss: 0.0,
             score_count_on_miss: 0,
+            calibration_bin_width,
+            calibration: vec![CalibrationBinAcc::default(); calibration_bins],
+            thresholds,
+            threshold_accs: vec![ThresholdAcc::default(); thresholds.len()],
         }
     }
 
@@ -461,7 +652,8 @@ impl<'a> EvalAccumulator<'a> {
         self.evaluated_count += 1;
 
         let top1 = &candidates[0];
-        if top1.action == obs.action {
+        let is_hit = top1.action == obs.action;
+        if is_hit {
             self.top1_hit_count += 1;
             self.confidence_sum_on_hit += top1.confidence;
             self.confidence_count_on_hit += 1;
@@ -478,18 +670,42 @@ impl<'a> EvalAccumulator<'a> {
             }
         }
 
-        if let Some(rank) = candidates
+        let rank = candidates
             .iter()
             .position(|c| c.action == obs.action)
-            .map(|index| index + 1)
-        {
+            .map(|index| index + 1);
+        // Same convention `mean_reciprocal_rank` uses: 0 contribution when
+        // the action wasn't found among the candidates at all.
+        let reciprocal_rank = rank.map_or(0.0, |r| 1.0 / r as f64);
+        if let Some(rank) = rank {
             self.found_count += 1;
             self.rank_sum_when_found += rank as f64;
-            self.reciprocal_rank_sum += 1.0 / rank as f64;
+            self.reciprocal_rank_sum += reciprocal_rank;
             for &k in self.top_k {
                 if rank <= k {
                     *self.topk_hit_counts.entry(k).or_insert(0) += 1;
                 }
+            }
+        }
+
+        if !self.calibration.is_empty() {
+            let bins = self.calibration.len();
+            let idx = ((top1.confidence / self.calibration_bin_width) as usize).min(bins - 1);
+            let bin = &mut self.calibration[idx];
+            bin.num_evaluated += 1;
+            if is_hit {
+                bin.hit_count += 1;
+            }
+            bin.reciprocal_rank_sum += reciprocal_rank;
+        }
+
+        for (acc, &threshold) in self.threshold_accs.iter_mut().zip(self.thresholds) {
+            if top1.confidence >= threshold {
+                acc.covered_count += 1;
+                if is_hit {
+                    acc.hit_count += 1;
+                }
+                acc.reciprocal_rank_sum += reciprocal_rank;
             }
         }
     }
@@ -526,6 +742,40 @@ impl<'a> EvalAccumulator<'a> {
             _ => None,
         };
 
+        let confidence_calibration: Vec<CalibrationBin> = self
+            .calibration
+            .iter()
+            .enumerate()
+            .map(|(i, bin)| {
+                let n = bin.num_evaluated as f64;
+                CalibrationBin {
+                    min_confidence: i as f64 * self.calibration_bin_width,
+                    max_confidence: (i as f64 + 1.0) * self.calibration_bin_width,
+                    num_evaluated: bin.num_evaluated,
+                    top1_hit_rate: ratio(bin.hit_count as f64, n),
+                    mean_reciprocal_rank: ratio(bin.reciprocal_rank_sum, n),
+                }
+            })
+            .collect();
+
+        let threshold_sweep: Vec<ThresholdSweepEntry> = self
+            .thresholds
+            .iter()
+            .zip(self.threshold_accs.iter())
+            .map(|(&threshold, acc)| {
+                let covered_fraction =
+                    ratio(acc.covered_count as f64, self.num_test_observations as f64)
+                        .unwrap_or(0.0);
+                ThresholdSweepEntry {
+                    min_confidence: threshold,
+                    covered_fraction,
+                    abstained_fraction: 1.0 - covered_fraction,
+                    top1_hit_rate: ratio(acc.hit_count as f64, acc.covered_count as f64),
+                    mean_reciprocal_rank: ratio(acc.reciprocal_rank_sum, acc.covered_count as f64),
+                }
+            })
+            .collect();
+
         EvalReport {
             num_train_observations,
             num_test_observations: self.num_test_observations,
@@ -548,6 +798,8 @@ impl<'a> EvalAccumulator<'a> {
                 self.confidence_count_on_miss as f64,
             ),
             score_lift,
+            confidence_calibration,
+            threshold_sweep,
         }
     }
 }
@@ -611,7 +863,11 @@ pub fn evaluate(
     }
     let book = acc.finish();
 
-    let mut eval_acc = EvalAccumulator::new(&eval_config.top_k);
+    let mut eval_acc = EvalAccumulator::new(
+        &eval_config.top_k,
+        eval_config.calibration_bins.unwrap_or(0),
+        &eval_config.thresholds,
+    );
     for (index, line) in BufReader::new(test_reader).lines().enumerate() {
         let line = line?;
         if line.trim().is_empty() {

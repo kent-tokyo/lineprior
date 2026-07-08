@@ -4,7 +4,7 @@ pub mod query;
 pub mod summary;
 pub mod validate;
 
-use clap::Args;
+use clap::{Args, ValueEnum};
 use lineprior::BuildConfig;
 use std::process::ExitCode;
 
@@ -17,6 +17,25 @@ pub fn exit_code_for_lineprior_error(err: &lineprior::Error) -> ExitCode {
         lineprior::Error::NoObservations => ExitCode::from(2),
         lineprior::Error::Io(_) => ExitCode::from(4),
         _ => ExitCode::from(3),
+    }
+}
+
+/// CLI-facing mirror of [`lineprior::ConfidenceMode`] -- kept separate so the
+/// core lib stays clap-free (same pattern as `eval.rs`'s `SplitBy`).
+#[derive(Clone, Copy, ValueEnum)]
+pub enum ConfidenceModeArg {
+    Heuristic,
+    WilsonLowerBound,
+    Hybrid,
+}
+
+impl From<ConfidenceModeArg> for lineprior::ConfidenceMode {
+    fn from(arg: ConfidenceModeArg) -> Self {
+        match arg {
+            ConfidenceModeArg::Heuristic => lineprior::ConfidenceMode::Heuristic,
+            ConfidenceModeArg::WilsonLowerBound => lineprior::ConfidenceMode::WilsonLowerBound,
+            ConfidenceModeArg::Hybrid => lineprior::ConfidenceMode::Hybrid,
+        }
     }
 }
 
@@ -55,6 +74,17 @@ pub struct BuildConfigArgs {
     #[arg(long, default_value_t = lineprior::DEFAULT_CONFIDENCE_K)]
     pub confidence_k: f64,
 
+    /// How `confidence` is computed: `heuristic` (sample-size only, default),
+    /// `wilson-lower-bound` (statistical lower bound on success rate), or
+    /// `hybrid` (heuristic * wilson-lower-bound).
+    #[arg(long, value_enum, default_value_t = ConfidenceModeArg::Heuristic)]
+    pub confidence_mode: ConfidenceModeArg,
+
+    /// z-score for the Wilson lower bound used by `--confidence-mode
+    /// wilson-lower-bound`/`hybrid`. Ignored under `heuristic`.
+    #[arg(long, default_value_t = lineprior::DEFAULT_CONFIDENCE_Z)]
+    pub confidence_z: f64,
+
     /// Keep only observations carrying at least one of these tags (comma-separated).
     #[arg(long, value_delimiter = ',')]
     pub tags: Vec<String>,
@@ -74,6 +104,8 @@ impl BuildConfigArgs {
             smoothing_alpha: self.smoothing_alpha,
             max_actions_per_state: self.max_actions_per_state,
             confidence_k: self.confidence_k,
+            confidence_mode: self.confidence_mode.into(),
+            confidence_z: self.confidence_z,
             draw_value: self.draw_value,
             tag_filter: if self.tags.is_empty() {
                 None

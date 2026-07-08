@@ -1,6 +1,9 @@
 use crate::error::{Error, Result};
-use crate::model::{BuildConfig, Observation, Outcome, PriorAction, PriorBook};
-use crate::score::{confidence, normalize, ratio, raw_score, shrink_toward};
+use crate::model::{BuildConfig, ConfidenceMode, Observation, Outcome, PriorAction, PriorBook};
+use crate::score::{
+    confidence, effective_sample_size, normalize, ratio, raw_score, shrink_toward,
+    wilson_lower_bound,
+};
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -14,8 +17,35 @@ struct ActionStats {
     /// observation with a decisive (non-unknown) outcome.
     weighted_successes: f64,
     weighted_trials: f64,
+    /// Sum of squared observation weights over decisive-outcome trials only
+    /// -- feeds `effective_sample_size` for `ConfidenceMode::WilsonLowerBound`/`Hybrid`.
+    weighted_trial_weight_sq_sum: f64,
     weighted_score_sum: f64,
     weighted_score_count: f64,
+}
+
+/// Wilson lower bound of `stat`'s success rate, or `None` if it has no
+/// decisive-outcome observations at all (nothing to bound).
+fn wilson_confidence(stat: &ActionStats, z: f64) -> Option<f64> {
+    let n_eff = effective_sample_size(stat.weighted_trials, stat.weighted_trial_weight_sq_sum);
+    let p_hat = ratio(stat.weighted_successes, stat.weighted_trials)?;
+    wilson_lower_bound(p_hat * n_eff, n_eff, z)
+}
+
+/// The `confidence` reported for one action, per `config.confidence_mode`.
+/// Single source of truth for both the `min_confidence` filter and the
+/// `PriorAction.confidence` field, so they can never drift apart.
+fn action_confidence(stat: &ActionStats, config: &BuildConfig) -> f64 {
+    let heuristic_val = confidence(stat.weighted_count, config.confidence_k);
+    match config.confidence_mode {
+        ConfidenceMode::Heuristic => heuristic_val,
+        ConfidenceMode::WilsonLowerBound => {
+            wilson_confidence(stat, config.confidence_z).unwrap_or(heuristic_val)
+        }
+        ConfidenceMode::Hybrid => wilson_confidence(stat, config.confidence_z)
+            .map(|w| heuristic_val * w)
+            .unwrap_or(heuristic_val),
+    }
 }
 
 /// What a build actually did to the input, independent of the resulting
@@ -124,6 +154,7 @@ impl<'a> PriorAccumulator<'a> {
 
         if obs.outcome != Outcome::Unknown {
             entry.weighted_trials += obs.weight;
+            entry.weighted_trial_weight_sq_sum += obs.weight * obs.weight;
             self.global_weighted_trials += obs.weight;
             // A draw earns partial credit rather than scoring like a loss;
             // both the per-action and dataset-wide totals must move
@@ -201,9 +232,7 @@ impl<'a> PriorAccumulator<'a> {
                     candidates_dropped_by_min_weighted_count += 1;
                     continue;
                 }
-                if confidence(stat.weighted_count, self.config.confidence_k)
-                    < self.config.min_confidence
-                {
+                if action_confidence(&stat, self.config) < self.config.min_confidence {
                     candidates_dropped_by_min_confidence += 1;
                     continue;
                 }
@@ -253,7 +282,7 @@ impl<'a> PriorAccumulator<'a> {
                     success_rate: ratio(stat.weighted_successes, stat.weighted_trials),
                     mean_score: ratio(stat.weighted_score_sum, stat.weighted_score_count),
                     prior,
-                    confidence: confidence(stat.weighted_count, self.config.confidence_k),
+                    confidence: action_confidence(&stat, self.config),
                 })
                 .collect();
 
@@ -465,6 +494,270 @@ mod tests {
         let book = build_prior_book(&observations, &config).unwrap();
         assert!(book.entries["s"].iter().all(|a| a.action != "unproven"));
         assert!(book.entries["s"].iter().any(|a| a.action == "proven"));
+    }
+
+    #[test]
+    fn confidence_mode_heuristic_matches_pre_existing_formula() {
+        // BuildConfig::default() is ConfidenceMode::Heuristic -- confirms
+        // this feature is purely additive for existing callers.
+        let observations = vec![
+            obs("c1", 0, "s", "a", Outcome::Success, None, 1.0, vec![]),
+            obs("c2", 0, "s", "a", Outcome::Failure, None, 1.0, vec![]),
+        ];
+        let book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        let got = action(&book, "s", "a").confidence;
+        assert_eq!(got, confidence(2.0, 20.0)); // 20.0 == DEFAULT_CONFIDENCE_K
+    }
+
+    #[test]
+    fn confidence_mode_wilson_lower_bound_ranks_by_success_rate_at_equal_count() {
+        let mut observations = Vec::new();
+        for i in 0..18 {
+            observations.push(obs(
+                &format!("good_s_{i}"),
+                0,
+                "s",
+                "good",
+                Outcome::Success,
+                None,
+                1.0,
+                vec![],
+            ));
+        }
+        for i in 0..2 {
+            observations.push(obs(
+                &format!("good_f_{i}"),
+                0,
+                "s",
+                "good",
+                Outcome::Failure,
+                None,
+                1.0,
+                vec![],
+            ));
+        }
+        for i in 0..2 {
+            observations.push(obs(
+                &format!("bad_s_{i}"),
+                0,
+                "s",
+                "bad",
+                Outcome::Success,
+                None,
+                1.0,
+                vec![],
+            ));
+        }
+        for i in 0..18 {
+            observations.push(obs(
+                &format!("bad_f_{i}"),
+                0,
+                "s",
+                "bad",
+                Outcome::Failure,
+                None,
+                1.0,
+                vec![],
+            ));
+        }
+
+        // Both actions have identical count/weighted_count (20), so under
+        // Heuristic mode their confidence is identical -- any difference
+        // seen under WilsonLowerBound must come from success rate alone.
+        let heuristic_book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        assert_eq!(
+            action(&heuristic_book, "s", "good").confidence,
+            action(&heuristic_book, "s", "bad").confidence
+        );
+
+        let wilson_config = BuildConfig {
+            confidence_mode: ConfidenceMode::WilsonLowerBound,
+            ..Default::default()
+        };
+        let wilson_book = build_prior_book(&observations, &wilson_config).unwrap();
+        let good = action(&wilson_book, "s", "good").confidence;
+        let bad = action(&wilson_book, "s", "bad").confidence;
+        assert!(
+            good > bad,
+            "good={good} should outrank bad={bad} under WilsonLowerBound"
+        );
+    }
+
+    #[test]
+    fn confidence_mode_hybrid_multiplies_heuristic_and_wilson() {
+        let mut observations = Vec::new();
+        for i in 0..18 {
+            observations.push(obs(
+                &format!("s{i}"),
+                0,
+                "s",
+                "a",
+                Outcome::Success,
+                None,
+                1.0,
+                vec![],
+            ));
+        }
+        for i in 0..2 {
+            observations.push(obs(
+                &format!("f{i}"),
+                0,
+                "s",
+                "a",
+                Outcome::Failure,
+                None,
+                1.0,
+                vec![],
+            ));
+        }
+        let config = BuildConfig {
+            confidence_mode: ConfidenceMode::Hybrid,
+            ..Default::default()
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+        let got = action(&book, "s", "a").confidence;
+
+        // Uniform weight=1.0, 20 trials: n_eff == 20, p_hat == 18/20 == 0.9.
+        let heuristic_val = confidence(20.0, config.confidence_k);
+        let wilson_val = wilson_lower_bound(18.0, 20.0, config.confidence_z).unwrap();
+        assert!((got - heuristic_val * wilson_val).abs() < 1e-9);
+    }
+
+    #[test]
+    fn min_confidence_filter_behavior_depends_on_confidence_mode() {
+        // "risky": count=20, mostly failing. "safe": count=20, mostly
+        // succeeding. Both have weighted_count=20 -> identical heuristic
+        // confidence (0.5 at the default k=20), but very different Wilson
+        // lower bounds.
+        let mut observations = Vec::new();
+        for i in 0..2 {
+            observations.push(obs(
+                &format!("rs{i}"),
+                0,
+                "s",
+                "risky",
+                Outcome::Success,
+                None,
+                1.0,
+                vec![],
+            ));
+        }
+        for i in 0..18 {
+            observations.push(obs(
+                &format!("rf{i}"),
+                0,
+                "s",
+                "risky",
+                Outcome::Failure,
+                None,
+                1.0,
+                vec![],
+            ));
+        }
+        for i in 0..18 {
+            observations.push(obs(
+                &format!("ss{i}"),
+                0,
+                "s",
+                "safe",
+                Outcome::Success,
+                None,
+                1.0,
+                vec![],
+            ));
+        }
+        for i in 0..2 {
+            observations.push(obs(
+                &format!("sf{i}"),
+                0,
+                "s",
+                "safe",
+                Outcome::Failure,
+                None,
+                1.0,
+                vec![],
+            ));
+        }
+
+        let heuristic_config = BuildConfig {
+            min_confidence: 0.5,
+            ..Default::default()
+        };
+        let heuristic_book = build_prior_book(&observations, &heuristic_config).unwrap();
+        assert!(
+            heuristic_book.entries["s"]
+                .iter()
+                .any(|a| a.action == "risky"),
+            "heuristic min_confidence is blind to outcome, so risky should survive"
+        );
+
+        let wilson_config = BuildConfig {
+            min_confidence: 0.5,
+            confidence_mode: ConfidenceMode::WilsonLowerBound,
+            ..Default::default()
+        };
+        let wilson_book = build_prior_book(&observations, &wilson_config).unwrap();
+        assert!(
+            wilson_book.entries["s"].iter().all(|a| a.action != "risky"),
+            "wilson-lower-bound min_confidence should drop a mostly-failing action at the same threshold"
+        );
+        assert!(wilson_book.entries["s"].iter().any(|a| a.action == "safe"));
+    }
+
+    #[test]
+    fn draw_value_contributes_fractional_success_under_wilson_mode() {
+        // 18 draws + 2 failures, weight 1 each; default draw_value=0.5
+        // credits draws as half-success, so p_hat = (18*0.5)/20 = 0.45.
+        let mut observations = Vec::new();
+        for i in 0..18 {
+            observations.push(obs(
+                &format!("d{i}"),
+                0,
+                "s",
+                "a",
+                Outcome::Draw,
+                None,
+                1.0,
+                vec![],
+            ));
+        }
+        for i in 0..2 {
+            observations.push(obs(
+                &format!("f{i}"),
+                0,
+                "s",
+                "a",
+                Outcome::Failure,
+                None,
+                1.0,
+                vec![],
+            ));
+        }
+        let config = BuildConfig {
+            confidence_mode: ConfidenceMode::WilsonLowerBound,
+            ..Default::default()
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+        let got = action(&book, "s", "a").confidence;
+        let expected = wilson_lower_bound(9.0, 20.0, config.confidence_z).unwrap();
+        assert!((got - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn action_confidence_does_not_produce_nan_when_draw_value_exceeds_one() {
+        let observations = vec![
+            obs("d1", 0, "s", "a", Outcome::Draw, None, 1.0, vec![]),
+            obs("d2", 0, "s", "a", Outcome::Draw, None, 1.0, vec![]),
+        ];
+        let config = BuildConfig {
+            draw_value: 1.5, // out of the documented [0.0, 1.0] range
+            confidence_mode: ConfidenceMode::WilsonLowerBound,
+            ..Default::default()
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+        let got = action(&book, "s", "a").confidence;
+        assert!(got.is_finite());
+        assert!((0.0..=1.0).contains(&got));
     }
 
     #[test]

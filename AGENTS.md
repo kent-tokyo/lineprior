@@ -381,20 +381,30 @@ If both outcome and score are missing, the prior should be based on weighted cou
 
 ## Confidence
 
-Confidence should reflect sample reliability.
-
-Start simple:
+Confidence should reflect sample reliability. Implemented as `ConfidenceMode`,
+selectable via `--confidence-mode` / `BuildConfig::confidence_mode`:
 
 ```text
-confidence = weighted_count / (weighted_count + k)
+heuristic (default):
+  confidence = weighted_count / (weighted_count + k)
+  Not a statistical guarantee -- a sample-size heuristic. Works even for
+  score-only datasets with no outcome labels.
+
+wilson-lower-bound:
+  Wilson score interval lower bound on the action's success rate, using an
+  effective sample size (Kish's formula, sum(weight)^2 / sum(weight^2)) in
+  place of a raw count for weighted/fractional (e.g. draw) observations.
+  Falls back to heuristic when an action has no decisive-outcome
+  observations at all.
+
+hybrid:
+  heuristic * wilson-lower-bound. Same fallback as wilson-lower-bound.
 ```
 
-where `k` is configurable.
-
-This is not a statistical guarantee.
-Document it as a heuristic confidence score.
-
-Later versions may add Wilson intervals, Bayesian estimates, or bootstrap confidence.
+`k` (`confidence_k`) and `z` (`confidence_z`, default 1.96) are both
+configurable. `heuristic` remains the default for backward compatibility and
+for datasets with no outcome data. Bayesian estimates or bootstrap confidence
+remain open for a later version if a real need shows up.
 
 ## Entropy and Diversity
 
@@ -767,7 +777,7 @@ CSA games
 2. Variable-order context fallback.
 3. Sequence-level priors.
 4. Macro-action suggestions.
-5. Confidence intervals.
+5. ~~Confidence intervals.~~ Done -- see `## Confidence` (`ConfidenceMode::WilsonLowerBound`/`Hybrid`).
 6. Time-decay weighting.
 7. Multi-source merging.
 

@@ -165,3 +165,35 @@ fn eval_command_writes_out_file_matching_stdout() {
     let _ = std::fs::remove_file(&input);
     let _ = std::fs::remove_file(&out);
 }
+
+#[test]
+fn eval_command_reports_calibration_and_threshold_sweep_when_requested() {
+    let input = temp_path("eval_calibration_input.jsonl");
+    write_eval_fixture(&input);
+
+    let output = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "eval",
+            input.to_str().unwrap(),
+            "--confidence-mode",
+            "wilson-lower-bound",
+            "--calibration-bins",
+            "5",
+            "--thresholds",
+            "0.1,0.5",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(
+        report["confidence_calibration"].as_array().unwrap().len(),
+        5
+    );
+    assert_eq!(report["threshold_sweep"].as_array().unwrap().len(), 2);
+
+    let _ = std::fs::remove_file(&input);
+}

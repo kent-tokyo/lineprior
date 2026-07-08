@@ -33,6 +33,16 @@ pub struct EvalArgs {
     #[arg(long, value_delimiter = ',', default_value = "1,3,5")]
     top_k: Vec<usize>,
 
+    /// Number of equal-width confidence bins in [0,1] for `confidence_calibration`.
+    /// Omit to skip calibration reporting.
+    #[arg(long)]
+    calibration_bins: Option<usize>,
+
+    /// Confidence thresholds to sweep for `threshold_sweep` (comma-separated).
+    /// Omit to skip.
+    #[arg(long, value_delimiter = ',')]
+    thresholds: Vec<f64>,
+
     /// Write the JSON report here instead of stdout.
     #[arg(long)]
     out: Option<PathBuf>,
@@ -70,6 +80,8 @@ pub fn run(args: EvalArgs) -> Result<ExitCode> {
     let eval_config = EvalConfig {
         train_ratio: args.train_ratio,
         top_k: args.top_k,
+        calibration_bins: args.calibration_bins,
+        thresholds: args.thresholds,
     };
 
     let output = match evaluate(
