@@ -16,6 +16,8 @@ struct RawObservation {
     score: Option<f64>,
     weight: Option<f64>,
     tags: Option<Vec<String>>,
+    observed_at_unix_seconds: Option<i64>,
+    source: Option<String>,
 }
 
 /// Everything produced by a parse pass: the valid observations plus any
@@ -83,6 +85,8 @@ fn build_observation(raw: RawObservation, line: usize) -> Result<Observation> {
         score,
         weight,
         tags: raw.tags.unwrap_or_default(),
+        observed_at_unix_seconds: raw.observed_at_unix_seconds,
+        source: raw.source,
     })
 }
 
@@ -155,7 +159,7 @@ pub fn build_prior_book_from_reader(
     strict: bool,
     config: &BuildConfig,
 ) -> Result<BuildOutput> {
-    let mut acc = crate::build::PriorAccumulator::new(config);
+    let mut acc = crate::build::PriorAccumulator::new(config)?;
     let mut warnings = Vec::new();
 
     for (index, line) in BufReader::new(reader).lines().enumerate() {
@@ -281,6 +285,8 @@ mod tests {
             score: Some(f64::NAN),
             weight: None,
             tags: None,
+            observed_at_unix_seconds: None,
+            source: None,
         };
         let err = build_observation(raw, 7).unwrap_err();
         assert!(matches!(err, Error::NanScore { line: 7 }));

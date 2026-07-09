@@ -23,6 +23,8 @@ mod tests {
             score: None,
             weight: 1.0,
             tags: Vec::new(),
+            observed_at_unix_seconds: None,
+            source: None,
         }
     }
 
@@ -239,6 +241,96 @@ mod tests {
         );
         assert_eq!(output.report.score_lift, None); // no `score` field anywhere
         assert!(output.warnings.is_empty());
+    }
+
+    #[test]
+    fn evaluate_applies_time_decay_to_its_train_side_prior_same_as_build() {
+        // `evaluate()` folds train observations through the same
+        // `PriorAccumulator::observe` build.rs uses, so it must respond to
+        // `BuildConfig::time_decay_half_life_days` identically: an action
+        // dominant by raw count should lose its #1 ranking to a fresher
+        // action once decay crushes its effective weight.
+        let train_ratio = 0.5;
+        let candidate_ids: Vec<String> = (0..40).map(|i| format!("seq-{i}")).collect();
+        let train_ids: Vec<&String> = candidate_ids
+            .iter()
+            .filter(|id| is_train(id, train_ratio))
+            .collect();
+        let test_ids: Vec<&String> = candidate_ids
+            .iter()
+            .filter(|id| !is_train(id, train_ratio))
+            .collect();
+        assert!(train_ids.len() >= 2, "need at least two train sequences");
+        assert!(!test_ids.is_empty(), "need at least one test sequence");
+
+        // Most train sequences take "old_winner" (dominant by raw count
+        // without decay); a minority take "new_winner".
+        let split = (train_ids.len() * 4 / 5).clamp(1, train_ids.len() - 1);
+        let reference: i64 = 1_000_000;
+
+        let mut jsonl = String::new();
+        for id in &train_ids[..split] {
+            jsonl.push_str(&format!(
+                "{{\"sequence_id\":\"{id}\",\"step\":0,\"state\":\"s\",\"action\":\"old_winner\",\
+                 \"outcome\":\"success\",\"observed_at_unix_seconds\":{}}}\n",
+                reference - 5000 * 86_400, // 5000 days old == 1000 half-lives at half_life=5
+            ));
+        }
+        for id in &train_ids[split..] {
+            jsonl.push_str(&format!(
+                "{{\"sequence_id\":\"{id}\",\"step\":0,\"state\":\"s\",\"action\":\"new_winner\",\
+                 \"outcome\":\"success\",\"observed_at_unix_seconds\":{reference}}}\n"
+            ));
+        }
+        // Every test observation actually took "new_winner" -- top1_hit_rate
+        // is then fully determined by whether the trained book's #1 pick
+        // for state "s" is "new_winner" or "old_winner".
+        for id in &test_ids {
+            jsonl.push_str(&format!(
+                "{{\"sequence_id\":\"{id}\",\"step\":0,\"state\":\"s\",\"action\":\"new_winner\",\"outcome\":\"success\"}}\n"
+            ));
+        }
+
+        let eval_config = EvalConfig {
+            train_ratio,
+            top_k: vec![1],
+            ..EvalConfig::default()
+        };
+
+        let without_decay = evaluate(
+            jsonl.as_bytes(),
+            jsonl.as_bytes(),
+            true,
+            &BuildConfig::default(),
+            &eval_config,
+        )
+        .unwrap();
+        assert_eq!(
+            without_decay.report.top1_hit_rate,
+            Some(0.0),
+            "without decay, old_winner's raw count should dominate and mismatch every \
+             new_winner test observation"
+        );
+
+        let decay_config = BuildConfig {
+            time_decay_half_life_days: Some(5.0),
+            time_decay_reference_unix_seconds: Some(reference),
+            ..Default::default()
+        };
+        let with_decay = evaluate(
+            jsonl.as_bytes(),
+            jsonl.as_bytes(),
+            true,
+            &decay_config,
+            &eval_config,
+        )
+        .unwrap();
+        assert_eq!(
+            with_decay.report.top1_hit_rate,
+            Some(1.0),
+            "with decay, old_winner's effective weight should be crushed, flipping the \
+             #1 ranking to new_winner"
+        );
     }
 
     /// Three single-candidate states so each observation's #1 confidence is
@@ -836,7 +928,7 @@ pub fn evaluate(
     build_config: &BuildConfig,
     eval_config: &EvalConfig,
 ) -> Result<EvalOutput> {
-    let mut acc = PriorAccumulator::new(build_config);
+    let mut acc = PriorAccumulator::new(build_config)?;
     let mut warnings = Vec::new();
     let mut num_train_observations = 0u64;
 

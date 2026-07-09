@@ -290,7 +290,9 @@ Initial JSONL input should support these fields:
   "outcome": "success",
   "score": 0.8,
   "weight": 1.0,
-  "tags": ["trusted"]
+  "tags": ["trusted"],
+  "observed_at_unix_seconds": 1783540000,
+  "source": "engine_v012"
 }
 ```
 
@@ -307,6 +309,8 @@ Optional fields:
 * `score`
 * `weight`
 * `tags`
+* `observed_at_unix_seconds` -- feeds `BuildConfig::time_decay_half_life_days`; ignored entirely unless time decay is enabled.
+* `source` -- feeds `BuildConfig::source_weights`; an absent or unrecognized value falls back to `default_source_weight`.
 
 Defaults:
 
@@ -315,6 +319,8 @@ outcome = unknown
 score   = null
 weight  = 1.0
 tags    = []
+observed_at_unix_seconds = null
+source  = null
 ```
 
 Invalid records should produce clear errors in strict mode.
@@ -405,6 +411,52 @@ hybrid:
 configurable. `heuristic` remains the default for backward compatibility and
 for datasets with no outcome data. Bayesian estimates or bootstrap confidence
 remain open for a later version if a real need shows up.
+
+## Time Decay and Source Reliability
+
+Not every observation deserves equal trust: an old engine's games or a
+low-reliability data source shouldn't count the same as fresh, high-quality
+observations. `BuildConfig` computes an `effective_weight` per observation --
+`weight * time_decay_multiplier * source_reliability_multiplier` -- at the
+same point `weight` was always read, so every downstream consumer (`prior`,
+`confidence`, eval calibration) sees it automatically. Both factors default
+to a no-op, so this is fully backward compatible.
+
+```text
+time_decay_half_life_days (BuildConfig, default None -- disabled):
+  multiplier = 0.5 ^ (age_days / half_life_days)
+  age_days = max(0, time_decay_reference_unix_seconds - observed_at_unix_seconds) / 86400
+  A future-dated observation (observed_at > reference) clamps to age 0, silently.
+
+  time_decay_reference_unix_seconds is REQUIRED whenever half_life is set --
+  there is no implicit wall-clock fallback. A build/eval run's output and
+  BuildConfig fingerprint must stay reproducible across repeated invocations,
+  not drift with real time.
+
+  missing_timestamp_policy (default keep-base-weight) decides what happens to
+  an observation with no observed_at_unix_seconds, when decay is enabled:
+    keep-base-weight: score it at full weight, as if current.
+    drop: exclude it entirely.
+  Inert when time decay is disabled -- timestamps are never consulted.
+
+source_weights (BuildConfig, a map from source name to multiplier, default
+empty) and default_source_weight (default 1.0, used for an absent or
+unrecognized source): independent of time decay:
+  effective source multiplier = source_weights.get(source).unwrap_or(default_source_weight)
+```
+
+Caveat: Kish's effective sample size (`sum(weight)^2 / sum(weight^2)`, used by
+`wilson-lower-bound`/`hybrid`) is invariant to uniformly scaling every one of
+an action's own weights by the same factor. So when every observation behind
+an action shares the same age, pure `wilson-lower-bound` confidence does NOT
+reflect time decay at all -- only `weighted_count` (and therefore `prior`,
+and `heuristic`/`hybrid` confidence) does. Use `hybrid` (not bare
+`wilson-lower-bound`) if decayed/unreliable data should also pull the
+`confidence` number itself down.
+
+A caller can still precompute `weight` externally; this feature exists so the
+common case (decay by age, discount by source) is reproducible and folded
+into the fingerprint, not as a replacement for custom weighting logic.
 
 ## Entropy and Diversity
 
@@ -778,7 +830,7 @@ CSA games
 3. Sequence-level priors.
 4. Macro-action suggestions.
 5. ~~Confidence intervals.~~ Done -- see `## Confidence` (`ConfidenceMode::WilsonLowerBound`/`Hybrid`).
-6. Time-decay weighting.
+6. ~~Time-decay weighting.~~ Done -- see `## Time Decay and Source Reliability` (`BuildConfig::time_decay_half_life_days`). Per-observation source-reliability weighting (`source_weights`) shipped alongside it; merging separately-built prior books by source is still open.
 7. Multi-source merging.
 
 ### Phase 4: Integrations

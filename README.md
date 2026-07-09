@@ -27,7 +27,7 @@ lineprior build observations.jsonl \
   --smoothing-alpha 5.0
 ```
 
-Useful flags: `--max-step` (drop observations past a given step), `--max-actions-per-state` (keep only the top N candidates), `--tags` (keep only observations carrying at least one of the given tags, comma-separated), `--confidence-k` (tune how fast confidence grows with sample size), `--confidence-mode` (`heuristic` (default), `wilson-lower-bound`, or `hybrid` — see "Confidence modes" below), `--confidence-z` (z-score for the Wilson lower bound, default `1.96`, ignored under `heuristic`), `--min-weighted-count` / `--min-confidence` (filter on the weighted count or confidence directly, instead of just the raw `--min-count`), `--draw-value` (success credit for a `draw` outcome — default `0.5`, since a draw is a genuine partial outcome in adversarial games, not a loss), `--strict` (fail on the first invalid record instead of skipping it with a warning).
+Useful flags: `--max-step` (drop observations past a given step), `--max-actions-per-state` (keep only the top N candidates), `--tags` (keep only observations carrying at least one of the given tags, comma-separated), `--confidence-k` (tune how fast confidence grows with sample size), `--confidence-mode` (`heuristic` (default), `wilson-lower-bound`, or `hybrid` — see "Confidence modes" below), `--confidence-z` (z-score for the Wilson lower bound, default `1.96`, ignored under `heuristic`), `--min-weighted-count` / `--min-confidence` (filter on the weighted count or confidence directly, instead of just the raw `--min-count`), `--draw-value` (success credit for a `draw` outcome — default `0.5`, since a draw is a genuine partial outcome in adversarial games, not a loss), `--time-decay-half-life-days` / `--time-decay-reference-unix-seconds` / `--missing-timestamp-policy` (age-based weight decay — see "Time decay and source reliability" below), `--source-weights` / `--default-source-weight` (per-source reliability multipliers, same section), `--strict` (fail on the first invalid record instead of skipping it with a warning).
 
 `--min-confidence`'s meaning depends on `--confidence-mode`: under `heuristic` it's a pure sample-size floor, blind to outcome. Under `wilson-lower-bound`/`hybrid` it's success-rate-aware, so a high-count but mostly-failing action that used to pass the filter can now be dropped by it — switching `--confidence-mode` on an existing `--min-confidence` threshold is a real behavior change, not just an additive one.
 
@@ -38,6 +38,36 @@ Useful flags: `--max-step` (drop observations past a given step), `--max-actions
 - `hybrid`: `heuristic * wilson-lower-bound`, so both low sample size *and* a weak success rate pull confidence down. Same fallback as `wilson-lower-bound` when there's no outcome data.
 
 Weighted/fractional observations (`--weight`, `draw` outcomes under `--draw-value`) feed the Wilson bound through an effective sample size (`sum(weight)^2 / sum(weight^2)`, Kish's formula) rather than the raw weighted count — an engineering approximation, exact for uniform weight `1.0` observations.
+
+### Time decay and source reliability
+
+Not every observation deserves equal trust. `build`/`eval` can compute an `effective_weight` per observation — `weight * time_decay_multiplier * source_reliability_multiplier` — feeding everything downstream (`prior`, `confidence`, eval calibration) automatically. Both factors default to a no-op, so this is entirely opt-in.
+
+Stale data, decayed by age:
+
+```bash
+lineprior build observations.jsonl \
+  --out prior.jsonl \
+  --time-decay-half-life-days 30 \
+  --time-decay-reference-unix-seconds 1783540000
+```
+
+`--time-decay-reference-unix-seconds` is **required** whenever `--time-decay-half-life-days` is set — there's no implicit "now," since that would make identical build/eval invocations produce different priors (and a different `build_config_fingerprint`) depending on when you happened to run them. An observation's `weight` decays as `0.5 ^ (age_days / half_life_days)`; a future-dated observation (`observed_at_unix_seconds` after the reference) clamps to age `0`, silently. `--missing-timestamp-policy` (`keep-base-weight`, the default, or `drop`) decides what happens to an observation with no `observed_at_unix_seconds` — inert when decay is disabled.
+
+Multiple sources of differing reliability:
+
+```bash
+lineprior build observations.jsonl \
+  --out prior.jsonl \
+  --source-weights engine_v012=1.0,engine_v010=0.6,human=0.8 \
+  --default-source-weight 1.0
+```
+
+An observation's `source` field looks itself up in `--source-weights`; an absent or unrecognized source falls back to `--default-source-weight` (default `1.0`, i.e. trust it same as any other). This is independent of time decay — you can use either, both, or neither.
+
+**Caveat:** Kish's effective sample size (the same formula the Wilson bound above uses) is invariant to uniformly scaling every one of an action's own weights by the same factor. So when every observation behind an action shares the same age/source, pure `wilson-lower-bound` confidence does **not** reflect decay at all — only `weighted_count` (and therefore `prior`, and `heuristic`/`hybrid` confidence) does. Use `hybrid`, not bare `wilson-lower-bound`, if you want the `confidence` number itself to drop for stale or unreliable data.
+
+You could always precompute `weight` yourself before feeding it to `lineprior` — this feature exists so the common case (decay by age, discount by source) is reproducible and folded into the config fingerprint, not as a replacement for custom weighting logic.
 
 `build` also prints a one-line summary of what its filters actually did, e.g. `stats: 950/1000 observations kept, 42/50 candidates kept (5 by min_count, ...)` — useful for sanity-checking your own pre-filtering (e.g. a domain-specific ply/depth cutoff) against `--min-count`/etc. without re-deriving the numbers by hand. As a library, this is `BuildOutput.stats` (a `BuildStats`) returned alongside the book by `build_prior_book_from_reader`.
 
@@ -63,11 +93,11 @@ lineprior validate observations.jsonl   # parse and report issues without buildi
 One JSON object per line:
 
 ```json
-{"sequence_id":"case-001","step":0,"state":"state_a","action":"action_x","outcome":"success","score":0.8,"weight":1.0,"tags":["trusted"]}
+{"sequence_id":"case-001","step":0,"state":"state_a","action":"action_x","outcome":"success","score":0.8,"weight":1.0,"tags":["trusted"],"observed_at_unix_seconds":1783540000,"source":"engine_v012"}
 ```
 
 Required: `sequence_id`, `step`, `state`, `action`.
-Optional, with defaults: `outcome` (`unknown`), `score` (`null`), `weight` (`1.0`), `tags` (`[]`).
+Optional, with defaults: `outcome` (`unknown`), `score` (`null`), `weight` (`1.0`), `tags` (`[]`), `observed_at_unix_seconds` (`null`, only consulted when time decay is enabled — see "Time decay and source reliability" above), `source` (`null`, only consulted via `--source-weights`).
 
 ## Output schema
 
@@ -99,7 +129,7 @@ match load_prior_book_with_config(reader, &config) {
 
 A file saved via plain `save_prior_book` (or by a version of lineprior that predates this) has no fingerprint to compare against, so `load_prior_book_with_config` accepts it unconditionally — there's nothing to detect drift against. The fingerprint is stable *within a given lineprior version*, not guaranteed forever-stable across upgrades (it hashes a JSON encoding of `BuildConfig`, and floats' exact byte layout isn't itself a cross-version guarantee) — it's meant to catch a stale cache within one project's lifetime, not serve as a long-term archival checksum.
 
-Upgrading to a lineprior version that adds new `BuildConfig` fields (like `confidence_mode`/`confidence_z`) changes the fingerprint for *every* config, even `heuristic` mode where `confidence_z` is inert — so a prior book cached before upgrading will trip `BuildConfigMismatch` once after upgrading. That's the fingerprint mechanism working as intended, not a regression.
+Upgrading to a lineprior version that adds new `BuildConfig` fields (like `confidence_mode`/`confidence_z`, or `time_decay_half_life_days`/`source_weights`) changes the fingerprint for *every* config, even when the new fields are at their inert defaults (`heuristic` mode, decay disabled, no source weights) — so a prior book cached before upgrading will trip `BuildConfigMismatch` once after upgrading. That's the fingerprint mechanism working as intended, not a regression.
 
 ## Limitations
 
@@ -186,8 +216,9 @@ Headline fields in the JSON report:
   from, so either framing can be double-checked directly.
 
 `lineprior eval --help` lists the full set of `build`-equivalent tuning flags (`--min-count`,
-`--smoothing-alpha`, `--confidence-mode`, etc.) — `eval` builds its train-side prior under the same
-knobs a real `build` run would use, so the two stay comparable.
+`--smoothing-alpha`, `--confidence-mode`, `--time-decay-half-life-days`, `--source-weights`, etc.) —
+`eval` builds its train-side prior under the same knobs a real `build` run would use, so the two
+stay comparable.
 
 ### Confidence calibration and threshold sweep
 

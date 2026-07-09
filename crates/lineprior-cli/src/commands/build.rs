@@ -59,7 +59,9 @@ pub fn run(args: BuildArgs) -> Result<ExitCode> {
         "stats: {}/{} observations kept, {}/{} candidates kept \
          ({} by min_count, {} by min_weighted_count, {} by min_confidence, {} by max_actions_per_state)",
         stats.observations_kept,
-        stats.observations_kept + stats.observations_dropped_by_step_or_tag_filter,
+        stats.observations_kept
+            + stats.observations_dropped_by_step_or_tag_filter
+            + stats.observations_dropped_by_missing_timestamp,
         stats.candidates_kept,
         stats.candidates_before_filtering,
         stats.candidates_dropped_by_min_count,

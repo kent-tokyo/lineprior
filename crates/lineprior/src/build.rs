@@ -1,8 +1,11 @@
 use crate::error::{Error, Result};
-use crate::model::{BuildConfig, ConfidenceMode, Observation, Outcome, PriorAction, PriorBook};
+use crate::model::{
+    BuildConfig, ConfidenceMode, MissingTimestampPolicy, Observation, Outcome, PriorAction,
+    PriorBook,
+};
 use crate::score::{
     confidence, effective_sample_size, normalize, ratio, raw_score, shrink_toward,
-    wilson_lower_bound,
+    time_decay_multiplier, wilson_lower_bound,
 };
 use serde::Serialize;
 use std::cmp::Ordering;
@@ -26,6 +29,15 @@ struct ActionStats {
 
 /// Wilson lower bound of `stat`'s success rate, or `None` if it has no
 /// decisive-outcome observations at all (nothing to bound).
+///
+/// Note: Kish's effective sample size (`n_eff`, see [`effective_sample_size`])
+/// is invariant to uniformly scaling every weight by the same factor -- so
+/// when time decay (or a source-reliability multiplier) applies equally to
+/// every one of an action's own observations, this bound doesn't move even
+/// though `weighted_count` (and therefore `prior`) does. Decay always shrinks
+/// the ranking score; it only shrinks *this* confidence number under
+/// `ConfidenceMode::Heuristic`/`Hybrid`, where the heuristic factor carries
+/// `weighted_count` directly.
 fn wilson_confidence(stat: &ActionStats, z: f64) -> Option<f64> {
     let n_eff = effective_sample_size(stat.weighted_trials, stat.weighted_trial_weight_sq_sum);
     let p_hat = ratio(stat.weighted_successes, stat.weighted_trials)?;
@@ -48,6 +60,75 @@ fn action_confidence(stat: &ActionStats, config: &BuildConfig) -> f64 {
     }
 }
 
+/// Rejects a `BuildConfig` that can't be applied consistently, before any
+/// observation is folded in. Checked once per build/eval run, not per
+/// observation.
+fn validate_config(config: &BuildConfig) -> Result<()> {
+    if let Some(half_life) = config.time_decay_half_life_days {
+        if !(half_life.is_finite() && half_life > 0.0) {
+            return Err(Error::InvalidConfig {
+                message: format!("time_decay_half_life_days must be > 0, got {half_life}"),
+            });
+        }
+        if config.time_decay_reference_unix_seconds.is_none() {
+            return Err(Error::InvalidConfig {
+                message: "time_decay_reference_unix_seconds is required when \
+                          time_decay_half_life_days is set"
+                    .to_string(),
+            });
+        }
+    }
+    for (name, weight) in &config.source_weights {
+        if !weight.is_finite() || *weight < 0.0 {
+            return Err(Error::InvalidConfig {
+                message: format!("source_weights[{name:?}] must be finite and >= 0, got {weight}"),
+            });
+        }
+    }
+    if !config.default_source_weight.is_finite() || config.default_source_weight < 0.0 {
+        return Err(Error::InvalidConfig {
+            message: format!(
+                "default_source_weight must be finite and >= 0, got {}",
+                config.default_source_weight
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// `obs.weight` after time-decay and source-reliability multipliers, or
+/// `None` if `obs` should be dropped entirely (missing timestamp under
+/// `MissingTimestampPolicy::Drop`, with time decay enabled).
+fn effective_weight(obs: &Observation, config: &BuildConfig) -> Option<f64> {
+    let mut weight = obs.weight;
+
+    if let Some(half_life_days) = config.time_decay_half_life_days {
+        let reference = config
+            .time_decay_reference_unix_seconds
+            .expect("validate_config requires this whenever time_decay_half_life_days is set");
+        match obs.observed_at_unix_seconds {
+            Some(observed_at) => {
+                let age_days = ((reference - observed_at) as f64 / 86_400.0).max(0.0);
+                weight *= time_decay_multiplier(age_days, half_life_days);
+            }
+            None => match config.missing_timestamp_policy {
+                MissingTimestampPolicy::KeepBaseWeight => {}
+                MissingTimestampPolicy::Drop => return None,
+            },
+        }
+    }
+
+    let source_multiplier = obs
+        .source
+        .as_deref()
+        .and_then(|name| config.source_weights.get(name))
+        .copied()
+        .unwrap_or(config.default_source_weight);
+    weight *= source_multiplier;
+
+    Some(weight)
+}
+
 /// What a build actually did to the input, independent of the resulting
 /// [`PriorBook`] -- lets a caller check whether their own pre-filtering
 /// (e.g. a domain-specific ply/depth cutoff) combined with `BuildConfig`'s
@@ -68,14 +149,27 @@ fn action_confidence(stat: &ActionStats, config: &BuildConfig) -> f64 {
 /// A candidate failing more than one of the first three thresholds is
 /// counted against whichever it hits first, in that order (matching the
 /// order they're applied).
+///
+/// Separately, every observation read is accounted for by:
+///
+/// ```text
+/// observations_kept
+///     + observations_dropped_by_step_or_tag_filter
+///     + observations_dropped_by_missing_timestamp
+/// ```
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 pub struct BuildStats {
     /// Observations folded into the accumulator (survived `max_step` /
-    /// `tag_filter`).
+    /// `tag_filter` / the missing-timestamp policy below).
     pub observations_kept: u64,
     /// Observations dropped by `max_step` or `tag_filter` before ever
     /// contributing to any `(state, action)` pair's statistics.
     pub observations_dropped_by_step_or_tag_filter: u64,
+    /// Observations dropped because they had no `observed_at_unix_seconds`
+    /// under `MissingTimestampPolicy::Drop`. Always `0` when
+    /// `time_decay_half_life_days` is unset -- timestamps are only
+    /// consulted when time decay is enabled.
+    pub observations_dropped_by_missing_timestamp: u64,
     /// Distinct `(state, action)` pairs that accumulated at least one
     /// observation, before `min_count` / `min_weighted_count` /
     /// `min_confidence` / `max_actions_per_state`.
@@ -111,12 +205,14 @@ pub(crate) struct PriorAccumulator<'a> {
     global_weighted_score_count: f64,
     observations_kept: u64,
     observations_dropped_by_step_or_tag_filter: u64,
+    observations_dropped_by_missing_timestamp: u64,
     config: &'a BuildConfig,
 }
 
 impl<'a> PriorAccumulator<'a> {
-    pub(crate) fn new(config: &'a BuildConfig) -> Self {
-        Self {
+    pub(crate) fn new(config: &'a BuildConfig) -> Result<Self> {
+        validate_config(config)?;
+        Ok(Self {
             stats: HashMap::new(),
             global_weighted_successes: 0.0,
             global_weighted_trials: 0.0,
@@ -124,8 +220,9 @@ impl<'a> PriorAccumulator<'a> {
             global_weighted_score_count: 0.0,
             observations_kept: 0,
             observations_dropped_by_step_or_tag_filter: 0,
+            observations_dropped_by_missing_timestamp: 0,
             config,
-        }
+        })
     }
 
     pub(crate) fn observe(&mut self, obs: &Observation) {
@@ -141,6 +238,10 @@ impl<'a> PriorAccumulator<'a> {
             self.observations_dropped_by_step_or_tag_filter += 1;
             return;
         }
+        let Some(effective_weight) = effective_weight(obs, self.config) else {
+            self.observations_dropped_by_missing_timestamp += 1;
+            return;
+        };
         self.observations_kept += 1;
 
         let entry = self
@@ -150,12 +251,12 @@ impl<'a> PriorAccumulator<'a> {
             .entry(obs.action.clone())
             .or_default();
         entry.count += 1;
-        entry.weighted_count += obs.weight;
+        entry.weighted_count += effective_weight;
 
         if obs.outcome != Outcome::Unknown {
-            entry.weighted_trials += obs.weight;
-            entry.weighted_trial_weight_sq_sum += obs.weight * obs.weight;
-            self.global_weighted_trials += obs.weight;
+            entry.weighted_trials += effective_weight;
+            entry.weighted_trial_weight_sq_sum += effective_weight * effective_weight;
+            self.global_weighted_trials += effective_weight;
             // A draw earns partial credit rather than scoring like a loss;
             // both the per-action and dataset-wide totals must move
             // together since the latter is the smoothing target the
@@ -165,15 +266,15 @@ impl<'a> PriorAccumulator<'a> {
                 Outcome::Draw => self.config.draw_value,
                 Outcome::Failure | Outcome::Unknown => 0.0,
             };
-            entry.weighted_successes += success_credit * obs.weight;
-            self.global_weighted_successes += success_credit * obs.weight;
+            entry.weighted_successes += success_credit * effective_weight;
+            self.global_weighted_successes += success_credit * effective_weight;
         }
 
         if let Some(score) = obs.score {
-            entry.weighted_score_sum += obs.weight * score;
-            entry.weighted_score_count += obs.weight;
-            self.global_weighted_score_sum += obs.weight * score;
-            self.global_weighted_score_count += obs.weight;
+            entry.weighted_score_sum += effective_weight * score;
+            entry.weighted_score_count += effective_weight;
+            self.global_weighted_score_sum += effective_weight * score;
+            self.global_weighted_score_count += effective_weight;
         }
     }
 
@@ -308,6 +409,8 @@ impl<'a> PriorAccumulator<'a> {
             observations_kept: self.observations_kept,
             observations_dropped_by_step_or_tag_filter: self
                 .observations_dropped_by_step_or_tag_filter,
+            observations_dropped_by_missing_timestamp: self
+                .observations_dropped_by_missing_timestamp,
             candidates_before_filtering,
             candidates_dropped_by_min_count,
             candidates_dropped_by_min_weighted_count,
@@ -332,7 +435,7 @@ pub fn build_prior_book(observations: &[Observation], config: &BuildConfig) -> R
         return Err(Error::NoObservations);
     }
 
-    let mut acc = PriorAccumulator::new(config);
+    let mut acc = PriorAccumulator::new(config)?;
     for obs in observations {
         acc.observe(obs);
     }
@@ -370,6 +473,8 @@ mod tests {
             score,
             weight,
             tags: tags.into_iter().map(str::to_string).collect(),
+            observed_at_unix_seconds: None,
+            source: None,
         }
     }
 
@@ -1140,7 +1245,7 @@ mod tests {
             ..Default::default()
         };
 
-        let mut acc = PriorAccumulator::new(&config);
+        let mut acc = PriorAccumulator::new(&config).unwrap();
         for o in &observations {
             acc.observe(o);
         }
@@ -1165,5 +1270,306 @@ mod tests {
                 + stats.candidates_dropped_by_min_confidence
                 + stats.candidates_dropped_by_max_actions_per_state
         );
+    }
+
+    fn decay_config(half_life_days: f64, reference_unix_seconds: i64) -> BuildConfig {
+        BuildConfig {
+            time_decay_half_life_days: Some(half_life_days),
+            time_decay_reference_unix_seconds: Some(reference_unix_seconds),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn time_decay_disabled_by_default_matches_pre_existing_weight() {
+        let observations = vec![obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])];
+        let book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        assert_eq!(action(&book, "s", "a").weighted_count, 1.0);
+    }
+
+    #[test]
+    fn observation_one_half_life_old_has_half_weight() {
+        let reference = 1_000_000;
+        let observed_at = reference - 10 * 86_400; // exactly one half-life (10 days) old
+        let observations = vec![Observation {
+            observed_at_unix_seconds: Some(observed_at),
+            ..obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])
+        }];
+        let config = decay_config(10.0, reference);
+        let book = build_prior_book(&observations, &config).unwrap();
+        assert!((action(&book, "s", "a").weighted_count - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn observation_two_half_lives_old_has_quarter_weight() {
+        let reference = 1_000_000;
+        let observed_at = reference - 20 * 86_400; // two half-lives (10 days each) old
+        let observations = vec![Observation {
+            observed_at_unix_seconds: Some(observed_at),
+            ..obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])
+        }];
+        let config = decay_config(10.0, reference);
+        let book = build_prior_book(&observations, &config).unwrap();
+        assert!((action(&book, "s", "a").weighted_count - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn future_timestamp_clamps_to_full_weight() {
+        let reference = 1_000_000;
+        let observed_at = reference + 10 * 86_400; // "in the future" relative to reference
+        let observations = vec![Observation {
+            observed_at_unix_seconds: Some(observed_at),
+            ..obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])
+        }];
+        let config = decay_config(10.0, reference);
+        let book = build_prior_book(&observations, &config).unwrap();
+        assert_eq!(action(&book, "s", "a").weighted_count, 1.0);
+    }
+
+    #[test]
+    fn missing_timestamp_keep_base_weight_keeps_observation_at_full_weight() {
+        // observed_at_unix_seconds is None on this observation; default
+        // MissingTimestampPolicy::KeepBaseWeight should score it as current.
+        let observations = vec![obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])];
+        let config = decay_config(10.0, 1_000_000);
+        let mut acc = PriorAccumulator::new(&config).unwrap();
+        for o in &observations {
+            acc.observe(o);
+        }
+        let (book, stats) = acc.finish_with_stats();
+        assert_eq!(stats.observations_kept, 1);
+        assert_eq!(stats.observations_dropped_by_missing_timestamp, 0);
+        assert_eq!(action(&book, "s", "a").weighted_count, 1.0);
+    }
+
+    #[test]
+    fn missing_timestamp_drop_excludes_observation() {
+        let observations = vec![
+            obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![]), // no timestamp
+            Observation {
+                observed_at_unix_seconds: Some(1_000_000),
+                ..obs("c2", 0, "s", "b", Outcome::Unknown, None, 1.0, vec![])
+            },
+        ];
+        let config = BuildConfig {
+            missing_timestamp_policy: MissingTimestampPolicy::Drop,
+            ..decay_config(10.0, 1_000_000)
+        };
+        let mut acc = PriorAccumulator::new(&config).unwrap();
+        for o in &observations {
+            acc.observe(o);
+        }
+        let (book, stats) = acc.finish_with_stats();
+        assert_eq!(stats.observations_dropped_by_missing_timestamp, 1);
+        assert_eq!(stats.observations_kept, 1);
+        assert!(book.entries["s"].iter().all(|a| a.action != "a"));
+        assert!(book.entries["s"].iter().any(|a| a.action == "b"));
+    }
+
+    #[test]
+    fn source_weight_applies_only_to_matching_source() {
+        let observations = vec![
+            Observation {
+                source: Some("human".to_string()),
+                ..obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])
+            },
+            Observation {
+                source: Some("engine".to_string()),
+                ..obs("c2", 0, "s", "b", Outcome::Unknown, None, 1.0, vec![])
+            },
+        ];
+        let config = BuildConfig {
+            source_weights: std::collections::BTreeMap::from([("human".to_string(), 0.5)]),
+            ..Default::default()
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+        assert_eq!(action(&book, "s", "a").weighted_count, 0.5);
+        assert_eq!(action(&book, "s", "b").weighted_count, 1.0);
+    }
+
+    #[test]
+    fn unknown_source_uses_default_source_weight() {
+        let observations = vec![Observation {
+            source: Some("never_configured".to_string()),
+            ..obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])
+        }];
+        let config = BuildConfig {
+            source_weights: std::collections::BTreeMap::from([("human".to_string(), 0.5)]),
+            default_source_weight: 0.25,
+            ..Default::default()
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+        assert_eq!(action(&book, "s", "a").weighted_count, 0.25);
+    }
+
+    #[test]
+    fn source_weight_zero_makes_action_invisible_under_min_weighted_count() {
+        let observations = vec![
+            Observation {
+                source: Some("bad".to_string()),
+                ..obs(
+                    "c1",
+                    0,
+                    "s",
+                    "bad_action",
+                    Outcome::Unknown,
+                    None,
+                    1.0,
+                    vec![],
+                )
+            },
+            obs("c2", 0, "s", "keep", Outcome::Unknown, None, 1.0, vec![]),
+        ];
+        let config = BuildConfig {
+            source_weights: std::collections::BTreeMap::from([("bad".to_string(), 0.0)]),
+            min_weighted_count: 0.5,
+            ..Default::default()
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+        assert!(book.entries["s"].iter().all(|a| a.action != "bad_action"));
+        assert!(book.entries["s"].iter().any(|a| a.action == "keep"));
+    }
+
+    /// 20 observations per action, all `Success`, differing only in age --
+    /// `fresh` sits at `reference` (age 0), `stale` 10 half-lives back.
+    fn fresh_and_stale_observations(reference: i64, half_life_days: f64) -> Vec<Observation> {
+        let stale_age_days = 10.0 * half_life_days;
+        let mut observations = Vec::new();
+        for i in 0..20 {
+            observations.push(Observation {
+                observed_at_unix_seconds: Some(reference),
+                ..obs(
+                    &format!("fresh_{i}"),
+                    0,
+                    "s",
+                    "fresh",
+                    Outcome::Success,
+                    None,
+                    1.0,
+                    vec![],
+                )
+            });
+        }
+        for i in 0..20 {
+            observations.push(Observation {
+                observed_at_unix_seconds: Some(reference - (stale_age_days * 86_400.0) as i64),
+                ..obs(
+                    &format!("stale_{i}"),
+                    0,
+                    "s",
+                    "stale",
+                    Outcome::Success,
+                    None,
+                    1.0,
+                    vec![],
+                )
+            });
+        }
+        observations
+    }
+
+    /// Kish's effective sample size (`sum(w)^2 / sum(w^2)`) is invariant to
+    /// uniformly scaling every weight for an action by the same factor --
+    /// so when every one of an action's observations shares the same age,
+    /// pure `WilsonLowerBound` confidence does NOT reflect time decay at
+    /// all (same success rate, same evenness of trials). Decay still moves
+    /// the *ranking* (`prior`, via `weighted_count`) even though it doesn't
+    /// move this particular confidence number -- callers who want the
+    /// confidence field itself to drop with age need `heuristic` (default)
+    /// or `hybrid`, see the next test.
+    #[test]
+    fn wilson_confidence_is_invariant_to_uniform_time_decay_but_ranking_still_reflects_it() {
+        let reference = 1_000_000;
+        let half_life_days = 10.0;
+        let observations = fresh_and_stale_observations(reference, half_life_days);
+        let config = BuildConfig {
+            confidence_mode: ConfidenceMode::WilsonLowerBound,
+            ..decay_config(half_life_days, reference)
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+        let fresh = action(&book, "s", "fresh");
+        let stale = action(&book, "s", "stale");
+        assert_eq!(fresh.confidence, stale.confidence);
+        assert!(
+            fresh.prior > stale.prior,
+            "fresh.prior={} should still outrank stale.prior={}: decay must shrink weighted_count \
+             even when it leaves this Wilson confidence number unchanged",
+            fresh.prior,
+            stale.prior
+        );
+    }
+
+    #[test]
+    fn hybrid_confidence_drops_with_time_decay() {
+        let reference = 1_000_000;
+        let half_life_days = 10.0;
+        let observations = fresh_and_stale_observations(reference, half_life_days);
+        let config = BuildConfig {
+            confidence_mode: ConfidenceMode::Hybrid,
+            ..decay_config(half_life_days, reference)
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+        let fresh = action(&book, "s", "fresh").confidence;
+        let stale = action(&book, "s", "stale").confidence;
+        assert!(
+            fresh > stale,
+            "fresh={fresh} should outrank stale={stale}: the heuristic factor in Hybrid \
+             carries weighted_count, so decay must lower confidence here"
+        );
+    }
+
+    #[test]
+    fn validate_config_rejects_non_positive_half_life() {
+        let observations = vec![obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])];
+        let config = decay_config(0.0, 1_000_000);
+        let err = build_prior_book(&observations, &config).unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig { .. }));
+    }
+
+    #[test]
+    fn validate_config_rejects_half_life_without_reference() {
+        let observations = vec![obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])];
+        let config = BuildConfig {
+            time_decay_half_life_days: Some(10.0),
+            time_decay_reference_unix_seconds: None,
+            ..Default::default()
+        };
+        let err = build_prior_book(&observations, &config).unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig { .. }));
+    }
+
+    #[test]
+    fn validate_config_rejects_negative_source_weight() {
+        let observations = vec![obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])];
+        let config = BuildConfig {
+            source_weights: std::collections::BTreeMap::from([("x".to_string(), -1.0)]),
+            ..Default::default()
+        };
+        let err = build_prior_book(&observations, &config).unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig { .. }));
+    }
+
+    #[test]
+    fn validate_config_rejects_negative_default_source_weight() {
+        let observations = vec![obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])];
+        let config = BuildConfig {
+            default_source_weight: -1.0,
+            ..Default::default()
+        };
+        let err = build_prior_book(&observations, &config).unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig { .. }));
+    }
+
+    #[test]
+    fn build_config_fingerprint_changes_with_decay_and_source_config() {
+        let default_fp = crate::query::build_config_fingerprint(&BuildConfig::default());
+        let decay_fp = crate::query::build_config_fingerprint(&decay_config(10.0, 1_000_000));
+        let source_fp = crate::query::build_config_fingerprint(&BuildConfig {
+            source_weights: std::collections::BTreeMap::from([("human".to_string(), 0.5)]),
+            ..Default::default()
+        });
+        assert_ne!(default_fp, decay_fp);
+        assert_ne!(default_fp, source_fp);
+        assert_ne!(decay_fp, source_fp);
     }
 }

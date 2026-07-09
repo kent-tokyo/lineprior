@@ -33,6 +33,8 @@ fn synthetic_observations(
                     score: Some(0.5 + (i % 10) as f64 * 0.01),
                     weight: 1.0,
                     tags: Vec::new(),
+                    observed_at_unix_seconds: None,
+                    source: None,
                 });
             }
         }

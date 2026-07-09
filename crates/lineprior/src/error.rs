@@ -42,6 +42,9 @@ pub enum Error {
          (expected fingerprint {expected}, found {found})"
     )]
     BuildConfigMismatch { expected: u64, found: u64 },
+
+    #[error("invalid build config: {message}")]
+    InvalidConfig { message: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

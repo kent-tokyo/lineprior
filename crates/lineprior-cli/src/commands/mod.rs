@@ -39,6 +39,36 @@ impl From<ConfidenceModeArg> for lineprior::ConfidenceMode {
     }
 }
 
+/// CLI-facing mirror of [`lineprior::MissingTimestampPolicy`] -- same
+/// clap-free-core rationale as `ConfidenceModeArg`.
+#[derive(Clone, Copy, ValueEnum)]
+pub enum MissingTimestampPolicyArg {
+    KeepBaseWeight,
+    Drop,
+}
+
+impl From<MissingTimestampPolicyArg> for lineprior::MissingTimestampPolicy {
+    fn from(arg: MissingTimestampPolicyArg) -> Self {
+        match arg {
+            MissingTimestampPolicyArg::KeepBaseWeight => {
+                lineprior::MissingTimestampPolicy::KeepBaseWeight
+            }
+            MissingTimestampPolicyArg::Drop => lineprior::MissingTimestampPolicy::Drop,
+        }
+    }
+}
+
+/// Parses one `name=weight` entry of `--source-weights`.
+fn parse_source_weight_entry(s: &str) -> Result<(String, f64), String> {
+    let (name, weight) = s
+        .split_once('=')
+        .ok_or_else(|| format!("invalid source weight {s:?}, expected `name=weight`"))?;
+    let weight: f64 = weight
+        .parse()
+        .map_err(|_| format!("invalid weight in {s:?}: {weight:?} is not a number"))?;
+    Ok((name.to_string(), weight))
+}
+
 /// The `BuildConfig`-affecting flags shared by `build` and `eval` (`eval`
 /// needs to build its train-side prior under the same knobs a real `build`
 /// run would use). Flattened into each command's own `Args` struct via
@@ -92,6 +122,32 @@ pub struct BuildConfigArgs {
     /// Success credit for a Draw outcome (0.0 scores like a loss, 1.0 like a win).
     #[arg(long, default_value_t = lineprior::DEFAULT_DRAW_VALUE)]
     pub draw_value: f64,
+
+    /// Half-life in days for exponential time decay of observation weight.
+    /// Omit to disable time decay entirely (default). Requires
+    /// --time-decay-reference-unix-seconds when set.
+    #[arg(long)]
+    pub time_decay_half_life_days: Option<f64>,
+
+    /// "Now", as a Unix timestamp, for computing an observation's age in
+    /// days. Required whenever --time-decay-half-life-days is set.
+    #[arg(long)]
+    pub time_decay_reference_unix_seconds: Option<i64>,
+
+    /// What to do with an observation that has no observed_at_unix_seconds
+    /// when time decay is enabled. Ignored when time decay is disabled.
+    #[arg(long, value_enum, default_value_t = MissingTimestampPolicyArg::KeepBaseWeight)]
+    pub missing_timestamp_policy: MissingTimestampPolicyArg,
+
+    /// Per-source reliability multiplier, e.g.
+    /// `engine_v012=1.0,engine_v010=0.6,human=0.8` (comma-separated).
+    #[arg(long, value_delimiter = ',', value_parser = parse_source_weight_entry)]
+    pub source_weights: Vec<(String, f64)>,
+
+    /// Multiplier for an observation whose source is absent or not a key in
+    /// --source-weights.
+    #[arg(long, default_value_t = lineprior::DEFAULT_SOURCE_WEIGHT)]
+    pub default_source_weight: f64,
 }
 
 impl BuildConfigArgs {
@@ -112,6 +168,11 @@ impl BuildConfigArgs {
             } else {
                 Some(self.tags)
             },
+            time_decay_half_life_days: self.time_decay_half_life_days,
+            time_decay_reference_unix_seconds: self.time_decay_reference_unix_seconds,
+            missing_timestamp_policy: self.missing_timestamp_policy.into(),
+            source_weights: self.source_weights.into_iter().collect(),
+            default_source_weight: self.default_source_weight,
             ..BuildConfig::default()
         }
     }

@@ -99,6 +99,13 @@ pub fn wilson_lower_bound(successes: f64, effective_trials: f64, z: f64) -> Opti
     Some(((center - margin) / denom).clamp(0.0, 1.0))
 }
 
+/// Exponential half-life decay: `1.0` at `age_days == 0`, `0.5` at one
+/// half-life, `0.25` at two, etc. `age_days` is expected pre-clamped to
+/// `>= 0` by the caller (a future-dated observation has age 0, not negative).
+pub fn time_decay_multiplier(age_days: f64, half_life_days: f64) -> f64 {
+    0.5_f64.powf(age_days / half_life_days)
+}
+
 /// Shannon entropy (in bits) of a discrete distribution. Callers use this
 /// to gauge whether one action dominates (low entropy, prior is useful) or
 /// many actions compete (high entropy, fallback search may be safer).
@@ -151,6 +158,21 @@ mod tests {
     fn confidence_grows_toward_one_with_more_samples() {
         assert!((confidence(0.0, 20.0) - 0.0).abs() < 1e-9);
         assert!(confidence(1000.0, 20.0) > 0.98);
+    }
+
+    #[test]
+    fn time_decay_multiplier_is_one_at_age_zero() {
+        assert_eq!(time_decay_multiplier(0.0, 30.0), 1.0);
+    }
+
+    #[test]
+    fn time_decay_multiplier_is_half_at_one_half_life() {
+        assert!((time_decay_multiplier(30.0, 30.0) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn time_decay_multiplier_is_quarter_at_two_half_lives() {
+        assert!((time_decay_multiplier(60.0, 30.0) - 0.25).abs() < 1e-9);
     }
 
     #[test]

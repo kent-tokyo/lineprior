@@ -13,6 +13,15 @@ pub struct Observation {
     pub score: Option<f64>,
     pub weight: f64,
     pub tags: Vec<String>,
+    /// Wall-clock time the observation was recorded, for
+    /// `BuildConfig::time_decay_half_life_days`. `None` is handled per
+    /// `BuildConfig::missing_timestamp_policy` when decay is enabled, and
+    /// ignored entirely otherwise.
+    pub observed_at_unix_seconds: Option<i64>,
+    /// Which data source produced this observation, for
+    /// `BuildConfig::source_weights`. `None` (or an unrecognized value)
+    /// falls back to `BuildConfig::default_source_weight`.
+    pub source: Option<String>,
 }
 
 /// Result of taking `action` from `state`.
@@ -53,6 +62,25 @@ pub const DEFAULT_DRAW_VALUE: f64 = 0.5;
 /// ~1.64), which is the right direction for a "how much should I trust
 /// this" score.
 pub const DEFAULT_CONFIDENCE_Z: f64 = 1.96;
+
+/// Multiplier applied to an observation whose `source` is `None` or not a
+/// key in `BuildConfig::source_weights`. `1.0` means "trust unlabeled/unknown
+/// sources same as any other" -- the backward-compatible default.
+pub const DEFAULT_SOURCE_WEIGHT: f64 = 1.0;
+
+/// What to do with an observation that has no `observed_at_unix_seconds`
+/// when `BuildConfig::time_decay_half_life_days` is set. Inert when time
+/// decay is disabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MissingTimestampPolicy {
+    /// Score it at its un-decayed `weight`, as if it were current.
+    #[default]
+    KeepBaseWeight,
+    /// Exclude it entirely -- treat "unknown age" as "untrustworthy" rather
+    /// than "trustworthy".
+    Drop,
+}
 
 /// How [`PriorAction::confidence`] is computed. See [`crate::score::confidence`]
 /// and [`crate::score::wilson_lower_bound`] for the underlying formulas.
@@ -115,6 +143,29 @@ pub struct BuildConfig {
     /// Keep only observations carrying at least one of these tags.
     /// `None` means no tag filtering.
     pub tag_filter: Option<Vec<String>>,
+    /// Half-life, in days, for exponential time decay of `weight`. `None`
+    /// (the default) disables time decay entirely -- every observation
+    /// counts at its full `weight`, regardless of `observed_at_unix_seconds`.
+    pub time_decay_half_life_days: Option<f64>,
+    /// "Now", for computing an observation's age in days. Required (and
+    /// validated) whenever `time_decay_half_life_days` is `Some` -- there is
+    /// no implicit wall-clock fallback, so that a given `BuildConfig`
+    /// (and the fingerprint/output it produces) stays reproducible across
+    /// repeated runs rather than drifting with real time.
+    pub time_decay_reference_unix_seconds: Option<i64>,
+    /// What to do with an observation that has no `observed_at_unix_seconds`
+    /// when time decay is enabled. Inert when `time_decay_half_life_days`
+    /// is `None`.
+    pub missing_timestamp_policy: MissingTimestampPolicy,
+    /// Per-source reliability multiplier, e.g. `{"engine_v012": 1.0, "human":
+    /// 0.8}`. A `BTreeMap`, not a `HashMap`: `BuildConfig`'s fingerprint
+    /// hashes its serde_json encoding, and `HashMap`'s randomized iteration
+    /// order would make the same logical config fingerprint differently
+    /// across runs.
+    pub source_weights: std::collections::BTreeMap<String, f64>,
+    /// Multiplier used for an observation whose `source` is `None` or not a
+    /// key in `source_weights`.
+    pub default_source_weight: f64,
 }
 
 impl Default for BuildConfig {
@@ -134,6 +185,11 @@ impl Default for BuildConfig {
             confidence_z: DEFAULT_CONFIDENCE_Z,
             draw_value: DEFAULT_DRAW_VALUE,
             tag_filter: None,
+            time_decay_half_life_days: None,
+            time_decay_reference_unix_seconds: None,
+            missing_timestamp_policy: MissingTimestampPolicy::KeepBaseWeight,
+            source_weights: std::collections::BTreeMap::new(),
+            default_source_weight: DEFAULT_SOURCE_WEIGHT,
         }
     }
 }

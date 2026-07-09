@@ -58,6 +58,124 @@ fn build_command_reports_no_usable_data_as_exit_code_two() {
 }
 
 #[test]
+fn build_command_applies_time_decay() {
+    let input = temp_path("decay_input.jsonl");
+    let out_no_decay = temp_path("decay_out_no_decay.jsonl");
+    let out_decay = temp_path("decay_out_decay.jsonl");
+    std::fs::write(
+        &input,
+        "{\"sequence_id\":\"s1\",\"step\":0,\"state\":\"s\",\"action\":\"a\",\
+         \"outcome\":\"success\",\"observed_at_unix_seconds\":0}\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            input.to_str().unwrap(),
+            "--out",
+            out_no_decay.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            input.to_str().unwrap(),
+            "--out",
+            out_decay.to_str().unwrap(),
+            "--time-decay-half-life-days",
+            "10",
+            "--time-decay-reference-unix-seconds",
+            "864000", // 10 days after the epoch -- exactly one half-life
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        std::fs::read_to_string(&out_no_decay)
+            .unwrap()
+            .contains("\"weighted_count\":1.0")
+    );
+    assert!(
+        std::fs::read_to_string(&out_decay)
+            .unwrap()
+            .contains("\"weighted_count\":0.5")
+    );
+
+    let _ = std::fs::remove_file(&input);
+    let _ = std::fs::remove_file(&out_no_decay);
+    let _ = std::fs::remove_file(&out_decay);
+}
+
+#[test]
+fn build_command_applies_source_weights() {
+    let input = temp_path("source_weights_input.jsonl");
+    let out = temp_path("source_weights_out.jsonl");
+    std::fs::write(
+        &input,
+        "{\"sequence_id\":\"s1\",\"step\":0,\"state\":\"s\",\"action\":\"a\",\
+         \"outcome\":\"success\",\"source\":\"human\"}\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--source-weights",
+            "human=0.5",
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        std::fs::read_to_string(&out)
+            .unwrap()
+            .contains("\"weighted_count\":0.5")
+    );
+
+    let _ = std::fs::remove_file(&input);
+    let _ = std::fs::remove_file(&out);
+}
+
+#[test]
+fn build_command_rejects_half_life_without_reference() {
+    let input = temp_path("invalid_decay_input.jsonl");
+    let out = temp_path("invalid_decay_out.jsonl");
+    std::fs::write(
+        &input,
+        "{\"sequence_id\":\"s1\",\"step\":0,\"state\":\"s\",\"action\":\"a\",\"outcome\":\"success\"}\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--time-decay-half-life-days",
+            "10",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("time_decay_reference_unix_seconds"));
+
+    let _ = std::fs::remove_file(&input);
+}
+
+#[test]
 fn query_command_finds_known_state_and_returns_nothing_for_unseen() {
     let out = temp_path("query_book.jsonl");
 
