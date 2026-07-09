@@ -71,7 +71,7 @@ pub const DEFAULT_SOURCE_WEIGHT: f64 = 1.0;
 /// What to do with an observation that has no `observed_at_unix_seconds`
 /// when `BuildConfig::time_decay_half_life_days` is set. Inert when time
 /// decay is disabled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MissingTimestampPolicy {
     /// Score it at its un-decayed `weight`, as if it were current.
@@ -84,7 +84,7 @@ pub enum MissingTimestampPolicy {
 
 /// How [`PriorAction::confidence`] is computed. See [`crate::score::confidence`]
 /// and [`crate::score::wilson_lower_bound`] for the underlying formulas.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfidenceMode {
     /// `weighted_count / (weighted_count + confidence_k)` -- a sample-size
@@ -103,7 +103,12 @@ pub enum ConfidenceMode {
 }
 
 /// Tuning knobs for [`crate::build::build_prior_book`].
-#[derive(Debug, Clone, Serialize)]
+///
+/// `#[serde(default)]`: a config file missing fields (from an older or
+/// newer lineprior version, e.g. loaded via `--config`) fills them in from
+/// [`BuildConfig::default`] rather than failing to deserialize.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BuildConfig {
     pub min_count: u64,
     /// Minimum weighted count for an action to appear in the output.

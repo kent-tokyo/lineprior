@@ -2,10 +2,13 @@ pub mod build;
 pub mod eval;
 pub mod query;
 pub mod summary;
+pub mod tune;
 pub mod validate;
 
+use anyhow::Context;
 use clap::{Args, ValueEnum};
 use lineprior::BuildConfig;
+use std::path::Path;
 use std::process::ExitCode;
 
 /// Maps a lineprior parse/build error to its documented exit code:
@@ -56,6 +59,35 @@ impl From<MissingTimestampPolicyArg> for lineprior::MissingTimestampPolicy {
             MissingTimestampPolicyArg::Drop => lineprior::MissingTimestampPolicy::Drop,
         }
     }
+}
+
+/// CLI-facing mirror of [`lineprior::TuneObjective`] -- same clap-free-core
+/// rationale as `ConfidenceModeArg`.
+#[derive(Clone, Copy, ValueEnum)]
+pub enum ObjectiveArg {
+    Mrr,
+    Top1,
+    CoveredMrr,
+    Top1AtMinCoverage,
+}
+
+impl From<ObjectiveArg> for lineprior::TuneObjective {
+    fn from(arg: ObjectiveArg) -> Self {
+        match arg {
+            ObjectiveArg::Mrr => lineprior::TuneObjective::Mrr,
+            ObjectiveArg::Top1 => lineprior::TuneObjective::Top1,
+            ObjectiveArg::CoveredMrr => lineprior::TuneObjective::CoveredMrr,
+            ObjectiveArg::Top1AtMinCoverage => lineprior::TuneObjective::Top1AtMinCoverage,
+        }
+    }
+}
+
+/// Only one split strategy is implemented; the flag exists because the
+/// requested CLI surface names it explicitly, not for hypothetical future
+/// strategies. Shared by `eval` and `tune` (both split the same way).
+#[derive(Clone, ValueEnum)]
+pub(crate) enum SplitBy {
+    Sequence,
 }
 
 /// Parses one `name=weight` entry of `--source-weights`.
@@ -150,7 +182,61 @@ pub struct BuildConfigArgs {
     pub default_source_weight: f64,
 }
 
+/// Resolves the effective `BuildConfig` for `build`/`eval`: either loaded
+/// whole from `--config <path>` (as saved by `tune --save-best-config`), or
+/// built from the individual `BuildConfigArgs` flags -- never a merge of
+/// both, so a saved config is always reused exactly.
+pub fn resolve_build_config(
+    config_file: Option<&Path>,
+    config_args: BuildConfigArgs,
+) -> anyhow::Result<BuildConfig> {
+    match config_file {
+        Some(path) => {
+            if !config_args.is_all_default() {
+                anyhow::bail!(
+                    "--config cannot be combined with individual build-config flags \
+                     (e.g. --min-count, --confidence-mode) -- pass one or the other"
+                );
+            }
+            let file =
+                std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+            let config: BuildConfig = serde_json::from_reader(file)
+                .with_context(|| format!("parsing {} as BuildConfig JSON", path.display()))?;
+            Ok(config)
+        }
+        None => Ok(config_args.into_build_config()),
+    }
+}
+
 impl BuildConfigArgs {
+    /// Whether every field still holds its own CLI default. Used by `build`
+    /// and `eval` to detect "did the caller also pass an individual
+    /// build-config flag alongside `--config`" -- a plain comparison rather
+    /// than clap's `conflicts_with_all` across a `#[command(flatten)]`
+    /// boundary, since that's simpler and doesn't depend on how clap names
+    /// flattened arg ids internally.
+    pub fn is_all_default(&self) -> bool {
+        self.min_count == 1
+            && self.min_weighted_count == 0.0
+            && self.min_confidence == 0.0
+            && self.max_step.is_none()
+            && self.smoothing_alpha == 5.0
+            && self.max_actions_per_state.is_none()
+            && self.confidence_k == lineprior::DEFAULT_CONFIDENCE_K
+            && matches!(self.confidence_mode, ConfidenceModeArg::Heuristic)
+            && self.confidence_z == lineprior::DEFAULT_CONFIDENCE_Z
+            && self.tags.is_empty()
+            && self.draw_value == lineprior::DEFAULT_DRAW_VALUE
+            && self.time_decay_half_life_days.is_none()
+            && self.time_decay_reference_unix_seconds.is_none()
+            && matches!(
+                self.missing_timestamp_policy,
+                MissingTimestampPolicyArg::KeepBaseWeight
+            )
+            && self.source_weights.is_empty()
+            && self.default_source_weight == lineprior::DEFAULT_SOURCE_WEIGHT
+    }
+
     pub fn into_build_config(self) -> BuildConfig {
         BuildConfig {
             min_count: self.min_count,

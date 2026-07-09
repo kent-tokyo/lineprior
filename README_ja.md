@@ -27,7 +27,7 @@ lineprior build observations.jsonl \
   --smoothing-alpha 5.0
 ```
 
-主なフラグ: `--max-step`(指定した step を超える観測を除外)、`--max-actions-per-state`(状態ごとに上位 N 件のみ保持)、`--tags`(指定したタグのいずれかを持つ観測のみを対象、カンマ区切り)、`--confidence-k`(サンプル数に対する confidence の伸び方を調整)、`--confidence-mode`(`heuristic`(デフォルト)、`wilson-lower-bound`、`hybrid` — 詳細は下記「Confidence モード」)、`--confidence-z`(Wilson lower bound の z 値、デフォルト `1.96`。`heuristic` では無視される)、`--min-weighted-count` / `--min-confidence`(生の `--min-count` の代わりに、weighted count や confidence 自体でフィルタリング)、`--draw-value`(`draw` outcome に与える成功クレジット — デフォルト `0.5`。draw は敗北ではなく、対戦ゲームにおける正当な部分的結果であるため)、`--time-decay-half-life-days` / `--time-decay-reference-unix-seconds` / `--missing-timestamp-policy`(経過時間に基づく重みの減衰 — 詳細は下記「Time decay と source reliability」)、`--source-weights` / `--default-source-weight`(source ごとの信頼度倍率、同セクション)、`--strict`(不正なレコードを警告付きでスキップせず、最初の1件で失敗させる)。
+主なフラグ: `--max-step`(指定した step を超える観測を除外)、`--max-actions-per-state`(状態ごとに上位 N 件のみ保持)、`--tags`(指定したタグのいずれかを持つ観測のみを対象、カンマ区切り)、`--confidence-k`(サンプル数に対する confidence の伸び方を調整)、`--confidence-mode`(`heuristic`(デフォルト)、`wilson-lower-bound`、`hybrid` — 詳細は下記「Confidence モード」)、`--confidence-z`(Wilson lower bound の z 値、デフォルト `1.96`。`heuristic` では無視される)、`--min-weighted-count` / `--min-confidence`(生の `--min-count` の代わりに、weighted count や confidence 自体でフィルタリング)、`--draw-value`(`draw` outcome に与える成功クレジット — デフォルト `0.5`。draw は敗北ではなく、対戦ゲームにおける正当な部分的結果であるため)、`--time-decay-half-life-days` / `--time-decay-reference-unix-seconds` / `--missing-timestamp-policy`(経過時間に基づく重みの減衰 — 詳細は下記「Time decay と source reliability」)、`--source-weights` / `--default-source-weight`(source ごとの信頼度倍率、同セクション)、`--config <path.json>`(個々のフラグの代わりに `BuildConfig` 全体をファイルから読み込む。例えば `lineprior tune --save-best-config` が保存したファイル — 詳細は下記「Tuning」。上記のいずれかのフラグと組み合わせるとエラーになる)、`--strict`(不正なレコードを警告付きでスキップせず、最初の1件で失敗させる)。
 
 `--min-confidence` の意味は `--confidence-mode` に依存します: `heuristic` では出典(outcome)を見ないサンプルサイズだけの下限ですが、`wilson-lower-bound`/`hybrid` では成功率を反映するようになるため、これまで閾値を通過していた「件数は多いがほとんど失敗している」行動が弾かれるようになることがあります — `--confidence-mode` の切り替えは、既存の `--min-confidence` 閾値に対して単なる追加ではなく実際の挙動変化です。
 
@@ -242,6 +242,68 @@ lineprior eval observations.jsonl \
   と同じです。
 
 どちらも明示的にリクエストしない限り省略され(空配列)、既存の `eval` の使い方には影響しません。
+
+## Tuning: BuildConfig を自動的に選ぶ
+
+`eval` は一度に1つの config を評価しますが、`tune` は複数の config をグリッドサーチし、すべての
+候補に*同じ*決定的な train/test 分割を使うことで直接比較可能な形で最良の config を選びます:
+
+```bash
+lineprior tune observations.jsonl \
+  --split-by sequence --train-ratio 0.8 \
+  --param confidence-mode=heuristic,wilson-lower-bound,hybrid \
+  --param min-confidence=0.0,0.3,0.5,0.7 \
+  --param smoothing-alpha=1.0,5.0,10.0 \
+  --param time-decay-half-life-days=none,30,90 \
+  --time-decay-reference-unix-seconds 1783540000 \
+  --objective covered-mrr --min-covered-fraction 0.4 \
+  --out tune.json --save-best-config best_config.json
+```
+
+`--param key=v1,v2,...` は1つの `BuildConfig` フィールドを掃引します(複数フィールドを掃引する場合
+は `--param` を繰り返してください)。`--param` で指定されなかったフィールドは、すべての候補で
+`BuildConfig::default()` のままです。対応するキー: `confidence-mode`、`min-confidence`、
+`smoothing-alpha`、`confidence-k`、`confidence-z`、`min-count`、`min-weighted-count`、
+`draw-value`、`time-decay-half-life-days`(`none` を受け付けます)、`default-source-weight`。
+`--time-decay-reference-unix-seconds` はすべての候補に適用される単一の値です(掃引対象にはできませ
+ん)— 掃引した `time-decay-half-life-days` の値のいずれかが `none` でない場合は必須です。これは
+`build`/`eval` と同じ再現性のルールです。
+
+`--objective`(デフォルト `covered-mrr`)が候補のランク付けに使われます:
+
+| objective | 意味 |
+|---|---|
+| `mrr` | `mean_reciprocal_rank`。カバーされたテスト観測のみが対象 |
+| `top1` | `top1_hit_rate`。カバーされたテスト観測のみが対象 |
+| `covered-mrr`(デフォルト) | `covered_fraction * mean_reciprocal_rank` — 全テスト観測にわたって平均した MRR で、カバーされなかった観測は `0` として寄与する |
+| `top1-at-min-coverage` | `top1` と同じだが、`--min-covered-fraction` も指定されている必要がある |
+
+デフォルトが `covered-mrr` である理由: `mrr` だけを最大化すると、確信度が高いときしか予測しない
+(coverage を極端に犠牲にする)設定を選びがちです。逆に coverage だけを見ると、雑な prior を許容
+してしまいます。`covered-mrr` は両方にペナルティを課します。
+
+`--min-covered-fraction` / `--max-fallback-rate` / `--min-top1-hit-rate` は、候補が `best` として
+選ばれることを妨げますが、JSON レポートの `all_results` には(`meets_constraints: false` として)
+残ります — 何が、なぜ除外されたのかが黙って消えるのではなく確認できます。
+
+JSON レポートの `pareto_front` は `(mrr, covered_fraction)` に関する非劣解集合です — `--objective`
+とは無関係に、何らかの MRR/coverage のトレードオフにおいて最良となる候補が並びます。単一の `best`
+を信用する代わりに、自分でトレードオフを見て選びたい場合に使えます。
+
+`--save-best-config best_config.json` は勝った候補の `BuildConfig` を JSON として保存します。
+`build` と `eval` はどちらも `--config best_config.json` でそれを読み込めます(個々の
+build-config フラグ、例えば `--min-count` と組み合わせるとエラーになります — 上書きではなく
+config 全体の置き換えのため)。これにより、`tune` で一度選んだ config を手で再入力せずそのまま
+再利用できます:
+
+```bash
+lineprior build observations.jsonl --out prior.jsonl --config best_config.json
+```
+
+`tune` は `lineprior` の他の部分とまったく同様にドメインに依存しません(`state`/`action`/
+`sequence_id`/outcome のデータしか見ません)。また、`lineprior` の本質を変えるものでもありません
+— **oracle ではなく prior** です。`tune` は、人手で `eval` を掃引していた作業を自動化するだけであ
+り、結果として得られた prior を呼び出し側が行動前に検証すべきという点を何も変えません。
 
 ## 学術的な位置づけ
 

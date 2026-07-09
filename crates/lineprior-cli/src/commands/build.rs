@@ -16,6 +16,12 @@ pub struct BuildArgs {
     #[arg(long)]
     out: PathBuf,
 
+    /// Load BuildConfig from this JSON file (e.g. from `tune
+    /// --save-best-config`) instead of the individual flags below. Errors
+    /// if combined with any of them.
+    #[arg(long = "config")]
+    config_file: Option<PathBuf>,
+
     #[command(flatten)]
     config: BuildConfigArgs,
 
@@ -33,7 +39,7 @@ pub fn run(args: BuildArgs) -> Result<ExitCode> {
         }
     };
 
-    let config = args.config.into_build_config();
+    let config = super::resolve_build_config(args.config_file.as_deref(), args.config)?;
 
     // Streams straight from the file into the prior book -- memory stays
     // bounded by unique (state, action) pairs, not the number of lines

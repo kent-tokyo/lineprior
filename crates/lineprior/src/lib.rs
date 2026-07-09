@@ -16,6 +16,7 @@ mod model;
 mod query;
 mod report;
 mod score;
+mod tune;
 
 pub use build::{BuildStats, build_prior_book};
 pub use error::{Error, Result, Warning};
@@ -33,3 +34,8 @@ pub use query::{
     save_prior_book_with_config,
 };
 pub use report::{StateEntropy, SummaryReport, state_entropy, summarize};
+pub use tune::{
+    ParetoEntry, TuneCandidateResult, TuneConstraints, TuneMetrics, TuneObjective, TuneOutput,
+    TuneParam, build_candidate_result, covered_fraction, expand_grid, meets_constraints,
+    objective_value, pareto_front, select_best,
+};

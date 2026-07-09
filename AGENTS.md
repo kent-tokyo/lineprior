@@ -521,6 +521,24 @@ lineprior summary prior.jsonl
 lineprior validate observations.jsonl
 ```
 
+### Tune a BuildConfig automatically
+
+```bash
+lineprior tune observations.jsonl \
+  --param confidence-mode=heuristic,wilson-lower-bound,hybrid \
+  --param min-confidence=0.0,0.3,0.5,0.7 \
+  --objective covered-mrr \
+  --out tune.json --save-best-config best_config.json
+```
+
+Grid-searches `BuildConfig` candidates via repeated `--param key=v1,v2,...`, evaluating each with
+`eval`'s existing logic (same deterministic split for every candidate), and reports the best one
+by `--objective` (`mrr`/`top1`/`covered-mrr`/`top1-at-min-coverage`, default `covered-mrr`) plus a
+`pareto_front` over `(mrr, covered_fraction)`. `--save-best-config` writes the winner as JSON;
+`build`/`eval --config <path>` load it back exactly (mutually exclusive with the individual
+build-config flags). See `## Confidence` and `## Time Decay and Source Reliability` for what's
+being swept, and the README's "Tuning" section for the full flag reference.
+
 ### Example with step filtering
 
 ```bash
@@ -832,6 +850,7 @@ CSA games
 5. ~~Confidence intervals.~~ Done -- see `## Confidence` (`ConfidenceMode::WilsonLowerBound`/`Hybrid`).
 6. ~~Time-decay weighting.~~ Done -- see `## Time Decay and Source Reliability` (`BuildConfig::time_decay_half_life_days`). Per-observation source-reliability weighting (`source_weights`) shipped alongside it; merging separately-built prior books by source is still open.
 7. Multi-source merging.
+8. ~~Automatic BuildConfig selection.~~ Done -- `lineprior tune` grid-searches candidates via `eval`, see `## CLI`'s "Tune a BuildConfig automatically". Wasn't originally on this list; added once the number of tunable knobs (confidence modes, decay, source reliability) made hand-sweeping `eval` impractical.
 
 ### Phase 4: Integrations
 

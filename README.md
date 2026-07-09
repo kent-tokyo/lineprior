@@ -27,7 +27,7 @@ lineprior build observations.jsonl \
   --smoothing-alpha 5.0
 ```
 
-Useful flags: `--max-step` (drop observations past a given step), `--max-actions-per-state` (keep only the top N candidates), `--tags` (keep only observations carrying at least one of the given tags, comma-separated), `--confidence-k` (tune how fast confidence grows with sample size), `--confidence-mode` (`heuristic` (default), `wilson-lower-bound`, or `hybrid` — see "Confidence modes" below), `--confidence-z` (z-score for the Wilson lower bound, default `1.96`, ignored under `heuristic`), `--min-weighted-count` / `--min-confidence` (filter on the weighted count or confidence directly, instead of just the raw `--min-count`), `--draw-value` (success credit for a `draw` outcome — default `0.5`, since a draw is a genuine partial outcome in adversarial games, not a loss), `--time-decay-half-life-days` / `--time-decay-reference-unix-seconds` / `--missing-timestamp-policy` (age-based weight decay — see "Time decay and source reliability" below), `--source-weights` / `--default-source-weight` (per-source reliability multipliers, same section), `--strict` (fail on the first invalid record instead of skipping it with a warning).
+Useful flags: `--max-step` (drop observations past a given step), `--max-actions-per-state` (keep only the top N candidates), `--tags` (keep only observations carrying at least one of the given tags, comma-separated), `--confidence-k` (tune how fast confidence grows with sample size), `--confidence-mode` (`heuristic` (default), `wilson-lower-bound`, or `hybrid` — see "Confidence modes" below), `--confidence-z` (z-score for the Wilson lower bound, default `1.96`, ignored under `heuristic`), `--min-weighted-count` / `--min-confidence` (filter on the weighted count or confidence directly, instead of just the raw `--min-count`), `--draw-value` (success credit for a `draw` outcome — default `0.5`, since a draw is a genuine partial outcome in adversarial games, not a loss), `--time-decay-half-life-days` / `--time-decay-reference-unix-seconds` / `--missing-timestamp-policy` (age-based weight decay — see "Time decay and source reliability" below), `--source-weights` / `--default-source-weight` (per-source reliability multipliers, same section), `--config <path.json>` (load the whole `BuildConfig` from a file instead of individual flags, e.g. one saved by `lineprior tune --save-best-config` — see "Tuning" below; errors if combined with any flag above), `--strict` (fail on the first invalid record instead of skipping it with a warning).
 
 `--min-confidence`'s meaning depends on `--confidence-mode`: under `heuristic` it's a pure sample-size floor, blind to outcome. Under `wilson-lower-bound`/`hybrid` it's success-rate-aware, so a high-count but mostly-failing action that used to pass the filter can now be dropped by it — switching `--confidence-mode` on an existing `--min-confidence` threshold is a real behavior change, not just an additive one.
 
@@ -249,6 +249,66 @@ lineprior eval observations.jsonl \
   headline metrics already use.
 
 Both are omitted (empty arrays) unless explicitly requested, so existing `eval` usage is unaffected.
+
+## Tuning: choosing a BuildConfig automatically
+
+`eval` scores one config at a time; `tune` grid-searches many and picks the best one, using the
+*same* deterministic train/test split for every candidate so they're directly comparable:
+
+```bash
+lineprior tune observations.jsonl \
+  --split-by sequence --train-ratio 0.8 \
+  --param confidence-mode=heuristic,wilson-lower-bound,hybrid \
+  --param min-confidence=0.0,0.3,0.5,0.7 \
+  --param smoothing-alpha=1.0,5.0,10.0 \
+  --param time-decay-half-life-days=none,30,90 \
+  --time-decay-reference-unix-seconds 1783540000 \
+  --objective covered-mrr --min-covered-fraction 0.4 \
+  --out tune.json --save-best-config best_config.json
+```
+
+Each `--param key=v1,v2,...` sweeps one `BuildConfig` field (repeat `--param` for more than one);
+any field never named in a `--param` stays at its `BuildConfig::default()` for every candidate.
+Supported keys: `confidence-mode`, `min-confidence`, `smoothing-alpha`, `confidence-k`,
+`confidence-z`, `min-count`, `min-weighted-count`, `draw-value`, `time-decay-half-life-days`
+(accepts `none`), `default-source-weight`. `--time-decay-reference-unix-seconds` is a single value
+applied to every candidate (never swept) — required whenever a swept `time-decay-half-life-days`
+value isn't `none`, same reproducibility rule `build`/`eval` already use.
+
+`--objective` (default `covered-mrr`) is what candidates are ranked by:
+
+| objective | meaning |
+|---|---|
+| `mrr` | `mean_reciprocal_rank`, among covered test observations only |
+| `top1` | `top1_hit_rate`, among covered test observations only |
+| `covered-mrr` (default) | `covered_fraction * mean_reciprocal_rank` — MRR averaged across *all* test observations, an uncovered one contributing `0` |
+| `top1-at-min-coverage` | same as `top1`, but requires `--min-covered-fraction` also be set |
+
+`covered-mrr` is the default because optimizing `mrr` alone tends to pick configs that abstain
+(report no candidate) except when very confident, while optimizing coverage alone tolerates a
+sloppy prior — `covered-mrr` penalizes both.
+
+`--min-covered-fraction` / `--max-fallback-rate` / `--min-top1-hit-rate` reject a candidate from
+being `best`, but it still shows up in the JSON report's `all_results` (with `meets_constraints:
+false`) so you can see what got excluded and why, rather than it silently vanishing.
+
+The JSON report's `pareto_front` is the non-dominated set over `(mrr, covered_fraction)` — every
+config on it is the best *some* MRR/coverage tradeoff, independent of `--objective`, in case you'd
+rather eyeball the tradeoff yourself than trust the single `best` pick.
+
+`--save-best-config best_config.json` writes the winning candidate's `BuildConfig` as JSON; `build`
+and `eval` both accept it back via `--config best_config.json` (errors if combined with any
+individual build-config flag like `--min-count`, since it's a whole-config replacement, not an
+overlay) — so a config chosen once by `tune` is reused exactly, not re-typed by hand:
+
+```bash
+lineprior build observations.jsonl --out prior.jsonl --config best_config.json
+```
+
+`tune` is exactly as domain-agnostic as the rest of `lineprior` (it only ever sees `state`/
+`action`/`sequence_id`/outcome data) and doesn't change what `lineprior` fundamentally is — a
+**prior, not an oracle**. It automates what you'd otherwise do by hand-sweeping `eval`; it doesn't
+make the resulting prior any less something the caller should verify before acting on.
 
 ## Academic positioning
 

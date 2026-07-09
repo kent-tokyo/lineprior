@@ -1,18 +1,10 @@
-use super::BuildConfigArgs;
+use super::{BuildConfigArgs, SplitBy};
 use anyhow::{Context, Result};
-use clap::{Args, ValueEnum};
+use clap::Args;
 use lineprior::{EvalConfig, evaluate};
 use std::fs::File;
 use std::path::PathBuf;
 use std::process::ExitCode;
-
-/// Only one split strategy is implemented; the flag exists because the
-/// requested CLI surface names it explicitly, not for hypothetical future
-/// strategies.
-#[derive(Clone, ValueEnum)]
-enum SplitBy {
-    Sequence,
-}
 
 #[derive(Args)]
 pub struct EvalArgs {
@@ -47,6 +39,12 @@ pub struct EvalArgs {
     #[arg(long)]
     out: Option<PathBuf>,
 
+    /// Load BuildConfig from this JSON file (e.g. from `tune
+    /// --save-best-config`) instead of the individual flags below. Errors
+    /// if combined with any of them.
+    #[arg(long = "config")]
+    config_file: Option<PathBuf>,
+
     #[command(flatten)]
     config: BuildConfigArgs,
 
@@ -76,7 +74,7 @@ pub fn run(args: EvalArgs) -> Result<ExitCode> {
         }
     };
 
-    let build_config = args.config.into_build_config();
+    let build_config = super::resolve_build_config(args.config_file.as_deref(), args.config)?;
     let eval_config = EvalConfig {
         train_ratio: args.train_ratio,
         top_k: args.top_k,

@@ -3,7 +3,7 @@
 mod commands;
 
 use clap::{Parser, Subcommand};
-use commands::{build, eval, query, summary, validate};
+use commands::{build, eval, query, summary, tune, validate};
 use std::process::ExitCode;
 
 #[derive(Parser)]
@@ -27,6 +27,8 @@ enum Commands {
     Query(query::QueryArgs),
     /// Summarize a prior book's coverage and confidence.
     Summary(summary::SummaryArgs),
+    /// Grid-search BuildConfig candidates and pick the best by held-out eval.
+    Tune(tune::TuneArgs),
     /// Validate a JSONL observation log without building a prior book.
     Validate(validate::ValidateArgs),
 }
@@ -39,6 +41,7 @@ fn main() -> ExitCode {
         Commands::Eval(args) => eval::run(args),
         Commands::Query(args) => query::run(args),
         Commands::Summary(args) => summary::run(args),
+        Commands::Tune(args) => tune::run(args),
         Commands::Validate(args) => validate::run(args),
     };
 

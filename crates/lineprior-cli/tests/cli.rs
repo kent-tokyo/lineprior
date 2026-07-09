@@ -315,3 +315,141 @@ fn eval_command_reports_calibration_and_threshold_sweep_when_requested() {
 
     let _ = std::fs::remove_file(&input);
 }
+
+#[test]
+fn tune_command_runs_a_grid_and_reports_consistent_counts() {
+    let input = temp_path("tune_grid_input.jsonl");
+    write_eval_fixture(&input);
+
+    let output = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "tune",
+            input.to_str().unwrap(),
+            "--param",
+            "min-confidence=0.0,0.3,0.7",
+            "--param",
+            "smoothing-alpha=1.0,5.0",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let evaluated = report["evaluated_config_count"].as_u64().unwrap();
+    let skipped = report["skipped_config_count"].as_u64().unwrap();
+    assert_eq!(evaluated + skipped, 6); // 3 min-confidence values * 2 smoothing-alpha values
+    assert_eq!(
+        report["all_results"].as_array().unwrap().len(),
+        evaluated as usize
+    );
+    assert!(report["best"].is_object());
+
+    let _ = std::fs::remove_file(&input);
+}
+
+#[test]
+fn tune_command_reports_null_best_when_no_candidate_meets_constraints() {
+    let input = temp_path("tune_unsatisfiable_input.jsonl");
+    write_eval_fixture(&input);
+
+    let output = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "tune",
+            input.to_str().unwrap(),
+            "--param",
+            "min-confidence=0.0,0.5",
+            "--min-covered-fraction",
+            "1.5", // impossible to satisfy -- coverage can never exceed 1.0
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert!(report["best"].is_null());
+    assert!(!report["all_results"].as_array().unwrap().is_empty());
+    assert!(report["warnings"].as_array().unwrap().iter().any(|w| {
+        w.as_str()
+            .unwrap()
+            .contains("no candidate configuration satisfied")
+    }));
+
+    let _ = std::fs::remove_file(&input);
+}
+
+#[test]
+fn tune_save_best_config_can_be_loaded_by_build_config_flag() {
+    let input = temp_path("tune_save_best_input.jsonl");
+    let best_config = temp_path("tune_best_config.json");
+    let out = temp_path("tune_save_best_build_out.jsonl");
+    write_eval_fixture(&input);
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "tune",
+            input.to_str().unwrap(),
+            "--param",
+            "min-confidence=0.0,0.3",
+            "--save-best-config",
+            best_config.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    assert!(best_config.exists());
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            fixture("simple_success.jsonl").to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--config",
+            best_config.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    assert!(out.exists());
+
+    let _ = std::fs::remove_file(&input);
+    let _ = std::fs::remove_file(&best_config);
+    let _ = std::fs::remove_file(&out);
+}
+
+#[test]
+fn build_command_rejects_config_combined_with_individual_flag() {
+    let out = temp_path("config_conflict_out.jsonl");
+    // An empty JSON object deserializes to BuildConfig::default() via
+    // #[serde(default)] -- a minimal stand-in for a `tune`-saved config.
+    let config_path = temp_path("config_conflict_config.json");
+    std::fs::write(&config_path, "{}").unwrap();
+
+    let output = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            fixture("simple_success.jsonl").to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--config",
+            config_path.to_str().unwrap(),
+            "--min-count",
+            "5",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("--config cannot be combined"));
+
+    let _ = std::fs::remove_file(&config_path);
+}
