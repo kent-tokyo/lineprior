@@ -1,5 +1,10 @@
 # lineprior
 
+[![crates.io](https://img.shields.io/crates/v/lineprior.svg)](https://crates.io/crates/lineprior)
+[![docs.rs](https://img.shields.io/docsrs/lineprior)](https://docs.rs/lineprior)
+[![CI](https://github.com/kent-tokyo/lineprior/actions/workflows/ci.yml/badge.svg)](https://github.com/kent-tokyo/lineprior/actions/workflows/ci.yml)
+[![license](https://img.shields.io/crates/l/lineprior.svg)](https://github.com/kent-tokyo/lineprior/blob/main/LICENSE-MIT)
+
 [日本語](./README_ja.md) / English
 
 `lineprior` is a Rust library and CLI for building domain-agnostic **action priors** from historical action sequences. Given a state, it answers:
@@ -321,5 +326,3 @@ cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 ```
-
-See [`AGENTS.md`](./AGENTS.md) for the full design spec and roadmap.

@@ -1,5 +1,10 @@
 # lineprior
 
+[![crates.io](https://img.shields.io/crates/v/lineprior.svg)](https://crates.io/crates/lineprior)
+[![docs.rs](https://img.shields.io/docsrs/lineprior)](https://docs.rs/lineprior)
+[![CI](https://github.com/kent-tokyo/lineprior/actions/workflows/ci.yml/badge.svg)](https://github.com/kent-tokyo/lineprior/actions/workflows/ci.yml)
+[![license](https://img.shields.io/crates/l/lineprior.svg)](https://github.com/kent-tokyo/lineprior/blob/main/LICENSE-MIT)
+
 日本語 / [English](./README.md)
 
 `lineprior` は、過去の行動系列からドメインに依存しない **行動事前分布(action prior)** を構築する Rust ライブラリおよび CLI です。ある状態が与えられたとき、次の問いに答えます。
