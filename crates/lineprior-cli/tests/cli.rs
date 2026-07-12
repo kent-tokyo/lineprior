@@ -354,6 +354,39 @@ fn tune_command_runs_a_grid_and_reports_consistent_counts() {
 }
 
 #[test]
+fn tune_command_success_weighted_objective_runs_and_reports_the_metric() {
+    let input = temp_path("tune_success_weighted_input.jsonl");
+    write_eval_fixture(&input);
+
+    let output = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "tune",
+            input.to_str().unwrap(),
+            "--param",
+            "min-count=1,2",
+            "--objective",
+            "success-weighted-mrr",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(report["objective"], "success_weighted_mrr");
+    let first = &report["all_results"].as_array().unwrap()[0];
+    assert!(first["metrics"]["success_weighted_mean_reciprocal_rank"].is_number());
+    assert!(first["metrics"]["success_weighted_top1_hit_rate"].is_number());
+
+    let _ = std::fs::remove_file(&input);
+}
+
+#[test]
 fn tune_command_reports_null_best_when_no_candidate_meets_constraints() {
     let input = temp_path("tune_unsatisfiable_input.jsonl");
     write_eval_fixture(&input);
@@ -452,4 +485,155 @@ fn build_command_rejects_config_combined_with_individual_flag() {
     assert!(stderr.contains("--config cannot be combined"));
 
     let _ = std::fs::remove_file(&config_path);
+}
+
+/// Two-step sequences: state "s0" always precedes state "s", and step 0's
+/// action ("x" or "y") determines step 1's action ("A" or "B") -- order-0
+/// alone can't tell A/B apart at state "s", but order-1 context can.
+fn write_context_fixture(path: &std::path::Path, num_sequences: usize) {
+    let mut jsonl = String::new();
+    for i in 0..num_sequences {
+        let (first, second) = if i % 2 == 0 { ("x", "A") } else { ("y", "B") };
+        jsonl.push_str(&format!(
+            "{{\"sequence_id\":\"seq-{i}\",\"step\":0,\"state\":\"s0\",\"action\":\"{first}\",\"outcome\":\"success\"}}\n"
+        ));
+        jsonl.push_str(&format!(
+            "{{\"sequence_id\":\"seq-{i}\",\"step\":1,\"state\":\"s\",\"action\":\"{second}\",\"outcome\":\"success\"}}\n"
+        ));
+    }
+    std::fs::write(path, jsonl).unwrap();
+}
+
+#[test]
+fn build_command_with_context_order_produces_context_bearing_lines() {
+    let input = temp_path("context_build_input.jsonl");
+    let out = temp_path("context_build_output.jsonl");
+    write_context_fixture(&input, 4);
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--context-order",
+            "1",
+        ])
+        .assert()
+        .success();
+
+    let contents = std::fs::read_to_string(&out).unwrap();
+    assert!(
+        contents.contains("\"context\":[\"x\"]") || contents.contains("\"context\":[\"y\"]"),
+        "expected a context-bearing line in: {contents}"
+    );
+
+    let _ = std::fs::remove_file(&input);
+    let _ = std::fs::remove_file(&out);
+}
+
+#[test]
+fn query_command_with_recent_actions_returns_matched_order() {
+    let input = temp_path("context_query_input.jsonl");
+    let out = temp_path("context_query_book.jsonl");
+    write_context_fixture(&input, 4);
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--context-order",
+            "1",
+        ])
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "query",
+            out.to_str().unwrap(),
+            "--state",
+            "s",
+            "--recent-actions",
+            "x",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let result: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(result["matched_order"], 1);
+    assert_eq!(result["candidates"][0]["action"], "A");
+
+    let _ = std::fs::remove_file(&input);
+    let _ = std::fs::remove_file(&out);
+}
+
+#[test]
+fn eval_command_with_context_order_reports_context_aware_fields() {
+    let input = temp_path("context_eval_input.jsonl");
+    write_context_fixture(&input, 60);
+
+    let output = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args(["eval", input.to_str().unwrap(), "--context-order", "1"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert!(report["context_top1_hit_rate"].is_number());
+    assert!(report["context_mean_reciprocal_rank"].is_number());
+    assert!(
+        !report["hit_rate_by_matched_order"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let _ = std::fs::remove_file(&input);
+}
+
+#[test]
+fn build_command_rejects_unsorted_input_when_context_order_is_set() {
+    let input = temp_path("context_unsorted_input.jsonl");
+    // Same sequence_id, step goes 1 then 0 -- not sorted.
+    std::fs::write(
+        &input,
+        concat!(
+            "{\"sequence_id\":\"g1\",\"step\":1,\"state\":\"s\",\"action\":\"a\",\"outcome\":\"success\"}\n",
+            "{\"sequence_id\":\"g1\",\"step\":0,\"state\":\"s\",\"action\":\"b\",\"outcome\":\"success\"}\n",
+        ),
+    )
+    .unwrap();
+    let out = temp_path("context_unsorted_output.jsonl");
+
+    let output = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--context-order",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(3));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("sorted"), "stderr: {stderr}");
+
+    let _ = std::fs::remove_file(&input);
 }

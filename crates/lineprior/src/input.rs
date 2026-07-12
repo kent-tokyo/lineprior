@@ -170,7 +170,11 @@ pub fn build_prior_book_from_reader(
         let line_no = index + 1;
 
         match parse_line(&line, line_no) {
-            Ok(observation) => acc.observe(&observation),
+            // A sequence-ordering violation (only possible when
+            // context_order > 0) is always a hard error, independent of
+            // `strict`: it's a stream-wide structural precondition, not a
+            // single bad record `strict`/non-strict already governs.
+            Ok(observation) => acc.observe(&observation)?,
             Err(err) if strict => return Err(err),
             Err(err) => warnings.push(Warning {
                 line: line_no,

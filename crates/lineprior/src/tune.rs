@@ -152,6 +152,13 @@ pub enum TuneObjective {
     /// coverage floor lives in one place (constraints) instead of being
     /// duplicated inside the objective itself.
     Top1AtMinCoverage,
+    /// `EvalReport::success_weighted_mean_reciprocal_rank` -- like `Mrr`, but
+    /// a failed or unrecorded-outcome test observation contributes nothing,
+    /// so this favors configs that agree with actions that actually worked.
+    SuccessWeightedMrr,
+    /// `EvalReport::success_weighted_top1_hit_rate`, the same idea applied
+    /// to `Top1`.
+    SuccessWeightedTop1,
 }
 
 /// Candidates failing a constraint stay in [`TuneOutput::all_results`] (so
@@ -189,6 +196,10 @@ pub fn objective_value(objective: TuneObjective, report: &EvalReport) -> f64 {
         TuneObjective::CoveredMrr => {
             covered_fraction(report) * report.mean_reciprocal_rank.unwrap_or(0.0)
         }
+        TuneObjective::SuccessWeightedMrr => {
+            report.success_weighted_mean_reciprocal_rank.unwrap_or(0.0)
+        }
+        TuneObjective::SuccessWeightedTop1 => report.success_weighted_top1_hit_rate.unwrap_or(0.0),
     }
 }
 
@@ -222,6 +233,16 @@ pub struct TuneMetrics {
     pub mean_reciprocal_rank: Option<f64>,
     pub covered_fraction: f64,
     pub fallback_rate: Option<f64>,
+    pub success_weighted_top1_hit_rate: Option<f64>,
+    pub success_weighted_mean_reciprocal_rank: Option<f64>,
+    pub failure_agreement_top1_hit_rate: Option<f64>,
+    /// `None` unless the swept `BuildConfig::context_order` was nonzero for
+    /// this candidate -- lets a `--param context-order=0,1,2,3` sweep show
+    /// the lift context provides per candidate directly, without a new
+    /// objective: every existing objective already reads
+    /// `top1_hit_rate`/`mean_reciprocal_rank`, which stay order-0.
+    pub context_top1_hit_rate: Option<f64>,
+    pub context_mean_reciprocal_rank: Option<f64>,
 }
 
 /// One evaluated grid candidate's outcome. Note the field is
@@ -255,6 +276,11 @@ pub fn build_candidate_result(
             mean_reciprocal_rank: report.mean_reciprocal_rank,
             covered_fraction: covered_fraction(report),
             fallback_rate: report.fallback_rate,
+            success_weighted_top1_hit_rate: report.success_weighted_top1_hit_rate,
+            success_weighted_mean_reciprocal_rank: report.success_weighted_mean_reciprocal_rank,
+            failure_agreement_top1_hit_rate: report.failure_agreement_top1_hit_rate,
+            context_top1_hit_rate: report.context_top1_hit_rate,
+            context_mean_reciprocal_rank: report.context_mean_reciprocal_rank,
         },
         build_config,
     }
@@ -388,6 +414,12 @@ mod tests {
             avg_confidence_on_hit: None,
             avg_confidence_on_miss: None,
             score_lift: None,
+            success_weighted_top1_hit_rate: top1_hit_rate,
+            success_weighted_mean_reciprocal_rank: mean_reciprocal_rank,
+            failure_agreement_top1_hit_rate: None,
+            context_top1_hit_rate: None,
+            context_mean_reciprocal_rank: None,
+            hit_rate_by_matched_order: Vec::new(),
             confidence_calibration: Vec::new(),
             threshold_sweep: Vec::new(),
         }
@@ -402,6 +434,11 @@ mod tests {
                 mean_reciprocal_rank: Some(objective_value),
                 covered_fraction: objective_value,
                 fallback_rate: Some(1.0 - objective_value),
+                success_weighted_top1_hit_rate: Some(objective_value),
+                success_weighted_mean_reciprocal_rank: Some(objective_value),
+                failure_agreement_top1_hit_rate: None,
+                context_top1_hit_rate: None,
+                context_mean_reciprocal_rank: None,
             },
             objective_value,
             meets_constraints,
@@ -462,6 +499,14 @@ mod tests {
         assert_eq!(objective_value(TuneObjective::Mrr, &empty), 0.0);
         assert_eq!(objective_value(TuneObjective::Top1, &empty), 0.0);
         assert_eq!(objective_value(TuneObjective::CoveredMrr, &empty), 0.0);
+        assert_eq!(
+            objective_value(TuneObjective::SuccessWeightedMrr, &empty),
+            0.0
+        );
+        assert_eq!(
+            objective_value(TuneObjective::SuccessWeightedTop1, &empty),
+            0.0
+        );
     }
 
     #[test]
@@ -469,6 +514,31 @@ mod tests {
         let r = report(Some(0.5), Some(0.6), Some(0.3)); // covered_fraction = 0.7
         let got = objective_value(TuneObjective::CoveredMrr, &r);
         assert!((got - 0.7 * 0.6).abs() < 1e-9);
+    }
+
+    #[test]
+    fn success_weighted_objectives_read_the_success_weighted_report_fields() {
+        let r = report(Some(0.5), Some(0.6), Some(0.3));
+        assert_eq!(objective_value(TuneObjective::SuccessWeightedTop1, &r), 0.5);
+        assert_eq!(objective_value(TuneObjective::SuccessWeightedMrr, &r), 0.6);
+    }
+
+    #[test]
+    fn build_candidate_result_surfaces_success_weighted_metrics() {
+        let r = report(Some(0.5), Some(0.6), Some(0.3));
+        let result = build_candidate_result(
+            "cfg_001".to_string(),
+            BuildConfig::default(),
+            &r,
+            TuneObjective::SuccessWeightedMrr,
+            &TuneConstraints::default(),
+        );
+        assert_eq!(result.metrics.success_weighted_top1_hit_rate, Some(0.5));
+        assert_eq!(
+            result.metrics.success_weighted_mean_reciprocal_rank,
+            Some(0.6)
+        );
+        assert_eq!(result.objective_value, 0.6);
     }
 
     #[test]
@@ -535,6 +605,11 @@ mod tests {
             mean_reciprocal_rank: Some(0.5),
             covered_fraction: 0.5,
             fallback_rate: Some(0.5),
+            success_weighted_top1_hit_rate: None,
+            success_weighted_mean_reciprocal_rank: None,
+            failure_agreement_top1_hit_rate: None,
+            context_top1_hit_rate: None,
+            context_mean_reciprocal_rank: None,
         };
         results.push(TuneCandidateResult {
             config_id: "cfg_001".to_string(),
@@ -544,6 +619,11 @@ mod tests {
                 mean_reciprocal_rank: Some(0.6),
                 covered_fraction: 0.7,
                 fallback_rate: Some(0.3),
+                success_weighted_top1_hit_rate: None,
+                success_weighted_mean_reciprocal_rank: None,
+                failure_agreement_top1_hit_rate: None,
+                context_top1_hit_rate: None,
+                context_mean_reciprocal_rank: None,
             },
             objective_value: 0.0,
             meets_constraints: true,
@@ -556,6 +636,11 @@ mod tests {
                 mean_reciprocal_rank: Some(0.9),
                 covered_fraction: 0.2,
                 fallback_rate: Some(0.8),
+                success_weighted_top1_hit_rate: None,
+                success_weighted_mean_reciprocal_rank: None,
+                failure_agreement_top1_hit_rate: None,
+                context_top1_hit_rate: None,
+                context_mean_reciprocal_rank: None,
             },
             objective_value: 0.0,
             meets_constraints: true,

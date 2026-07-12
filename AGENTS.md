@@ -844,7 +844,7 @@ CSA games
 ### Phase 3: Advanced Sequence Support
 
 1. Prefix-tree representation.
-2. Variable-order context fallback.
+2. ~~Variable-order context fallback.~~ Done -- see README's "Variable-order context" (`BuildConfig::context_order`, `PriorBook::query_with_context`, `lineprior query --recent-actions`). Implemented as a flat `(context, state) -> action` map (`PriorBook::context_entries`), not a prefix tree (item 1 above) -- deliberately deferred since a flat map already gives O(1) lookup per backoff rung and the memory/complexity tradeoff of a real trie wasn't justified by anything measured yet.
 3. Sequence-level priors.
 4. Macro-action suggestions.
 5. ~~Confidence intervals.~~ Done -- see `## Confidence` (`ConfidenceMode::WilsonLowerBound`/`Hybrid`).

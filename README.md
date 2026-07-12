@@ -84,6 +84,8 @@ lineprior query prior.jsonl --state state_a --top-k 5
 
 An unseen state prints nothing and still exits `0` — that's the expected fallback behavior, not an error.
 
+Add `--recent-actions action_x,action_y` for a context-aware query (see "Variable-order context" below) — output becomes `{"matched_order": N, "candidates": [...]}` instead of one line per candidate.
+
 As a library, `PriorBook::candidates()` gives you every `(state, action)` candidate across the whole book as a flat `Vec<(String, PriorAction)>`, for callers filtering or sampling candidates directly (e.g. building a domain-specific "opening suite") instead of working through the nested per-state structure `entries_sorted()` returns.
 
 ## Other commands
@@ -116,6 +118,8 @@ One JSON object per state, actions ranked by descending prior:
 
 `lineprior build`'s CLI output (and the library's `save_prior_book_with_config`) prepends a header line carrying a fingerprint of the `BuildConfig` used to build it, e.g. `{"build_config_fingerprint":7592859384087124328}`. `load_prior_book`/`lineprior query`/`lineprior summary` all skip this line transparently — it doesn't change how you read a prior book day to day.
 
+With `--context-order` > 0, some lines additionally carry a `context` field — see "Variable-order context" below.
+
 ## Detecting a stale cached prior book
 
 If you cache a prior book on disk and rebuild it later under different `BuildConfig` values (a different `--smoothing-alpha`, `--confidence-k`, etc.), the raw `confidence`/`prior` numbers in the old file were computed under the *old* config's semantics — reusing it silently can be misleading. As a library:
@@ -134,7 +138,7 @@ match load_prior_book_with_config(reader, &config) {
 
 A file saved via plain `save_prior_book` (or by a version of lineprior that predates this) has no fingerprint to compare against, so `load_prior_book_with_config` accepts it unconditionally — there's nothing to detect drift against. The fingerprint is stable *within a given lineprior version*, not guaranteed forever-stable across upgrades (it hashes a JSON encoding of `BuildConfig`, and floats' exact byte layout isn't itself a cross-version guarantee) — it's meant to catch a stale cache within one project's lifetime, not serve as a long-term archival checksum.
 
-Upgrading to a lineprior version that adds new `BuildConfig` fields (like `confidence_mode`/`confidence_z`, or `time_decay_half_life_days`/`source_weights`) changes the fingerprint for *every* config, even when the new fields are at their inert defaults (`heuristic` mode, decay disabled, no source weights) — so a prior book cached before upgrading will trip `BuildConfigMismatch` once after upgrading. That's the fingerprint mechanism working as intended, not a regression.
+Upgrading to a lineprior version that adds new `BuildConfig` fields (like `confidence_mode`/`confidence_z`, `time_decay_half_life_days`/`source_weights`, or `context_order`) changes the fingerprint for *every* config, even when the new fields are at their inert defaults (`heuristic` mode, decay disabled, no source weights) — so a prior book cached before upgrading will trip `BuildConfigMismatch` once after upgrading. That's the fingerprint mechanism working as intended, not a regression.
 
 ## Limitations
 
@@ -213,6 +217,20 @@ Headline fields in the JSON report:
   (or within its top-k), among test observations where the prior had any candidate at all.
 - `mean_reciprocal_rank`: the same idea averaged over rank (`1/rank`, `0` if the action wasn't
   among the candidates), a softer signal than a hard hit/miss cutoff.
+- `success_weighted_top1_hit_rate` / `success_weighted_mean_reciprocal_rank`: the same two metrics,
+  but each test observation is weighted by its outcome credit (a win counts fully, a draw counts
+  for `--draw-value`, a loss or unrecorded outcome counts for nothing and drops out of the average
+  entirely) instead of counted equally. `top1_hit_rate` can be inflated by matching actions that
+  went on to fail — this restricts "did the prior agree with what was actually taken" to trials
+  that actually worked. `None` when nothing in the test set earned positive credit.
+- `failure_agreement_top1_hit_rate`: the counterweight — `top1_hit_rate` restricted to test
+  observations whose outcome was exactly `failure`. A high value here is a warning sign: the
+  prior's top pick agrees with actions that are known to have failed.
+  **Caveat:** all three of these credit/blame each observation by *its own* `outcome` field, not
+  by a sequence's eventual result — if your data records a terminal outcome by copying it onto
+  every step, an early good move in an eventually-lost sequence is scored as a failure too. This
+  is a property of how `outcome` was recorded, not something these metrics can correct for. `None` when the test set has
+  no `failure` observations.
 - `coverage` vs. `fallback_rate`: these intentionally do **not** sum to 1. `coverage` is
   state-weighted (the fraction of *distinct* test states for which the prior returned any
   candidate); `fallback_rate` is observation-weighted (the fraction of *test observations* whose
@@ -255,6 +273,64 @@ lineprior eval observations.jsonl \
 
 Both are omitted (empty arrays) unless explicitly requested, so existing `eval` usage is unaffected.
 
+## Variable-order context
+
+By default the prior is order-0: `state -> action`, with no memory of what happened earlier in a
+sequence. `--context-order k` additionally learns `(recent-k-actions, state) -> action` for order
+`1..=k`, derived automatically from each sequence's own `sequence_id`/`step` history — no schema
+change, no new observation field. `0` (the default) disables this entirely; every existing book,
+config, and query behaves exactly as before.
+
+```bash
+lineprior build observations.jsonl --out prior.jsonl --context-order 2
+lineprior query prior.jsonl --state state_a --recent-actions action_x,action_y
+lineprior eval observations.jsonl --context-order 2
+```
+
+**Backoff and transparency.** A context-aware query tries the longest available context first,
+then "stupid backoff" — no interpolation smoothing — to shorter context, down to the plain
+order-0 lookup as the final rung. `lineprior query --recent-actions` prints
+`{"matched_order": N, "candidates": [...]}`; `N` is which depth actually answered the query (`0`
+meaning plain state-only), the same "how much evidence backs this" transparency `confidence`
+already gives per action. Without `--recent-actions`, `query` is byte-for-byte unchanged.
+
+**Sortedness precondition.** Deriving a sequence's own recent-action window while streaming
+requires that sequence's rows be contiguous in the input, with strictly increasing `step` — only
+enforced when `--context-order` is nonzero. A violation is a hard error (`SequenceNotSorted`,
+exit code 3) **independent of `--strict`**: it's a structural precondition on the whole stream,
+not a per-record validity question `--strict`/non-strict already governs. If your data isn't
+already grouped this way, sort it first (`jq -s 'sort_by(.sequence_id, .step)[]'` or similar).
+
+**Output schema.** A context entry adds a `context` field (the recent-action window, oldest
+first) to the usual `{"state": ..., "actions": [...]}` line: `{"state":"state_a",
+"context":["action_x"],"actions":[...]}`. Order-0 entries never carry this field, so a book built
+with `--context-order 0` (the default) serializes identically to before this feature existed.
+
+**Memory.** Peak memory grows from "bounded by unique `(state, action)` pairs" to "bounded by
+unique `(state, action)` pairs at order 0, *plus* unique `(context, state, action)` tuples across
+every order `1..=k`" — an inherent cost of the feature (more precision needs more storage), not a
+regression. `crates/lineprior/tests/streaming_memory.rs` has a regression test for this shape too.
+
+**Evaluating whether context actually helps.** `lineprior eval --context-order k` reports two new
+top-level fields alongside the usual order-0 ones, computed over the *same* test observations in
+the same run: `context_top1_hit_rate` / `context_mean_reciprocal_rank` (the context-aware
+counterparts of `top1_hit_rate`/`mean_reciprocal_rank`, which themselves stay order-0). The
+difference is the lift (or cost) context provides — a single-run, apples-to-apples comparison
+rather than two separate runs whose headline field would otherwise silently mean different
+things. `hit_rate_by_matched_order` breaks accuracy down *by* the depth backoff actually reached
+(not just how often each depth was reached), answering "is deeper context more accurate when
+available, or just rarer." All three are empty/`None` at `--context-order 0`. `lineprior tune`
+surfaces the same two fields per candidate in `all_results`, so `--param
+context-order=0,1,2,3` sweeps show the lift directly — no new `--objective` needed, since the
+existing objectives already read the order-0 fields those sweeps vary.
+
+**Credit-assignment caveat, same shape as the outcome-weighted eval metrics above:** context is
+derived purely from *step order* — it has no opinion on whether deeper context is causally
+meaningful for your domain, only on whether it's statistically predictive on your held-out data.
+Always check `context_top1_hit_rate` against the plain `top1_hit_rate` baseline before trusting a
+context-aware prior; a domain where `state` already encodes recent history (e.g. a full board
+position) may see little or no lift, and that's a legitimate, informative result — not a bug.
+
 ## Tuning: choosing a BuildConfig automatically
 
 `eval` scores one config at a time; `tune` grid-searches many and picks the best one, using the
@@ -288,6 +364,8 @@ value isn't `none`, same reproducibility rule `build`/`eval` already use.
 | `top1` | `top1_hit_rate`, among covered test observations only |
 | `covered-mrr` (default) | `covered_fraction * mean_reciprocal_rank` — MRR averaged across *all* test observations, an uncovered one contributing `0` |
 | `top1-at-min-coverage` | same as `top1`, but requires `--min-covered-fraction` also be set |
+| `success-weighted-mrr` | `success_weighted_mean_reciprocal_rank` — like `mrr`, but a failed or unrecorded-outcome test observation contributes nothing |
+| `success-weighted-top1` | `success_weighted_top1_hit_rate`, the same idea applied to `top1` |
 
 `covered-mrr` is the default because optimizing `mrr` alone tends to pick configs that abstain
 (report no candidate) except when very confident, while optimizing coverage alone tolerates a

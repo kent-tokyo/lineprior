@@ -69,6 +69,8 @@ pub enum ObjectiveArg {
     Top1,
     CoveredMrr,
     Top1AtMinCoverage,
+    SuccessWeightedMrr,
+    SuccessWeightedTop1,
 }
 
 impl From<ObjectiveArg> for lineprior::TuneObjective {
@@ -78,6 +80,8 @@ impl From<ObjectiveArg> for lineprior::TuneObjective {
             ObjectiveArg::Top1 => lineprior::TuneObjective::Top1,
             ObjectiveArg::CoveredMrr => lineprior::TuneObjective::CoveredMrr,
             ObjectiveArg::Top1AtMinCoverage => lineprior::TuneObjective::Top1AtMinCoverage,
+            ObjectiveArg::SuccessWeightedMrr => lineprior::TuneObjective::SuccessWeightedMrr,
+            ObjectiveArg::SuccessWeightedTop1 => lineprior::TuneObjective::SuccessWeightedTop1,
         }
     }
 }
@@ -180,6 +184,13 @@ pub struct BuildConfigArgs {
     /// --source-weights.
     #[arg(long, default_value_t = lineprior::DEFAULT_SOURCE_WEIGHT)]
     pub default_source_weight: f64,
+
+    /// How many of a sequence's own most-recent actions to additionally
+    /// learn context-aware priors for, on top of the always-present order-0
+    /// prior. 0 (default) disables context entirely. Requires input sorted
+    /// by (sequence_id, step) within each sequence when nonzero.
+    #[arg(long, default_value_t = 0)]
+    pub context_order: usize,
 }
 
 /// Resolves the effective `BuildConfig` for `build`/`eval`: either loaded
@@ -235,6 +246,7 @@ impl BuildConfigArgs {
             )
             && self.source_weights.is_empty()
             && self.default_source_weight == lineprior::DEFAULT_SOURCE_WEIGHT
+            && self.context_order == 0
     }
 
     pub fn into_build_config(self) -> BuildConfig {
@@ -259,6 +271,7 @@ impl BuildConfigArgs {
             missing_timestamp_policy: self.missing_timestamp_policy.into(),
             source_weights: self.source_weights.into_iter().collect(),
             default_source_weight: self.default_source_weight,
+            context_order: self.context_order,
             ..BuildConfig::default()
         }
     }

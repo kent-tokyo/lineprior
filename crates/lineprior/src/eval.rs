@@ -1,7 +1,7 @@
-use crate::build::PriorAccumulator;
+use crate::build::{PriorAccumulator, SequenceContextTracker};
 use crate::error::{Result, Warning};
 use crate::input::parse_line;
-use crate::model::{BuildConfig, Observation, PriorBook};
+use crate::model::{BuildConfig, Observation, Outcome, PriorBook, outcome_credit};
 use crate::score::ratio;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -11,7 +11,7 @@ use std::io::{BufRead, BufReader, Read};
 mod tests {
     use super::*;
     use crate::error::Error;
-    use crate::model::{Outcome, PriorAction};
+    use crate::model::PriorAction;
 
     fn obs(state: &str, action: &str) -> Observation {
         Observation {
@@ -64,7 +64,10 @@ mod tests {
                 },
             ],
         );
-        PriorBook { entries }
+        PriorBook {
+            entries,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -104,12 +107,12 @@ mod tests {
     fn topk_hit_rate_and_mrr_match_hand_computed_ranks() {
         let book = sample_book();
         let top_k = vec![1, 2, 3];
-        let mut acc = EvalAccumulator::new(&top_k, 0, &[]);
+        let mut acc = EvalAccumulator::new(&top_k, 0.5, 0, 0, &[]);
 
-        acc.observe(&book, &obs("s", "a")); // rank 1
-        acc.observe(&book, &obs("s", "b")); // rank 2
-        acc.observe(&book, &obs("s", "c")); // rank 3
-        acc.observe(&book, &obs("s", "z")); // not found among candidates
+        acc.observe(&book, &obs("s", "a")).unwrap(); // rank 1
+        acc.observe(&book, &obs("s", "b")).unwrap(); // rank 2
+        acc.observe(&book, &obs("s", "c")).unwrap(); // rank 3
+        acc.observe(&book, &obs("s", "z")).unwrap(); // not found among candidates
 
         let report = acc.finish(0);
         assert_eq!(report.num_evaluated_observations, 4);
@@ -140,9 +143,9 @@ mod tests {
     fn unseen_state_counts_as_fallback_not_evaluated() {
         let book = sample_book(); // only has state "s"
         let top_k = vec![1];
-        let mut acc = EvalAccumulator::new(&top_k, 0, &[]);
+        let mut acc = EvalAccumulator::new(&top_k, 0.5, 0, 0, &[]);
 
-        acc.observe(&book, &obs("unseen_state", "a"));
+        acc.observe(&book, &obs("unseen_state", "a")).unwrap();
 
         let report = acc.finish(0);
         assert_eq!(report.num_test_states, 1);
@@ -152,6 +155,152 @@ mod tests {
         assert_eq!(report.coverage, Some(0.0));
         assert_eq!(report.fallback_rate, Some(1.0));
         assert_eq!(report.top1_hit_rate, None);
+    }
+
+    #[test]
+    fn success_weighted_metrics_equal_unweighted_when_everything_succeeds() {
+        // Every observation from `obs()` defaults to Outcome::Success, so
+        // full credit (1.0) applies uniformly -- the weighted average
+        // degenerates to the plain average.
+        let book = sample_book();
+        let top_k = vec![1];
+        let mut acc = EvalAccumulator::new(&top_k, 0.5, 0, 0, &[]);
+
+        acc.observe(&book, &obs("s", "a")).unwrap(); // rank 1
+        acc.observe(&book, &obs("s", "b")).unwrap(); // rank 2
+        acc.observe(&book, &obs("s", "z")).unwrap(); // not found
+
+        let report = acc.finish(0);
+        assert_eq!(report.success_weighted_top1_hit_rate, report.top1_hit_rate);
+        assert_eq!(
+            report.success_weighted_mean_reciprocal_rank,
+            report.mean_reciprocal_rank
+        );
+    }
+
+    #[test]
+    fn success_weighted_metrics_are_none_when_nothing_earns_credit() {
+        let book = sample_book();
+        let top_k = vec![1];
+        let mut acc = EvalAccumulator::new(&top_k, 0.5, 0, 0, &[]);
+
+        acc.observe(
+            &book,
+            &Observation {
+                outcome: Outcome::Failure,
+                ..obs("s", "a")
+            },
+        )
+        .unwrap();
+        acc.observe(
+            &book,
+            &Observation {
+                outcome: Outcome::Unknown,
+                ..obs("s", "a")
+            },
+        )
+        .unwrap();
+
+        let report = acc.finish(0);
+        assert_eq!(report.num_evaluated_observations, 2);
+        assert_eq!(report.success_weighted_top1_hit_rate, None);
+        assert_eq!(report.success_weighted_mean_reciprocal_rank, None);
+    }
+
+    #[test]
+    fn success_weighted_metrics_give_draws_partial_credit() {
+        let book = sample_book();
+        let top_k = vec![1];
+        let mut acc = EvalAccumulator::new(&top_k, 0.5, 0, 0, &[]);
+
+        acc.observe(&book, &obs("s", "a")).unwrap(); // Success, rank 1 (hit), credit 1.0
+        acc.observe(
+            &book,
+            &Observation {
+                outcome: Outcome::Draw,
+                ..obs("s", "b")
+            },
+        )
+        .unwrap(); // Draw, rank 2 (miss on #1), credit 0.5
+        acc.observe(
+            &book,
+            &Observation {
+                outcome: Outcome::Failure,
+                ..obs("s", "z")
+            },
+        )
+        .unwrap(); // Failure, not found, credit 0.0 (self-excludes)
+
+        let report = acc.finish(0);
+        // weight sum = 1.0 + 0.5 + 0.0 = 1.5; weighted hit sum = 1.0 (only obs 1 hits #1)
+        let expected_top1 = 1.0 / 1.5;
+        // weighted rr sum = 1.0*1.0 + 0.5*0.5 + 0.0*0.0 = 1.25
+        let expected_mrr = 1.25 / 1.5;
+        assert!((report.success_weighted_top1_hit_rate.unwrap() - expected_top1).abs() < 1e-9);
+        assert!(
+            (report.success_weighted_mean_reciprocal_rank.unwrap() - expected_mrr).abs() < 1e-9
+        );
+    }
+
+    #[test]
+    fn draw_value_zero_makes_success_weighted_metrics_treat_draws_as_failures() {
+        // Parity with build.rs's draw_value_zero_reproduces_draw_as_failure_behavior:
+        // draw_value=0.0 means a draw earns no credit, same as a loss.
+        let book = sample_book();
+        let top_k = vec![1];
+        let mut acc = EvalAccumulator::new(&top_k, 0.0, 0, 0, &[]);
+
+        acc.observe(
+            &book,
+            &Observation {
+                outcome: Outcome::Draw,
+                ..obs("s", "a")
+            },
+        )
+        .unwrap();
+
+        let report = acc.finish(0);
+        assert_eq!(report.success_weighted_top1_hit_rate, None);
+        assert_eq!(report.success_weighted_mean_reciprocal_rank, None);
+    }
+
+    #[test]
+    fn failure_agreement_top1_hit_rate_flags_the_prior_recommending_a_loser() {
+        let book = sample_book();
+        let top_k = vec![1];
+        let mut acc = EvalAccumulator::new(&top_k, 0.5, 0, 0, &[]);
+
+        acc.observe(
+            &book,
+            &Observation {
+                outcome: Outcome::Failure,
+                ..obs("s", "a") // top1 is "a" -- the prior's pick failed
+            },
+        )
+        .unwrap();
+        acc.observe(
+            &book,
+            &Observation {
+                outcome: Outcome::Failure,
+                ..obs("s", "b") // top1 is "a", actual was "b" -- prior didn't recommend the failure
+            },
+        )
+        .unwrap();
+
+        let report = acc.finish(0);
+        assert_eq!(report.failure_agreement_top1_hit_rate, Some(0.5));
+    }
+
+    #[test]
+    fn failure_agreement_top1_hit_rate_is_none_without_failure_observations() {
+        let book = sample_book();
+        let top_k = vec![1];
+        let mut acc = EvalAccumulator::new(&top_k, 0.5, 0, 0, &[]);
+
+        acc.observe(&book, &obs("s", "a")).unwrap();
+
+        let report = acc.finish(0);
+        assert_eq!(report.failure_agreement_top1_hit_rate, None);
     }
 
     #[test]
@@ -241,6 +390,119 @@ mod tests {
         );
         assert_eq!(output.report.score_lift, None); // no `score` field anywhere
         assert!(output.warnings.is_empty());
+    }
+
+    #[test]
+    fn evaluate_reports_context_aware_metrics_when_context_order_is_set() {
+        let train_ratio = 0.5;
+        let candidate_ids: Vec<String> = (0..60).map(|i| format!("seq-{i}")).collect();
+        let train_ids: Vec<&String> = candidate_ids
+            .iter()
+            .filter(|id| is_train(id, train_ratio))
+            .collect();
+        let test_ids: Vec<&String> = candidate_ids
+            .iter()
+            .filter(|id| !is_train(id, train_ratio))
+            .collect();
+        assert!(train_ids.len() >= 2, "need at least two train sequences");
+        assert!(test_ids.len() >= 2, "need at least two test sequences");
+
+        // Every sequence: step 0 picks "x" or "y" (alternating), step 1's
+        // action from state "s" always matches ("x" -> "A", "y" -> "B").
+        // Order-0 alone can't tell A from B apart at state "s" (tied), but
+        // order-1 context (step 0's own action) predicts it perfectly.
+        let mut jsonl = String::new();
+        for (i, id) in train_ids.iter().chain(test_ids.iter()).enumerate() {
+            let (first, second) = if i % 2 == 0 { ("x", "A") } else { ("y", "B") };
+            jsonl.push_str(&format!(
+                "{{\"sequence_id\":\"{id}\",\"step\":0,\"state\":\"s0\",\"action\":\"{first}\",\"outcome\":\"success\"}}\n"
+            ));
+            jsonl.push_str(&format!(
+                "{{\"sequence_id\":\"{id}\",\"step\":1,\"state\":\"s\",\"action\":\"{second}\",\"outcome\":\"success\"}}\n"
+            ));
+        }
+
+        let build_config = BuildConfig {
+            context_order: 1,
+            ..Default::default()
+        };
+        let eval_config = EvalConfig {
+            train_ratio,
+            top_k: vec![1],
+            ..EvalConfig::default()
+        };
+        let output = evaluate(
+            jsonl.as_bytes(),
+            jsonl.as_bytes(),
+            true,
+            &build_config,
+            &eval_config,
+        )
+        .unwrap();
+        let report = output.report;
+
+        // Context-aware backoff beats plain order-0 in the same run, over
+        // the same test observations.
+        assert!(report.context_top1_hit_rate.unwrap() > report.top1_hit_rate.unwrap());
+        assert!(
+            report.context_mean_reciprocal_rank.unwrap() > report.mean_reciprocal_rank.unwrap()
+        );
+
+        // Isolated by matched order: every state-"s" observation resolves
+        // via order-1 context and is always correct there (state "s0"'s
+        // order-0-only, ~tied predictions land in the order-0 bucket
+        // instead, which is why the *aggregate* above isn't a clean 1.0).
+        let order1 = report
+            .hit_rate_by_matched_order
+            .iter()
+            .find(|m| m.order == 1)
+            .expect("order-1 entries should exist");
+        assert_eq!(order1.top1_hit_rate, Some(1.0));
+        assert_eq!(order1.num_evaluated, test_ids.len() as u64);
+    }
+
+    #[test]
+    fn evaluate_context_fields_are_absent_when_context_order_is_zero() {
+        let train_ratio = 0.5;
+        let candidate_ids: Vec<String> = (0..40).map(|i| format!("seq-{i}")).collect();
+        let train_ids: Vec<&String> = candidate_ids
+            .iter()
+            .filter(|id| is_train(id, train_ratio))
+            .collect();
+        let test_ids: Vec<&String> = candidate_ids
+            .iter()
+            .filter(|id| !is_train(id, train_ratio))
+            .collect();
+        assert!(!train_ids.is_empty());
+        assert!(!test_ids.is_empty());
+
+        let mut jsonl = String::new();
+        for id in train_ids.iter().chain(test_ids.iter()) {
+            jsonl.push_str(&format!(
+                "{{\"sequence_id\":\"{id}\",\"step\":0,\"state\":\"s\",\"action\":\"a\",\"outcome\":\"success\"}}\n"
+            ));
+        }
+
+        let eval_config = EvalConfig {
+            train_ratio,
+            top_k: vec![1],
+            ..EvalConfig::default()
+        };
+        // context_order defaults to 0 -- confirm the new fields stay absent
+        // even though there's real evaluated test data, not just because
+        // nothing was evaluated at all.
+        let output = evaluate(
+            jsonl.as_bytes(),
+            jsonl.as_bytes(),
+            true,
+            &BuildConfig::default(),
+            &eval_config,
+        )
+        .unwrap();
+        assert!(output.report.num_evaluated_observations > 0);
+        assert_eq!(output.report.context_top1_hit_rate, None);
+        assert_eq!(output.report.context_mean_reciprocal_rank, None);
+        assert!(output.report.hit_rate_by_matched_order.is_empty());
     }
 
     #[test]
@@ -350,18 +612,21 @@ mod tests {
         entries.insert("s1".to_string(), vec![action_with_confidence(0.05)]);
         entries.insert("s2".to_string(), vec![action_with_confidence(0.55)]);
         entries.insert("s3".to_string(), vec![action_with_confidence(1.0)]);
-        PriorBook { entries }
+        PriorBook {
+            entries,
+            ..Default::default()
+        }
     }
 
     #[test]
     fn calibration_bins_are_deterministic_length_and_bucketed_correctly() {
         let book = calibration_fixture_book();
         let top_k = vec![1];
-        let mut acc = EvalAccumulator::new(&top_k, 10, &[]);
+        let mut acc = EvalAccumulator::new(&top_k, 0.5, 0, 10, &[]);
 
-        acc.observe(&book, &obs("s1", "a")); // hit, confidence 0.05 -> bin 0
-        acc.observe(&book, &obs("s2", "b")); // miss, confidence 0.55 -> bin 5
-        acc.observe(&book, &obs("s3", "a")); // hit, confidence 1.0 -> clamped into last bin 9
+        acc.observe(&book, &obs("s1", "a")).unwrap(); // hit, confidence 0.05 -> bin 0
+        acc.observe(&book, &obs("s2", "b")).unwrap(); // miss, confidence 0.55 -> bin 5
+        acc.observe(&book, &obs("s3", "a")).unwrap(); // hit, confidence 1.0 -> clamped into last bin 9
 
         let report = acc.finish(0);
         assert_eq!(report.confidence_calibration.len(), 10); // always calibration_bins entries
@@ -393,11 +658,11 @@ mod tests {
         let book = calibration_fixture_book();
         let top_k = vec![1];
         let thresholds = vec![0.1, 0.6];
-        let mut acc = EvalAccumulator::new(&top_k, 0, &thresholds);
+        let mut acc = EvalAccumulator::new(&top_k, 0.5, 0, 0, &thresholds);
 
-        acc.observe(&book, &obs("s1", "a")); // confidence 0.05: below both thresholds
-        acc.observe(&book, &obs("s2", "b")); // confidence 0.55: covers 0.1 only, miss
-        acc.observe(&book, &obs("s3", "a")); // confidence 1.0: covers both, hit
+        acc.observe(&book, &obs("s1", "a")).unwrap(); // confidence 0.05: below both thresholds
+        acc.observe(&book, &obs("s2", "b")).unwrap(); // confidence 0.55: covers 0.1 only, miss
+        acc.observe(&book, &obs("s3", "a")).unwrap(); // confidence 1.0: covers both, hit
 
         let report = acc.finish(0);
         assert_eq!(report.threshold_sweep.len(), 2); // always thresholds.len() entries, in request order
@@ -610,12 +875,56 @@ pub struct EvalReport {
     /// least one scored observation. Tests whether following the prior's
     /// top pick correlates with a better observed outcome.
     pub score_lift: Option<f64>,
+    /// `top1_hit_rate`, but each evaluated observation is weighted by its
+    /// outcome credit (win=1.0, draw=`BuildConfig::draw_value`, loss/unknown=0)
+    /// instead of counted equally -- see [`crate::model::outcome_credit`]. A
+    /// failed or unrecorded-outcome observation contributes to neither the
+    /// numerator nor the denominator, so this reads as "agreement rate,
+    /// restricted to trials that actually succeeded (or partially, drew)."
+    /// `None` when no evaluated observation earned positive credit.
+    pub success_weighted_top1_hit_rate: Option<f64>,
+    /// `mean_reciprocal_rank`, outcome-credit-weighted the same way as
+    /// [`Self::success_weighted_top1_hit_rate`].
+    pub success_weighted_mean_reciprocal_rank: Option<f64>,
+    /// `top1_hit_rate`, restricted to evaluated observations whose outcome
+    /// was exactly [`crate::model::Outcome::Failure`]. The counterweight to
+    /// the success-weighted metrics above: a high value here means the
+    /// prior's top pick agrees with actions that are known to have failed.
+    /// `None` when the test set has zero `Failure` observations.
+    pub failure_agreement_top1_hit_rate: Option<f64>,
+    /// `top1_hit_rate`, but each evaluated observation is looked up via
+    /// [`crate::model::PriorBook::query_with_context`] (the sequence's own
+    /// recent-action window, with backoff) instead of plain
+    /// [`crate::model::PriorBook::query`]. `top1_hit_rate` itself always
+    /// stays order-0 -- this is the direct, same-run comparison point:
+    /// `context_top1_hit_rate - top1_hit_rate` is the lift (or cost)
+    /// context provides. `None` when `BuildConfig::context_order == 0`.
+    pub context_top1_hit_rate: Option<f64>,
+    /// `mean_reciprocal_rank`, context-aware the same way as
+    /// [`Self::context_top1_hit_rate`]. `None` when
+    /// `BuildConfig::context_order == 0`.
+    pub context_mean_reciprocal_rank: Option<f64>,
+    /// Accuracy *at* each context depth backoff actually reached, not just
+    /// how often it was reached -- answers "is deeper context more
+    /// accurate when available, or just rarer." Empty when
+    /// `BuildConfig::context_order == 0`.
+    pub hit_rate_by_matched_order: Vec<MatchedOrderHitRate>,
     /// Ranking quality bucketed by the #1 candidate's confidence. Empty
     /// unless [`EvalConfig::calibration_bins`] was set.
     pub confidence_calibration: Vec<CalibrationBin>,
     /// Coverage/accuracy tradeoff at each requested confidence threshold.
     /// Empty unless [`EvalConfig::thresholds`] was non-empty.
     pub threshold_sweep: Vec<ThresholdSweepEntry>,
+}
+
+/// One entry of [`EvalReport::hit_rate_by_matched_order`]: accuracy among
+/// evaluated observations whose context-aware query backed off to exactly
+/// `order` (`0` meaning the plain state-only rung).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct MatchedOrderHitRate {
+    pub order: usize,
+    pub num_evaluated: u64,
+    pub top1_hit_rate: Option<f64>,
 }
 
 /// Result of [`evaluate`]: the report plus warnings from the train pass.
@@ -662,6 +971,13 @@ struct ThresholdAcc {
     reciprocal_rank_sum: f64,
 }
 
+/// Online per-matched-order totals for `hit_rate_by_matched_order`.
+#[derive(Debug, Default, Clone, Copy)]
+struct MatchedOrderAcc {
+    num_evaluated: u64,
+    hit_count: u64,
+}
+
 /// Pass-2 bookkeeping: ranks each test observation's actual action against
 /// the trained prior's candidates for its state, accumulating the sums
 /// [`EvalReport`] is built from. Mirrors [`PriorAccumulator`]'s
@@ -671,6 +987,14 @@ struct ThresholdAcc {
 /// the same way every other metric here does.
 struct EvalAccumulator<'a> {
     top_k: &'a [usize],
+    draw_value: f64,
+    context_order: usize,
+    context_tracker: SequenceContextTracker,
+    context_top1_hit_count: u64,
+    context_reciprocal_rank_sum: f64,
+    /// Keyed by matched order (`0` = order-0 rung). Small -- bounded by
+    /// `context_order`, never by observation count.
+    matched_order_counts: HashMap<usize, MatchedOrderAcc>,
     num_test_observations: u64,
     test_states_seen: HashSet<String>,
     states_with_candidates_count: u64,
@@ -681,6 +1005,11 @@ struct EvalAccumulator<'a> {
     reciprocal_rank_sum: f64,
     rank_sum_when_found: f64,
     found_count: u64,
+    success_weight_sum: f64,
+    success_weighted_hit_sum: f64,
+    success_weighted_reciprocal_rank_sum: f64,
+    failure_count: u64,
+    failure_hit_count: u64,
     confidence_sum_on_hit: f64,
     confidence_count_on_hit: u64,
     confidence_sum_on_miss: f64,
@@ -696,7 +1025,13 @@ struct EvalAccumulator<'a> {
 }
 
 impl<'a> EvalAccumulator<'a> {
-    fn new(top_k: &'a [usize], calibration_bins: usize, thresholds: &'a [f64]) -> Self {
+    fn new(
+        top_k: &'a [usize],
+        draw_value: f64,
+        context_order: usize,
+        calibration_bins: usize,
+        thresholds: &'a [f64],
+    ) -> Self {
         let calibration_bin_width = if calibration_bins > 0 {
             1.0 / calibration_bins as f64
         } else {
@@ -704,6 +1039,12 @@ impl<'a> EvalAccumulator<'a> {
         };
         Self {
             top_k,
+            draw_value,
+            context_order,
+            context_tracker: SequenceContextTracker::new(context_order),
+            context_top1_hit_count: 0,
+            context_reciprocal_rank_sum: 0.0,
+            matched_order_counts: HashMap::new(),
             num_test_observations: 0,
             test_states_seen: HashSet::new(),
             states_with_candidates_count: 0,
@@ -714,6 +1055,11 @@ impl<'a> EvalAccumulator<'a> {
             reciprocal_rank_sum: 0.0,
             rank_sum_when_found: 0.0,
             found_count: 0,
+            success_weight_sum: 0.0,
+            success_weighted_hit_sum: 0.0,
+            success_weighted_reciprocal_rank_sum: 0.0,
+            failure_count: 0,
+            failure_hit_count: 0,
             confidence_sum_on_hit: 0.0,
             confidence_count_on_hit: 0,
             confidence_sum_on_miss: 0.0,
@@ -729,14 +1075,19 @@ impl<'a> EvalAccumulator<'a> {
         }
     }
 
-    fn observe(&mut self, book: &PriorBook, obs: &Observation) {
+    fn observe(&mut self, book: &PriorBook, obs: &Observation) -> Result<()> {
+        // Validated (and the window advanced) unconditionally, same as
+        // PriorAccumulator::observe -- the test split needs its own
+        // sortedness precondition, independent of the train split's.
+        let window = self.context_tracker.advance(obs)?;
+
         self.num_test_observations += 1;
         let is_new_state = self.test_states_seen.insert(obs.state.clone());
         let candidates = book.query(&obs.state, None);
 
         if candidates.is_empty() {
             self.fallback_count += 1;
-            return;
+            return Ok(());
         }
         if is_new_state {
             self.states_with_candidates_count += 1;
@@ -780,6 +1131,47 @@ impl<'a> EvalAccumulator<'a> {
             }
         }
 
+        let credit = outcome_credit(obs.outcome, self.draw_value);
+        self.success_weight_sum += credit;
+        if is_hit {
+            self.success_weighted_hit_sum += credit;
+        }
+        self.success_weighted_reciprocal_rank_sum += credit * reciprocal_rank;
+        if obs.outcome == Outcome::Failure {
+            self.failure_count += 1;
+            if is_hit {
+                self.failure_hit_count += 1;
+            }
+        }
+
+        if self.context_order > 0 {
+            // `candidates` (order-0) is already known non-empty here, so
+            // query_with_context's final backoff rung -- which is literally
+            // `book.query(state, top_k)` -- can never come back empty
+            // either.
+            let context_result = book.query_with_context(&obs.state, &window, None);
+            let context_top1 = &context_result.candidates[0];
+            let context_is_hit = context_top1.action == obs.action;
+            if context_is_hit {
+                self.context_top1_hit_count += 1;
+            }
+            let context_rank = context_result
+                .candidates
+                .iter()
+                .position(|c| c.action == obs.action)
+                .map(|index| index + 1);
+            self.context_reciprocal_rank_sum += context_rank.map_or(0.0, |r| 1.0 / r as f64);
+
+            let order_acc = self
+                .matched_order_counts
+                .entry(context_result.matched_order)
+                .or_default();
+            order_acc.num_evaluated += 1;
+            if context_is_hit {
+                order_acc.hit_count += 1;
+            }
+        }
+
         if !self.calibration.is_empty() {
             let bins = self.calibration.len();
             let idx = ((top1.confidence / self.calibration_bin_width) as usize).min(bins - 1);
@@ -800,6 +1192,8 @@ impl<'a> EvalAccumulator<'a> {
                 acc.reciprocal_rank_sum += reciprocal_rank;
             }
         }
+
+        Ok(())
     }
 
     fn finish(self, num_train_observations: u64) -> EvalReport {
@@ -868,6 +1262,34 @@ impl<'a> EvalAccumulator<'a> {
             })
             .collect();
 
+        // `None`/empty when context_order == 0: a context-aware query
+        // always resolves immediately to the order-0 rung in that case, so
+        // these would just duplicate top1_hit_rate/mean_reciprocal_rank
+        // rather than carry any new information.
+        let (context_top1_hit_rate, context_mean_reciprocal_rank, hit_rate_by_matched_order) =
+            if self.context_order > 0 {
+                let mut orders: Vec<usize> = self.matched_order_counts.keys().copied().collect();
+                orders.sort_unstable();
+                let by_order = orders
+                    .into_iter()
+                    .map(|order| {
+                        let acc = self.matched_order_counts[&order];
+                        MatchedOrderHitRate {
+                            order,
+                            num_evaluated: acc.num_evaluated,
+                            top1_hit_rate: ratio(acc.hit_count as f64, acc.num_evaluated as f64),
+                        }
+                    })
+                    .collect();
+                (
+                    ratio(self.context_top1_hit_count as f64, evaluated),
+                    ratio(self.context_reciprocal_rank_sum, evaluated),
+                    by_order,
+                )
+            } else {
+                (None, None, Vec::new())
+            };
+
         EvalReport {
             num_train_observations,
             num_test_observations: self.num_test_observations,
@@ -890,6 +1312,21 @@ impl<'a> EvalAccumulator<'a> {
                 self.confidence_count_on_miss as f64,
             ),
             score_lift,
+            success_weighted_top1_hit_rate: ratio(
+                self.success_weighted_hit_sum,
+                self.success_weight_sum,
+            ),
+            success_weighted_mean_reciprocal_rank: ratio(
+                self.success_weighted_reciprocal_rank_sum,
+                self.success_weight_sum,
+            ),
+            failure_agreement_top1_hit_rate: ratio(
+                self.failure_hit_count as f64,
+                self.failure_count as f64,
+            ),
+            context_top1_hit_rate,
+            context_mean_reciprocal_rank,
+            hit_rate_by_matched_order,
             confidence_calibration,
             threshold_sweep,
         }
@@ -942,7 +1379,7 @@ pub fn evaluate(
         match parse_line(&line, line_no) {
             Ok(observation) => {
                 if is_train(&observation.sequence_id, eval_config.train_ratio) {
-                    acc.observe(&observation);
+                    acc.observe(&observation)?;
                     num_train_observations += 1;
                 }
             }
@@ -957,6 +1394,8 @@ pub fn evaluate(
 
     let mut eval_acc = EvalAccumulator::new(
         &eval_config.top_k,
+        build_config.draw_value,
+        build_config.context_order,
         eval_config.calibration_bins.unwrap_or(0),
         &eval_config.thresholds,
     );
@@ -970,7 +1409,7 @@ pub fn evaluate(
         match parse_line(&line, line_no) {
             Ok(observation) => {
                 if !is_train(&observation.sequence_id, eval_config.train_ratio) {
-                    eval_acc.observe(&book, &observation);
+                    eval_acc.observe(&book, &observation)?;
                 }
             }
             Err(err) if strict => return Err(err),

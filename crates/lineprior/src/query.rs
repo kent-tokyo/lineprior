@@ -6,6 +6,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 
 /// Matches `PriorBook::entries`'s shape.
 type Entries = HashMap<String, Vec<PriorAction>>;
+/// Matches `PriorBook::context_entries`'s shape.
+type ContextEntries = HashMap<(Vec<String>, String), Vec<PriorAction>>;
 
 /// Deserializes one line of a saved prior book.
 fn parse_entry_line(line: &str, line_no: usize) -> Result<PriorEntry> {
@@ -24,12 +26,24 @@ struct BookHeader {
     build_config_fingerprint: u64,
 }
 
+/// Routes one parsed [`PriorEntry`] into `entries` (order-0, `context`
+/// empty) or `context_entries` (order `1..=k`, `context` non-empty) --
+/// shared by both branches of [`load_entries`]'s line loop.
+fn insert_entry(entries: &mut Entries, context_entries: &mut ContextEntries, entry: PriorEntry) {
+    if entry.context.is_empty() {
+        entries.insert(entry.state, entry.actions);
+    } else {
+        context_entries.insert((entry.context, entry.state), entry.actions);
+    }
+}
+
 /// Shared by [`load_prior_book`] and [`load_prior_book_with_config`]: reads
 /// every line, transparently skipping a leading header if present (whether
 /// or not the caller cares to validate it), and returns whatever
 /// fingerprint it found alongside the parsed entries.
-fn load_entries(reader: impl Read) -> Result<(Entries, Option<u64>)> {
+fn load_entries(reader: impl Read) -> Result<(Entries, ContextEntries, Option<u64>)> {
     let mut entries: Entries = HashMap::new();
+    let mut context_entries: ContextEntries = HashMap::new();
     let mut fingerprint = None;
     let mut lines = BufReader::new(reader).lines().enumerate();
 
@@ -40,7 +54,7 @@ fn load_entries(reader: impl Read) -> Result<(Entries, Option<u64>)> {
                 Ok(header) => fingerprint = Some(header.build_config_fingerprint),
                 Err(_) => {
                     let entry = parse_entry_line(&line, index + 1)?;
-                    entries.insert(entry.state, entry.actions);
+                    insert_entry(&mut entries, &mut context_entries, entry);
                 }
             }
         }
@@ -52,10 +66,10 @@ fn load_entries(reader: impl Read) -> Result<(Entries, Option<u64>)> {
             continue;
         }
         let entry = parse_entry_line(&line, index + 1)?;
-        entries.insert(entry.state, entry.actions);
+        insert_entry(&mut entries, &mut context_entries, entry);
     }
 
-    Ok((entries, fingerprint))
+    Ok((entries, context_entries, fingerprint))
 }
 
 /// Reads a prior book back from the JSONL format emitted by `build`.
@@ -66,18 +80,26 @@ fn load_entries(reader: impl Read) -> Result<(Entries, Option<u64>)> {
 /// [`save_prior_book_with_config`]; use [`load_prior_book_with_config`] to
 /// actually validate it against an expected `BuildConfig`.
 pub fn load_prior_book(reader: impl Read) -> Result<PriorBook> {
-    let (entries, _fingerprint) = load_entries(reader)?;
-    Ok(PriorBook { entries })
+    let (entries, context_entries, _fingerprint) = load_entries(reader)?;
+    Ok(PriorBook {
+        entries,
+        context_entries,
+    })
 }
 
-/// Writes a prior book as JSONL, one line per state, in the same
-/// deterministic order as [`PriorBook::entries_sorted`]. The inverse of
+/// Writes a prior book as JSONL: order-0 entries in the same deterministic
+/// order as [`PriorBook::entries_sorted`], followed by any context entries
+/// in [`PriorBook::context_entries_sorted`]'s order. The inverse of
 /// [`load_prior_book`].
 ///
 /// Flushes before returning -- a buffered writer's `Drop` swallows flush
 /// errors, so a late write failure (e.g. a full disk) must surface here.
 pub fn save_prior_book(book: &PriorBook, mut writer: impl Write) -> Result<()> {
-    for entry in book.entries_sorted() {
+    for entry in book
+        .entries_sorted()
+        .into_iter()
+        .chain(book.context_entries_sorted())
+    {
         serde_json::to_writer(&mut writer, &entry)
             .map_err(|e| Error::Io(std::io::Error::other(e)))?;
         writer.write_all(b"\n")?;
@@ -127,14 +149,17 @@ pub fn load_prior_book_with_config(
     reader: impl Read,
     expected_config: &BuildConfig,
 ) -> Result<PriorBook> {
-    let (entries, fingerprint) = load_entries(reader)?;
+    let (entries, context_entries, fingerprint) = load_entries(reader)?;
     if let Some(found) = fingerprint {
         let expected = build_config_fingerprint(expected_config);
         if found != expected {
             return Err(Error::BuildConfigMismatch { expected, found });
         }
     }
-    Ok(PriorBook { entries })
+    Ok(PriorBook {
+        entries,
+        context_entries,
+    })
 }
 
 #[cfg(test)]
@@ -183,6 +208,36 @@ mod tests {
 
         let reloaded = load_prior_book(buf.as_slice()).unwrap();
         assert_eq!(reloaded.query("s", None), book.query("s", None));
+    }
+
+    #[test]
+    fn save_then_load_round_trips_context_entries() {
+        let mut book = sample_book(); // order-0: state "s" -> action "a"
+        book.context_entries.insert(
+            (vec!["x".to_string()], "s".to_string()),
+            vec![PriorAction {
+                action: "b".to_string(),
+                count: 3,
+                weighted_count: 3.0,
+                success_rate: Some(1.0),
+                mean_score: None,
+                prior: 1.0,
+                confidence: 0.3,
+            }],
+        );
+
+        let mut buf: Vec<u8> = Vec::new();
+        save_prior_book(&book, &mut buf).unwrap();
+        let contents = String::from_utf8(buf.clone()).unwrap();
+        assert!(contents.contains("\"context\":[\"x\"]"));
+
+        let reloaded = load_prior_book(buf.as_slice()).unwrap();
+        // Order-0 is untouched.
+        assert_eq!(reloaded.query("s", None), book.query("s", None));
+        // Context entry round-trips too.
+        let result = reloaded.query_with_context("s", &["x".to_string()], None);
+        assert_eq!(result.matched_order, 1);
+        assert_eq!(result.candidates[0].action, "b");
     }
 
     #[test]

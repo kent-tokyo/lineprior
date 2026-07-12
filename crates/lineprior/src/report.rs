@@ -96,7 +96,10 @@ mod tests {
             "s".to_string(),
             vec![action("a", 0.99, 0.9), action("b", 0.01, 0.9)],
         );
-        let book = PriorBook { entries };
+        let book = PriorBook {
+            entries,
+            ..Default::default()
+        };
         let entropy = state_entropy(&book);
         assert!(entropy[0].entropy_bits < 0.2);
     }
@@ -113,7 +116,10 @@ mod tests {
                 action("d", 0.25, 0.9),
             ],
         );
-        let book = PriorBook { entries };
+        let book = PriorBook {
+            entries,
+            ..Default::default()
+        };
         let entropy = state_entropy(&book);
         assert!((entropy[0].entropy_bits - 2.0).abs() < 1e-9);
     }
@@ -123,7 +129,10 @@ mod tests {
         let mut entries = HashMap::new();
         entries.insert("s1".to_string(), vec![action("a", 1.0, 0.5)]);
         entries.insert("s2".to_string(), vec![action("b", 1.0, 1.0)]);
-        let book = PriorBook { entries };
+        let book = PriorBook {
+            entries,
+            ..Default::default()
+        };
         let summary = summarize(&book);
         assert_eq!(summary.num_states, 2);
         assert_eq!(summary.num_action_entries, 2);

@@ -45,6 +45,25 @@ pub enum Error {
 
     #[error("invalid build config: {message}")]
     InvalidConfig { message: String },
+
+    /// Raised only when `BuildConfig::context_order > 0`: deriving a
+    /// sequence's recent-action window while streaming requires that
+    /// sequence's own rows be contiguous and in increasing `step` order.
+    /// Identified by `sequence_id`/`step` rather than a line number --
+    /// unlike the JSONL-parse errors above, this is checked after parsing,
+    /// against the observation stream itself (shared by both the eager and
+    /// streaming build paths, only one of which has line numbers at all).
+    /// Unconditional -- not gated by `--strict`, since this is a stream-wide
+    /// structural precondition, not a single bad record.
+    #[error(
+        "sequence `{sequence_id}`: step {step} does not follow step {last_step} \
+         -- input must be sorted by (sequence_id, step) when context_order > 0"
+    )]
+    SequenceNotSorted {
+        sequence_id: String,
+        step: u32,
+        last_step: u32,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -1,7 +1,7 @@
 use crate::error::{Error, Result};
 use crate::model::{
     BuildConfig, ConfidenceMode, MissingTimestampPolicy, Observation, Outcome, PriorAction,
-    PriorBook,
+    PriorBook, outcome_credit,
 };
 use crate::score::{
     confidence, effective_sample_size, normalize, ratio, raw_score, shrink_toward,
@@ -9,7 +9,7 @@ use crate::score::{
 };
 use serde::Serialize;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 /// Running totals for one `(state, action)` pair.
 #[derive(Debug, Default, Clone)]
@@ -25,6 +25,77 @@ struct ActionStats {
     weighted_trial_weight_sq_sum: f64,
     weighted_score_sum: f64,
     weighted_score_count: f64,
+}
+
+/// Tracks a sequence's own recent-action history while observations stream
+/// in one at a time, for `BuildConfig::context_order > 0`. Requires input
+/// grouped by `sequence_id` with strictly increasing `step` within each
+/// group -- see `Error::SequenceNotSorted`.
+///
+/// A `sequence_id` change is always treated as a fresh sequence starting
+/// (unconditional reset, no partial reuse of the previous window). This is
+/// what makes an "A, B, A-resumed" interleave degrade safely to a short/
+/// reset window rather than silently splicing two sequences' actions
+/// together -- without needing to remember every `sequence_id` ever seen,
+/// which would cost memory proportional to unique sequence count and
+/// undermine the streaming-memory guarantee this whole feature must not
+/// break.
+pub(crate) struct SequenceContextTracker {
+    order: usize,
+    current_sequence_id: Option<String>,
+    last_step: Option<u32>,
+    window: VecDeque<String>,
+}
+
+impl SequenceContextTracker {
+    pub(crate) fn new(order: usize) -> Self {
+        Self {
+            order,
+            current_sequence_id: None,
+            last_step: None,
+            window: VecDeque::new(),
+        }
+    }
+
+    /// Returns the window's contents *before* `obs` (oldest first -- what
+    /// happened earlier in this sequence, never including `obs.action`
+    /// itself), then folds `obs.action` into the window for the next call.
+    /// A no-op when `order == 0`: always returns an empty window and never
+    /// errors, so every existing caller is unaffected.
+    pub(crate) fn advance(&mut self, obs: &Observation) -> Result<Vec<String>> {
+        if self.order == 0 {
+            return Ok(Vec::new());
+        }
+
+        match &self.current_sequence_id {
+            Some(current) if current == &obs.sequence_id => {
+                let last_step = self.last_step.expect("set alongside current_sequence_id");
+                if obs.step <= last_step {
+                    return Err(Error::SequenceNotSorted {
+                        sequence_id: obs.sequence_id.clone(),
+                        step: obs.step,
+                        last_step,
+                    });
+                }
+            }
+            _ => {
+                // New sequence (or the very first observation ever):
+                // unconditional reset, no partial reuse of the old window.
+                self.current_sequence_id = Some(obs.sequence_id.clone());
+                self.window.clear();
+            }
+        }
+        self.last_step = Some(obs.step);
+
+        let window: Vec<String> = self.window.iter().cloned().collect();
+
+        self.window.push_back(obs.action.clone());
+        if self.window.len() > self.order {
+            self.window.pop_front();
+        }
+
+        Ok(window)
+    }
 }
 
 /// Wilson lower bound of `stat`'s success rate, or `None` if it has no
@@ -199,6 +270,11 @@ pub struct BuildStats {
 /// smoothing target for every action.
 pub(crate) struct PriorAccumulator<'a> {
     stats: HashMap<String, HashMap<String, ActionStats>>,
+    /// Order `1..=config.context_order` entries only -- order-0 stays
+    /// exclusively in `stats`, never duplicated here. Keyed by
+    /// `(context_window_slice, state)`.
+    context_stats: HashMap<(Vec<String>, String), HashMap<String, ActionStats>>,
+    context_tracker: SequenceContextTracker,
     global_weighted_successes: f64,
     global_weighted_trials: f64,
     global_weighted_score_sum: f64,
@@ -214,6 +290,8 @@ impl<'a> PriorAccumulator<'a> {
         validate_config(config)?;
         Ok(Self {
             stats: HashMap::new(),
+            context_stats: HashMap::new(),
+            context_tracker: SequenceContextTracker::new(config.context_order),
             global_weighted_successes: 0.0,
             global_weighted_trials: 0.0,
             global_weighted_score_sum: 0.0,
@@ -225,22 +303,28 @@ impl<'a> PriorAccumulator<'a> {
         })
     }
 
-    pub(crate) fn observe(&mut self, obs: &Observation) {
+    pub(crate) fn observe(&mut self, obs: &Observation) -> Result<()> {
+        // Validated (and the window advanced) unconditionally, ahead of any
+        // filter below: sortedness is a structural property of the whole
+        // input, and the window must reflect every action actually taken in
+        // the sequence, not just the ones that happen to survive filtering.
+        let window = self.context_tracker.advance(obs)?;
+
         if let Some(max_step) = self.config.max_step
             && obs.step > max_step
         {
             self.observations_dropped_by_step_or_tag_filter += 1;
-            return;
+            return Ok(());
         }
         if let Some(required_tags) = &self.config.tag_filter
             && !required_tags.iter().any(|tag| obs.tags.contains(tag))
         {
             self.observations_dropped_by_step_or_tag_filter += 1;
-            return;
+            return Ok(());
         }
         let Some(effective_weight) = effective_weight(obs, self.config) else {
             self.observations_dropped_by_missing_timestamp += 1;
-            return;
+            return Ok(());
         };
         self.observations_kept += 1;
 
@@ -261,11 +345,7 @@ impl<'a> PriorAccumulator<'a> {
             // both the per-action and dataset-wide totals must move
             // together since the latter is the smoothing target the
             // former shrinks toward.
-            let success_credit = match obs.outcome {
-                Outcome::Success => 1.0,
-                Outcome::Draw => self.config.draw_value,
-                Outcome::Failure | Outcome::Unknown => 0.0,
-            };
+            let success_credit = outcome_credit(obs.outcome, self.config.draw_value);
             entry.weighted_successes += success_credit * effective_weight;
             self.global_weighted_successes += success_credit * effective_weight;
         }
@@ -276,6 +356,37 @@ impl<'a> PriorAccumulator<'a> {
             self.global_weighted_score_sum += effective_weight * score;
             self.global_weighted_score_count += effective_weight;
         }
+
+        // Order 1..=window.len() (already bounded to config.context_order by
+        // the tracker). These fold into the *same* per-action totals shape
+        // as order-0 above, but never touch the global_* sums -- the global
+        // smoothing target is dataset-wide and must be counted exactly once
+        // per observation, not once per context order.
+        for len in 1..=window.len() {
+            let context = window[window.len() - len..].to_vec();
+            let entry = self
+                .context_stats
+                .entry((context, obs.state.clone()))
+                .or_default()
+                .entry(obs.action.clone())
+                .or_default();
+            entry.count += 1;
+            entry.weighted_count += effective_weight;
+
+            if obs.outcome != Outcome::Unknown {
+                entry.weighted_trials += effective_weight;
+                entry.weighted_trial_weight_sq_sum += effective_weight * effective_weight;
+                let success_credit = outcome_credit(obs.outcome, self.config.draw_value);
+                entry.weighted_successes += success_credit * effective_weight;
+            }
+
+            if let Some(score) = obs.score {
+                entry.weighted_score_sum += effective_weight * score;
+                entry.weighted_score_count += effective_weight;
+            }
+        }
+
+        Ok(())
     }
 
     /// Always succeeds -- an accumulator that never observed anything (or
@@ -300,7 +411,11 @@ impl<'a> PriorAccumulator<'a> {
         // `None` here means "this dataset has no outcome/score data at
         // all", which drops that scoring term for every action rather
         // than treating a single action's missing data as a bad (zero)
-        // signal.
+        // signal. Every context order (1..=config.context_order) shrinks
+        // toward this *same* dataset-wide target, not a per-order or
+        // hierarchical one -- stupid backoff was chosen over interpolation
+        // smoothing specifically for transparency, so every level answers
+        // to the same flat baseline.
         let global_success_rate =
             ratio(self.global_weighted_successes, self.global_weighted_trials);
         let global_mean_score = ratio(
@@ -308,119 +423,179 @@ impl<'a> PriorAccumulator<'a> {
             self.global_weighted_score_count,
         );
 
+        let mut counters = FinalizeCounters::default();
+
         let mut entries: HashMap<String, Vec<PriorAction>> = HashMap::new();
-        let mut candidates_before_filtering: u64 = 0;
-        let mut candidates_dropped_by_min_count: u64 = 0;
-        let mut candidates_dropped_by_min_weighted_count: u64 = 0;
-        let mut candidates_dropped_by_min_confidence: u64 = 0;
-        let mut candidates_dropped_by_max_actions_per_state: u64 = 0;
-
         for (state, actions) in self.stats {
-            candidates_before_filtering += actions.len() as u64;
-
-            // Explicit classify-loop rather than three chained `.filter()`
-            // calls: behaviorally identical (a chained filter already
-            // short-circuits per item at the first failing predicate), but
-            // this lets each dropped candidate be counted against the
-            // specific threshold that rejected it.
-            let mut kept: Vec<(String, ActionStats)> = Vec::new();
-            for (action, stat) in actions {
-                if stat.count < self.config.min_count {
-                    candidates_dropped_by_min_count += 1;
-                    continue;
-                }
-                if stat.weighted_count < self.config.min_weighted_count {
-                    candidates_dropped_by_min_weighted_count += 1;
-                    continue;
-                }
-                if action_confidence(&stat, self.config) < self.config.min_confidence {
-                    candidates_dropped_by_min_confidence += 1;
-                    continue;
-                }
-                kept.push((action, stat));
+            if let Some(actions_out) = finalize_actions(
+                actions,
+                self.config,
+                global_success_rate,
+                global_mean_score,
+                &mut counters,
+            ) {
+                entries.insert(state, actions_out);
             }
-            if kept.is_empty() {
-                continue;
-            }
-
-            let raw_scores: Vec<f64> = kept
-                .iter()
-                .map(|(_, stat)| {
-                    let smoothed_success = global_success_rate.map(|global| {
-                        shrink_toward(
-                            stat.weighted_successes,
-                            stat.weighted_trials,
-                            self.config.smoothing_alpha,
-                            global,
-                        )
-                    });
-                    let smoothed_score = global_mean_score.map(|global| {
-                        shrink_toward(
-                            stat.weighted_score_sum,
-                            stat.weighted_score_count,
-                            self.config.smoothing_alpha,
-                            global,
-                        )
-                    });
-                    raw_score(
-                        stat.weighted_count,
-                        smoothed_success,
-                        smoothed_score,
-                        self.config,
-                    )
-                })
-                .collect();
-
-            let priors = normalize(&raw_scores);
-
-            let mut actions_out: Vec<PriorAction> = kept
-                .into_iter()
-                .zip(priors)
-                .map(|((action, stat), prior)| PriorAction {
-                    action,
-                    count: stat.count,
-                    weighted_count: stat.weighted_count,
-                    success_rate: ratio(stat.weighted_successes, stat.weighted_trials),
-                    mean_score: ratio(stat.weighted_score_sum, stat.weighted_score_count),
-                    prior,
-                    confidence: action_confidence(&stat, self.config),
-                })
-                .collect();
-
-            if let Some(max_actions) = self.config.max_actions_per_state {
-                actions_out.sort_by(|a, b| {
-                    b.prior
-                        .partial_cmp(&a.prior)
-                        .unwrap_or(Ordering::Equal)
-                        .then_with(|| a.action.cmp(&b.action))
-                });
-                if actions_out.len() > max_actions {
-                    candidates_dropped_by_max_actions_per_state +=
-                        (actions_out.len() - max_actions) as u64;
-                }
-                actions_out.truncate(max_actions);
-            }
-
-            entries.insert(state, actions_out);
         }
 
-        let candidates_kept: u64 = entries.values().map(|v| v.len() as u64).sum();
+        let mut context_entries: HashMap<(Vec<String>, String), Vec<PriorAction>> = HashMap::new();
+        for (key, actions) in self.context_stats {
+            if let Some(actions_out) = finalize_actions(
+                actions,
+                self.config,
+                global_success_rate,
+                global_mean_score,
+                &mut counters,
+            ) {
+                context_entries.insert(key, actions_out);
+            }
+        }
+
+        let candidates_kept: u64 = entries.values().map(|v| v.len() as u64).sum::<u64>()
+            + context_entries
+                .values()
+                .map(|v| v.len() as u64)
+                .sum::<u64>();
         let stats = BuildStats {
             observations_kept: self.observations_kept,
             observations_dropped_by_step_or_tag_filter: self
                 .observations_dropped_by_step_or_tag_filter,
             observations_dropped_by_missing_timestamp: self
                 .observations_dropped_by_missing_timestamp,
-            candidates_before_filtering,
-            candidates_dropped_by_min_count,
-            candidates_dropped_by_min_weighted_count,
-            candidates_dropped_by_min_confidence,
-            candidates_dropped_by_max_actions_per_state,
+            candidates_before_filtering: counters.candidates_before_filtering,
+            candidates_dropped_by_min_count: counters.candidates_dropped_by_min_count,
+            candidates_dropped_by_min_weighted_count: counters
+                .candidates_dropped_by_min_weighted_count,
+            candidates_dropped_by_min_confidence: counters.candidates_dropped_by_min_confidence,
+            candidates_dropped_by_max_actions_per_state: counters
+                .candidates_dropped_by_max_actions_per_state,
             candidates_kept,
         };
 
-        (PriorBook { entries }, stats)
+        (
+            PriorBook {
+                entries,
+                context_entries,
+            },
+            stats,
+        )
     }
+}
+
+/// Candidate-level counter deltas threaded through [`finalize_actions`] --
+/// shared by the order-0 pass over `stats` and every context-order pass
+/// over `context_stats`, so [`BuildStats`] reports one rolled-up total
+/// across every order rather than duplicating a whole counter set per
+/// order. Inert (all-zero) whenever `context_order == 0`, since
+/// `context_stats` is empty in that case.
+#[derive(Default)]
+struct FinalizeCounters {
+    candidates_before_filtering: u64,
+    candidates_dropped_by_min_count: u64,
+    candidates_dropped_by_min_weighted_count: u64,
+    candidates_dropped_by_min_confidence: u64,
+    candidates_dropped_by_max_actions_per_state: u64,
+}
+
+/// Filters, smooths, normalizes, and ranks one key's (a state, or a
+/// `(context, state)` pair) `action -> ActionStats` map into ranked
+/// [`PriorAction`]s, against the given dataset-wide smoothing targets.
+/// Returns `None` if every candidate was filtered out. This is the single
+/// implementation [`PriorAccumulator::finish_with_stats`] calls once per
+/// state (order-0) and once per context-order key, so the filter/smooth/
+/// normalize logic never has to be duplicated per order.
+fn finalize_actions(
+    actions: HashMap<String, ActionStats>,
+    config: &BuildConfig,
+    global_success_rate: Option<f64>,
+    global_mean_score: Option<f64>,
+    counters: &mut FinalizeCounters,
+) -> Option<Vec<PriorAction>> {
+    counters.candidates_before_filtering += actions.len() as u64;
+
+    // Explicit classify-loop rather than three chained `.filter()` calls:
+    // behaviorally identical (a chained filter already short-circuits per
+    // item at the first failing predicate), but this lets each dropped
+    // candidate be counted against the specific threshold that rejected it.
+    let mut kept: Vec<(String, ActionStats)> = Vec::new();
+    for (action, stat) in actions {
+        if stat.count < config.min_count {
+            counters.candidates_dropped_by_min_count += 1;
+            continue;
+        }
+        if stat.weighted_count < config.min_weighted_count {
+            counters.candidates_dropped_by_min_weighted_count += 1;
+            continue;
+        }
+        if action_confidence(&stat, config) < config.min_confidence {
+            counters.candidates_dropped_by_min_confidence += 1;
+            continue;
+        }
+        kept.push((action, stat));
+    }
+    if kept.is_empty() {
+        return None;
+    }
+
+    let raw_scores: Vec<f64> = kept
+        .iter()
+        .map(|(_, stat)| {
+            let smoothed_success = global_success_rate.map(|global| {
+                shrink_toward(
+                    stat.weighted_successes,
+                    stat.weighted_trials,
+                    config.smoothing_alpha,
+                    global,
+                )
+            });
+            let smoothed_score = global_mean_score.map(|global| {
+                shrink_toward(
+                    stat.weighted_score_sum,
+                    stat.weighted_score_count,
+                    config.smoothing_alpha,
+                    global,
+                )
+            });
+            raw_score(
+                stat.weighted_count,
+                smoothed_success,
+                smoothed_score,
+                config,
+            )
+        })
+        .collect();
+
+    let priors = normalize(&raw_scores);
+
+    let mut actions_out: Vec<PriorAction> = kept
+        .into_iter()
+        .zip(priors)
+        .map(|((action, stat), prior)| PriorAction {
+            action,
+            count: stat.count,
+            weighted_count: stat.weighted_count,
+            success_rate: ratio(stat.weighted_successes, stat.weighted_trials),
+            mean_score: ratio(stat.weighted_score_sum, stat.weighted_score_count),
+            prior,
+            confidence: action_confidence(&stat, config),
+        })
+        .collect();
+
+    if let Some(max_actions) = config.max_actions_per_state {
+        actions_out.sort_by(|a, b| {
+            b.prior
+                .partial_cmp(&a.prior)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| a.action.cmp(&b.action))
+        });
+        if actions_out.len() > max_actions {
+            counters.candidates_dropped_by_max_actions_per_state +=
+                (actions_out.len() - max_actions) as u64;
+        }
+        actions_out.truncate(max_actions);
+    }
+
+    Some(actions_out)
 }
 
 /// Aggregates observations into a [`PriorBook`], applying filters,
@@ -437,7 +612,7 @@ pub fn build_prior_book(observations: &[Observation], config: &BuildConfig) -> R
 
     let mut acc = PriorAccumulator::new(config)?;
     for obs in observations {
-        acc.observe(obs);
+        acc.observe(obs)?;
     }
     let book = acc.finish();
 
@@ -1247,7 +1422,7 @@ mod tests {
 
         let mut acc = PriorAccumulator::new(&config).unwrap();
         for o in &observations {
-            acc.observe(o);
+            acc.observe(o).unwrap();
         }
         let (book, stats) = acc.finish_with_stats();
 
@@ -1334,7 +1509,7 @@ mod tests {
         let config = decay_config(10.0, 1_000_000);
         let mut acc = PriorAccumulator::new(&config).unwrap();
         for o in &observations {
-            acc.observe(o);
+            acc.observe(o).unwrap();
         }
         let (book, stats) = acc.finish_with_stats();
         assert_eq!(stats.observations_kept, 1);
@@ -1357,7 +1532,7 @@ mod tests {
         };
         let mut acc = PriorAccumulator::new(&config).unwrap();
         for o in &observations {
-            acc.observe(o);
+            acc.observe(o).unwrap();
         }
         let (book, stats) = acc.finish_with_stats();
         assert_eq!(stats.observations_dropped_by_missing_timestamp, 1);
@@ -1571,5 +1746,241 @@ mod tests {
         assert_ne!(default_fp, decay_fp);
         assert_ne!(default_fp, source_fp);
         assert_ne!(decay_fp, source_fp);
+    }
+
+    fn ctx_obs(sequence_id: &str, step: u32, action: &str) -> Observation {
+        obs(
+            sequence_id,
+            step,
+            "s",
+            action,
+            Outcome::Success,
+            None,
+            1.0,
+            vec![],
+        )
+    }
+
+    #[test]
+    fn context_tracker_order_zero_is_always_a_noop() {
+        let mut tracker = SequenceContextTracker::new(0);
+        assert_eq!(
+            tracker.advance(&ctx_obs("g1", 0, "a")).unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            tracker.advance(&ctx_obs("g1", 1, "b")).unwrap(),
+            Vec::<String>::new()
+        );
+        // Even a non-monotonic step never errors when order is 0.
+        assert_eq!(
+            tracker.advance(&ctx_obs("g1", 0, "c")).unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn context_tracker_builds_up_window_within_a_sequence() {
+        let mut tracker = SequenceContextTracker::new(3);
+        assert_eq!(
+            tracker.advance(&ctx_obs("g1", 0, "a")).unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(tracker.advance(&ctx_obs("g1", 1, "b")).unwrap(), vec!["a"]);
+        assert_eq!(
+            tracker.advance(&ctx_obs("g1", 2, "c")).unwrap(),
+            vec!["a", "b"]
+        );
+        assert_eq!(
+            tracker.advance(&ctx_obs("g1", 3, "d")).unwrap(),
+            vec!["a", "b", "c"]
+        );
+    }
+
+    #[test]
+    fn context_tracker_window_is_bounded_to_order() {
+        let mut tracker = SequenceContextTracker::new(2);
+        tracker.advance(&ctx_obs("g1", 0, "a")).unwrap();
+        tracker.advance(&ctx_obs("g1", 1, "b")).unwrap();
+        // Window is capped at 2: "a" has already fallen off by now.
+        assert_eq!(
+            tracker.advance(&ctx_obs("g1", 2, "c")).unwrap(),
+            vec!["a", "b"]
+        );
+        assert_eq!(
+            tracker.advance(&ctx_obs("g1", 3, "d")).unwrap(),
+            vec!["b", "c"]
+        );
+    }
+
+    #[test]
+    fn context_tracker_errors_on_non_monotonic_step_within_same_sequence() {
+        let mut tracker = SequenceContextTracker::new(2);
+        tracker.advance(&ctx_obs("g1", 5, "a")).unwrap();
+        let err = tracker.advance(&ctx_obs("g1", 5, "b")).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::SequenceNotSorted {
+                step: 5,
+                last_step: 5,
+                ..
+            }
+        ));
+        // A step going backward is caught the same way.
+        let mut tracker = SequenceContextTracker::new(2);
+        tracker.advance(&ctx_obs("g1", 5, "a")).unwrap();
+        let err = tracker.advance(&ctx_obs("g1", 3, "b")).unwrap_err();
+        assert!(matches!(err, Error::SequenceNotSorted { .. }));
+    }
+
+    #[test]
+    fn context_tracker_resets_window_on_sequence_change() {
+        let mut tracker = SequenceContextTracker::new(2);
+        tracker.advance(&ctx_obs("g1", 0, "a")).unwrap();
+        tracker.advance(&ctx_obs("g1", 1, "b")).unwrap();
+        // New sequence_id: unconditional reset, no leftover "a"/"b".
+        assert_eq!(
+            tracker.advance(&ctx_obs("g2", 0, "x")).unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
+    /// The proof for the sortedness design: an "A, B, A-resumed" interleave
+    /// must degrade to a safe reset, never to a corrupted window that
+    /// silently mixes two sequences' actions together.
+    #[test]
+    fn context_tracker_a_b_a_resumed_degrades_safely_not_corrupted() {
+        let mut tracker = SequenceContextTracker::new(2);
+        tracker.advance(&ctx_obs("A", 0, "a0")).unwrap();
+        tracker.advance(&ctx_obs("A", 1, "a1")).unwrap();
+        tracker.advance(&ctx_obs("B", 0, "b0")).unwrap();
+        // "A" resumes with a step number that would have been valid forward
+        // progress for A's own numbering -- must not be treated as if A's
+        // window survived the B interruption.
+        let window = tracker.advance(&ctx_obs("A", 2, "a2")).unwrap();
+        assert_eq!(
+            window,
+            Vec::<String>::new(),
+            "resumed A must start from an empty window, not a1/a0"
+        );
+        // Subsequent A steps build up A's own fresh window, uncontaminated by B.
+        let window = tracker.advance(&ctx_obs("A", 3, "a3")).unwrap();
+        assert_eq!(window, vec!["a2"]);
+    }
+
+    #[test]
+    fn context_order_learns_per_context_priors_distinct_from_order_zero() {
+        // Two repeated (context, state) patterns: "x" is always followed by
+        // "A" from state "s", "y" always by "B" -- order-0 alone can't tell
+        // them apart (both actions are equally common from "s"), but order-1
+        // context can.
+        let observations = vec![
+            obs("g1", 0, "s0", "x", Outcome::Success, None, 1.0, vec![]),
+            obs("g1", 1, "s", "A", Outcome::Success, None, 1.0, vec![]),
+            obs("g2", 0, "s0", "y", Outcome::Success, None, 1.0, vec![]),
+            obs("g2", 1, "s", "B", Outcome::Success, None, 1.0, vec![]),
+            obs("g3", 0, "s0", "x", Outcome::Success, None, 1.0, vec![]),
+            obs("g3", 1, "s", "A", Outcome::Success, None, 1.0, vec![]),
+            obs("g4", 0, "s0", "y", Outcome::Success, None, 1.0, vec![]),
+            obs("g4", 1, "s", "B", Outcome::Success, None, 1.0, vec![]),
+        ];
+        let config = BuildConfig {
+            context_order: 1,
+            ..Default::default()
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+
+        // Order-0: both A and B tied at state "s".
+        let order0 = book.query("s", None);
+        assert_eq!(order0.len(), 2);
+
+        // After "x", context-aware query narrows to just "A".
+        let after_x = book.query_with_context("s", &["x".to_string()], None);
+        assert_eq!(after_x.matched_order, 1);
+        assert_eq!(after_x.candidates.len(), 1);
+        assert_eq!(after_x.candidates[0].action, "A");
+
+        // After "y", just "B".
+        let after_y = book.query_with_context("s", &["y".to_string()], None);
+        assert_eq!(after_y.matched_order, 1);
+        assert_eq!(after_y.candidates[0].action, "B");
+
+        // A never-seen context backs off to order-0 (both A and B).
+        let after_unseen = book.query_with_context("s", &["z".to_string()], None);
+        assert_eq!(after_unseen.matched_order, 0);
+        assert_eq!(after_unseen.candidates.len(), 2);
+    }
+
+    #[test]
+    fn context_order_shorter_than_a_sequence_degrades_without_padding() {
+        // context_order=3, but every sequence is only 2 steps long -- no
+        // order-2 or order-3 entries should ever be learned, only order-1.
+        let observations = vec![
+            obs("g1", 0, "s0", "x", Outcome::Success, None, 1.0, vec![]),
+            obs("g1", 1, "s", "A", Outcome::Success, None, 1.0, vec![]),
+            obs("g2", 0, "s0", "x", Outcome::Success, None, 1.0, vec![]),
+            obs("g2", 1, "s", "A", Outcome::Success, None, 1.0, vec![]),
+        ];
+        let config = BuildConfig {
+            context_order: 3,
+            ..Default::default()
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+
+        assert!(
+            book.context_entries
+                .keys()
+                .all(|(context, _)| context.len() == 1),
+            "no context longer than 1 should exist: {:?}",
+            book.context_entries.keys().collect::<Vec<_>>()
+        );
+        let matched = book.query_with_context("s", &["x".to_string()], None);
+        assert_eq!(matched.matched_order, 1);
+    }
+
+    #[test]
+    fn context_order_never_changes_order_zero_output() {
+        // Order-0 entries -- and the global smoothing target behind them --
+        // must be byte-identical regardless of context_order: the global
+        // target is counted exactly once per observation (in the order-0
+        // pass), never once per context level too.
+        let observations = vec![
+            obs("g1", 0, "s0", "x", Outcome::Success, Some(0.9), 1.0, vec![]),
+            obs("g1", 1, "s", "A", Outcome::Draw, Some(0.5), 1.0, vec![]),
+            obs("g2", 0, "s0", "y", Outcome::Failure, Some(0.1), 1.0, vec![]),
+            obs("g2", 1, "s", "B", Outcome::Success, Some(0.8), 1.0, vec![]),
+            obs("g3", 0, "s0", "x", Outcome::Success, None, 1.0, vec![]),
+            obs("g3", 1, "s", "A", Outcome::Success, None, 1.0, vec![]),
+        ];
+        let book_order0 = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        let book_order2 = build_prior_book(
+            &observations,
+            &BuildConfig {
+                context_order: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Compare via entries_sorted(), not the raw `entries` map: the Vec
+        // stored per state has no guaranteed internal order (only
+        // entries_sorted()/query() sort it), so a raw comparison can spuriously
+        // fail on ordering alone even when the logical content is identical.
+        assert_eq!(book_order0.entries_sorted(), book_order2.entries_sorted());
+        assert!(!book_order2.context_entries.is_empty());
+    }
+
+    #[test]
+    fn sequence_not_sorted_is_a_hard_error_from_the_eager_build_path() {
+        let observations = vec![
+            obs("g1", 0, "s", "a", Outcome::Success, None, 1.0, vec![]),
+            obs("g1", 0, "s", "b", Outcome::Success, None, 1.0, vec![]), // step doesn't increase
+        ];
+        let config = BuildConfig {
+            context_order: 1,
+            ..Default::default()
+        };
+        let err = build_prior_book(&observations, &config).unwrap_err();
+        assert!(matches!(err, Error::SequenceNotSorted { .. }));
     }
 }

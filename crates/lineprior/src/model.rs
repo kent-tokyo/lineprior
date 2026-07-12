@@ -171,6 +171,15 @@ pub struct BuildConfig {
     /// Multiplier used for an observation whose `source` is `None` or not a
     /// key in `source_weights`.
     pub default_source_weight: f64,
+    /// How many of a sequence's own most-recent actions to additionally
+    /// learn `(context, state) -> action` priors for, on top of the
+    /// always-present order-0 `state -> action` prior. `0` (the default)
+    /// disables context entirely -- every query then behaves exactly as
+    /// before. Derived automatically from `sequence_id`/`step`, so input
+    /// must be grouped by `sequence_id` with strictly increasing `step`
+    /// within each group whenever this is nonzero (see
+    /// [`crate::Error::SequenceNotSorted`]).
+    pub context_order: usize,
 }
 
 impl Default for BuildConfig {
@@ -195,6 +204,7 @@ impl Default for BuildConfig {
             missing_timestamp_policy: MissingTimestampPolicy::KeepBaseWeight,
             source_weights: std::collections::BTreeMap::new(),
             default_source_weight: DEFAULT_SOURCE_WEIGHT,
+            context_order: 0,
         }
     }
 }
@@ -213,17 +223,61 @@ pub struct PriorAction {
     pub confidence: f64,
 }
 
+/// Maps an observation's outcome to the fractional credit it earns toward a
+/// success rate: a win counts fully, a draw counts for `draw_value` (see
+/// `PriorAction::success_rate`'s doc comment above), and a loss or unrecorded
+/// outcome counts for nothing. Shared by `build`'s per-action success rate and
+/// `eval`'s outcome-weighted metrics so both agree on what a draw is worth.
+pub(crate) fn outcome_credit(outcome: Outcome, draw_value: f64) -> f64 {
+    match outcome {
+        Outcome::Success => 1.0,
+        Outcome::Draw => draw_value,
+        Outcome::Failure | Outcome::Unknown => 0.0,
+    }
+}
+
 /// One line of prior-book output: a state and its ranked actions.
+///
+/// `context` is empty for an order-0 entry (the vast majority today) and is
+/// omitted from JSON entirely in that case, so a book built without
+/// `BuildConfig::context_order` serializes identically to before this field
+/// existed. When non-empty, it's a sequence's own recent-action window
+/// (oldest first) that this entry's ranking was learned for, on top of
+/// `state`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PriorEntry {
     pub state: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<String>,
     pub actions: Vec<PriorAction>,
 }
 
 /// In-memory prior book: state -> ranked candidate actions.
+///
+/// `entries` (order-0, `state -> actions`) and `context_entries` (order
+/// `1..=context_order`, `(context, state) -> actions`) are deliberately
+/// separate maps rather than one unified `(context, state)`-keyed map:
+/// they answer different questions -- "what's been taken from this state,
+/// ever" (unconditional) vs. "what followed this exact recent-action
+/// window, from this state" (conditional) -- and keeping `entries`
+/// untouched means every existing direct-access caller (tests, `report.rs`,
+/// the CLI's `summary`/`build` commands) needs no changes.
 #[derive(Debug, Clone, Default)]
 pub struct PriorBook {
     pub entries: HashMap<String, Vec<PriorAction>>,
+    pub context_entries: HashMap<(Vec<String>, String), Vec<PriorAction>>,
+}
+
+/// Result of [`PriorBook::query_with_context`]: which depth of context
+/// backoff actually landed on `candidates`, alongside the candidates
+/// themselves -- the same "how much evidence backs this" transparency
+/// `confidence` already gives per-action, but at the query level. `0` means
+/// the order-0 (plain state) rung, identical to what [`PriorBook::query`]
+/// alone would have returned.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ContextQueryResult {
+    pub matched_order: usize,
+    pub candidates: Vec<PriorAction>,
 }
 
 /// Deterministic action ordering: descending prior, tie-broken by action
@@ -238,9 +292,9 @@ fn sort_actions(actions: &mut [PriorAction]) {
 }
 
 impl PriorBook {
-    /// All entries, states sorted lexicographically and each state's
-    /// actions sorted by descending prior. This is the canonical order
-    /// used for JSONL output and for query results.
+    /// All order-0 entries, states sorted lexicographically and each
+    /// state's actions sorted by descending prior. This is the canonical
+    /// order used for JSONL output and for query results.
     pub fn entries_sorted(&self) -> Vec<PriorEntry> {
         let mut states: Vec<&String> = self.entries.keys().collect();
         states.sort();
@@ -251,6 +305,34 @@ impl PriorBook {
                 sort_actions(&mut actions);
                 PriorEntry {
                     state: state.clone(),
+                    context: Vec::new(),
+                    actions,
+                }
+            })
+            .collect()
+    }
+
+    /// All context (order `1..=context_order`) entries, sorted by ascending
+    /// context length, then context lexicographically, then state
+    /// lexicographically -- the determinism contract for JSONL output,
+    /// mirroring [`Self::entries_sorted`]'s for order-0. Empty whenever
+    /// `BuildConfig::context_order == 0`.
+    pub fn context_entries_sorted(&self) -> Vec<PriorEntry> {
+        let mut keys: Vec<&(Vec<String>, String)> = self.context_entries.keys().collect();
+        keys.sort_by(|(a_ctx, a_state), (b_ctx, b_state)| {
+            a_ctx
+                .len()
+                .cmp(&b_ctx.len())
+                .then_with(|| a_ctx.cmp(b_ctx))
+                .then_with(|| a_state.cmp(b_state))
+        });
+        keys.into_iter()
+            .map(|key @ (context, state)| {
+                let mut actions = self.context_entries[key].clone();
+                sort_actions(&mut actions);
+                PriorEntry {
+                    state: state.clone(),
+                    context: context.clone(),
                     actions,
                 }
             })
@@ -269,6 +351,42 @@ impl PriorBook {
             actions.truncate(k);
         }
         actions
+    }
+
+    /// Context-aware candidates for `state`, given `recent_actions` (a
+    /// sequence's own recent-action window, oldest first -- see
+    /// [`crate::build::SequenceContextTracker`]). Tries the longest
+    /// available suffix of `recent_actions` against `context_entries` first
+    /// ("stupid backoff"), shrinking by one action on each miss, down to
+    /// [`Self::query`] (order-0) as the final rung -- which is literally
+    /// reused here as the base case, not reimplemented. A book with no
+    /// `context_entries` at all (e.g. built with `context_order == 0`)
+    /// always resolves immediately to the order-0 result, so this is a
+    /// drop-in superset of `query` when no context happens to match.
+    pub fn query_with_context(
+        &self,
+        state: &str,
+        recent_actions: &[String],
+        top_k: Option<usize>,
+    ) -> ContextQueryResult {
+        for len in (1..=recent_actions.len()).rev() {
+            let context = recent_actions[recent_actions.len() - len..].to_vec();
+            if let Some(actions) = self.context_entries.get(&(context, state.to_string())) {
+                let mut actions = actions.clone();
+                sort_actions(&mut actions);
+                if let Some(k) = top_k {
+                    actions.truncate(k);
+                }
+                return ContextQueryResult {
+                    matched_order: len,
+                    candidates: actions,
+                };
+            }
+        }
+        ContextQueryResult {
+            matched_order: 0,
+            candidates: self.query(state, top_k),
+        }
     }
 
     /// Flat, deterministically-ordered `(state, action)` candidates across
@@ -314,7 +432,10 @@ mod tests {
             vec![action("y", 3, 0.6, 0.3), action("z", 1, 0.4, 0.1)],
         );
         entries.insert("s1".to_string(), vec![action("x", 5, 1.0, 0.5)]);
-        let book = PriorBook { entries };
+        let book = PriorBook {
+            entries,
+            ..Default::default()
+        };
 
         let expected: Vec<(String, PriorAction)> = book
             .entries_sorted()

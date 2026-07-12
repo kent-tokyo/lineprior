@@ -17,6 +17,14 @@ pub struct QueryArgs {
     /// Return at most this many candidates.
     #[arg(long)]
     top_k: Option<usize>,
+
+    /// A sequence's own recent-action window, oldest first (comma-separated).
+    /// When set, queries via context-aware backoff instead of the plain
+    /// order-0 lookup -- only useful against a book built with
+    /// `--context-order` > 0; otherwise this always resolves to the same
+    /// order-0 result plain `query` would give.
+    #[arg(long, value_delimiter = ',')]
+    recent_actions: Vec<String>,
 }
 
 pub fn run(args: QueryArgs) -> Result<ExitCode> {
@@ -38,8 +46,13 @@ pub fn run(args: QueryArgs) -> Result<ExitCode> {
 
     // An unseen state is not an error: lineprior never invents actions,
     // so an empty result here is normal, successful output.
-    for candidate in book.query(&args.state, args.top_k) {
-        println!("{}", serde_json::to_string(&candidate)?);
+    if args.recent_actions.is_empty() {
+        for candidate in book.query(&args.state, args.top_k) {
+            println!("{}", serde_json::to_string(&candidate)?);
+        }
+    } else {
+        let result = book.query_with_context(&args.state, &args.recent_actions, args.top_k);
+        println!("{}", serde_json::to_string(&result)?);
     }
     Ok(ExitCode::from(0))
 }
