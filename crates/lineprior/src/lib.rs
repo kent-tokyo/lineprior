@@ -27,7 +27,7 @@ pub use input::{BuildOutput, ParseOutcome, build_prior_book_from_reader, parse_j
 pub use model::{
     BuildConfig, ConfidenceMode, DEFAULT_CONFIDENCE_K, DEFAULT_CONFIDENCE_Z, DEFAULT_DRAW_VALUE,
     DEFAULT_SOURCE_WEIGHT, MissingTimestampPolicy, Observation, Outcome, PriorAction, PriorBook,
-    PriorEntry,
+    PriorEntry, SequencePriorScore, StepScore,
 };
 pub use query::{
     build_config_fingerprint, load_prior_book, load_prior_book_with_config, save_prior_book,

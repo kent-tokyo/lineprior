@@ -331,6 +331,49 @@ Always check `context_top1_hit_rate` against the plain `top1_hit_rate` baseline 
 context-aware prior; a domain where `state` already encodes recent history (e.g. a full board
 position) may see little or no lift, and that's a legitimate, informative result — not a bug.
 
+## Sequence-level priors
+
+`PriorBook::score_sequence(path: &[(String, String)]) -> SequencePriorScore` scores a *caller-
+supplied* candidate multi-step plan — how much historical precedent backs each step, and the plan
+as a whole — by walking [context-aware backoff](#variable-order-context) at each step:
+
+```rust
+let path = vec![
+    ("state_a".to_string(), "action_x".to_string()),
+    ("state_b".to_string(), "action_y".to_string()),
+];
+let score = book.score_sequence(&path);
+// score.steps[i]: { state, action, matched_order, found, prior, confidence }
+// score.min_confidence: the weakest-linked step's confidence, or None if none matched
+// score.unseen_steps: how many steps had no historical precedent at all
+```
+
+Each step's context is the *plan's own* prior steps' actions (oldest first, mirroring how
+`--context-order` derives context while building) — not something the caller passes separately.
+`lineprior` has no model of environment dynamics: given `(state, action)` it doesn't know what
+state results, so the caller (who owns that mapping — their own planner or simulator) must supply
+both state and action at every step.
+
+**Aggregation is `min`, not an average.** A chain is only as strong as its weakest link;
+averaging would let one very-weakly-supported step hide behind stronger ones, which cuts against
+"prior, not oracle" transparency. `min_confidence` is `None` (not `0.0`) when every step is
+unseen — the same "absent data isn't a bad score" rule used elsewhere. Check `steps` directly,
+not just the aggregate, when `unseen_steps > 0`.
+
+**Backoff-shadowing caveat.** Each step reuses `query_with_context` verbatim: whichever context
+depth resolves is the *only* depth searched for the caller's action. A sparse deep-context match
+on *other* actions can shadow abundant order-0 support for the action actually asked about,
+reading as `found: false` even though the action is well-supported at a shallower depth. This is
+the safe direction (under-reporting support, never over-reporting) and matches what
+`query_with_context` itself would have suggested to a caller asking "what should I do here" — not
+a bug, but worth knowing before treating `found: false` as "truly never seen."
+
+**Deliberately library-only.** No CLI subcommand and no `eval`/`tune` integration in this round —
+a `(state, action)` path doesn't fit a comma-separated CLI flag, and scoring held-out sequences
+against their outcome would require inventing a "sequence's terminal outcome" concept the core
+model deliberately doesn't have an opinion on (see the [credit-assignment
+caveat](#evaluating-a-prior) above). Both are natural upgrade paths if real demand shows up.
+
 ## Tuning: choosing a BuildConfig automatically
 
 `eval` scores one config at a time; `tune` grid-searches many and picks the best one, using the

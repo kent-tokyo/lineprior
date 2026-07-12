@@ -280,6 +280,42 @@ pub struct ContextQueryResult {
     pub candidates: Vec<PriorAction>,
 }
 
+/// Per-step result of [`PriorBook::score_sequence`]: whether/how well this
+/// step of a caller-supplied candidate path is backed by historical data.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct StepScore {
+    pub state: String,
+    pub action: String,
+    /// Context depth that actually answered this step's lookup (mirrors
+    /// [`ContextQueryResult::matched_order`]). `0` = order-0 / no context
+    /// match.
+    pub matched_order: usize,
+    /// Whether `action` appears among the candidates returned at
+    /// `matched_order` -- `false` means no historical precedent at all for
+    /// this step, at any depth including order-0.
+    pub found: bool,
+    pub prior: Option<f64>,
+    pub confidence: Option<f64>,
+}
+
+/// Result of [`PriorBook::score_sequence`]: an aggregate read on how much
+/// historical precedent supports a whole caller-supplied candidate path.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SequencePriorScore {
+    pub steps: Vec<StepScore>,
+    /// `min(confidence)` over steps where `found`, `None` if every step is
+    /// unseen. A chain is only as strong as its weakest link -- an average
+    /// would let one very-weakly-supported step hide behind stronger ones,
+    /// which cuts against "prior, not oracle" transparency. `None` (not
+    /// `0.0`) follows the same "absent data isn't a bad score" convention
+    /// used elsewhere for missing data.
+    pub min_confidence: Option<f64>,
+    /// Count of steps where `action` did not appear among candidates at
+    /// any depth. Nonzero means `min_confidence` alone isn't the whole
+    /// story -- callers should inspect `steps` directly.
+    pub unseen_steps: usize,
+}
+
 /// Deterministic action ordering: descending prior, tie-broken by action
 /// string. Shared by build (emit) and query so both agree on ranking.
 fn sort_actions(actions: &mut [PriorAction]) {
@@ -389,6 +425,60 @@ impl PriorBook {
         }
     }
 
+    /// Scores a caller-supplied candidate action plan step by step, walking
+    /// [`Self::query_with_context`]'s backoff at each step and combining
+    /// the results.
+    ///
+    /// `lineprior` has no model of environment dynamics -- given
+    /// `(state, action)` it doesn't know what state results -- so the
+    /// caller (who owns that mapping, e.g. their own planner/simulator)
+    /// must supply both state and action at every step. `path` is
+    /// `(state, action)` pairs in the plan's own order.
+    ///
+    /// The context fed to each step is exactly the actions from prior
+    /// steps in THIS candidate path (oldest first, current step's own
+    /// action excluded), mirroring [`crate::build::SequenceContextTracker`]'s
+    /// build-time windowing -- so lookups match what `context_entries`
+    /// actually stored. Step 0 always queries with an empty context.
+    ///
+    /// Always passes `top_k: None`: truncating would make a real-but-low-
+    /// ranked action look unseen, hiding exactly the information this
+    /// method exists to surface.
+    ///
+    /// An empty path returns an empty [`SequencePriorScore`], not an error.
+    pub fn score_sequence(&self, path: &[(String, String)]) -> SequencePriorScore {
+        let mut steps = Vec::with_capacity(path.len());
+        let mut context: Vec<String> = Vec::new();
+
+        for (state, action) in path {
+            let result = self.query_with_context(state, &context, None);
+            let matched = result.candidates.iter().find(|c| &c.action == action);
+            steps.push(StepScore {
+                state: state.clone(),
+                action: action.clone(),
+                matched_order: result.matched_order,
+                found: matched.is_some(),
+                prior: matched.map(|c| c.prior),
+                confidence: matched.map(|c| c.confidence),
+            });
+            context.push(action.clone());
+        }
+
+        let unseen_steps = steps.iter().filter(|s| !s.found).count();
+        let min_confidence = steps
+            .iter()
+            .filter_map(|s| s.confidence)
+            .fold(None, |acc: Option<f64>, c| {
+                Some(acc.map_or(c, |a| a.min(c)))
+            });
+
+        SequencePriorScore {
+            steps,
+            min_confidence,
+            unseen_steps,
+        }
+    }
+
     /// Flat, deterministically-ordered `(state, action)` candidates across
     /// the whole book -- for callers that want to filter or sample raw
     /// candidates directly (e.g. building a domain-specific "opening
@@ -454,5 +544,186 @@ mod tests {
             book.candidates()[0],
             ("s1".to_string(), action("x", 5, 1.0, 0.5))
         );
+    }
+
+    #[test]
+    fn score_sequence_all_steps_found_reports_min_confidence_and_zero_unseen() {
+        let mut entries = HashMap::new();
+        entries.insert("s0".to_string(), vec![action("a0", 5, 0.9, 0.8)]);
+        let mut context_entries = HashMap::new();
+        context_entries.insert(
+            (vec!["a0".to_string()], "s1".to_string()),
+            vec![action("a1", 3, 0.7, 0.5)],
+        );
+        let book = PriorBook {
+            entries,
+            context_entries,
+        };
+
+        let result = book.score_sequence(&[
+            ("s0".to_string(), "a0".to_string()),
+            ("s1".to_string(), "a1".to_string()),
+        ]);
+
+        assert_eq!(result.unseen_steps, 0);
+        assert_eq!(result.min_confidence, Some(0.5));
+        assert_eq!(result.steps[0].matched_order, 0);
+        assert!(result.steps[0].found);
+        assert_eq!(result.steps[0].confidence, Some(0.8));
+        assert_eq!(result.steps[1].matched_order, 1);
+        assert!(result.steps[1].found);
+        assert_eq!(result.steps[1].confidence, Some(0.5));
+    }
+
+    #[test]
+    fn score_sequence_one_unseen_step_is_reflected_in_unseen_steps_and_excluded_from_min_confidence()
+     {
+        let mut entries = HashMap::new();
+        entries.insert("s0".to_string(), vec![action("a0", 5, 0.9, 0.8)]);
+        let book = PriorBook {
+            entries,
+            ..Default::default()
+        };
+
+        let result = book.score_sequence(&[
+            ("s0".to_string(), "a0".to_string()),
+            ("s1".to_string(), "a1".to_string()),
+        ]);
+
+        assert_eq!(result.unseen_steps, 1);
+        assert!(!result.steps[1].found);
+        assert_eq!(result.steps[1].prior, None);
+        assert_eq!(result.steps[1].confidence, None);
+        // Only the found step's confidence counts toward the minimum.
+        assert_eq!(result.min_confidence, Some(0.8));
+    }
+
+    #[test]
+    fn score_sequence_step_zero_always_uses_empty_context() {
+        // A context entry exists for ("x" -> "s0"), but step 0 has no
+        // prior steps of its own, so it must never match it.
+        let mut context_entries = HashMap::new();
+        context_entries.insert(
+            (vec!["x".to_string()], "s0".to_string()),
+            vec![action("a0", 1, 0.5, 0.5)],
+        );
+        let book = PriorBook {
+            context_entries,
+            ..Default::default()
+        };
+
+        let result = book.score_sequence(&[("s0".to_string(), "a0".to_string())]);
+
+        assert_eq!(result.steps[0].matched_order, 0);
+        assert!(!result.steps[0].found);
+    }
+
+    #[test]
+    fn score_sequence_context_grows_from_own_earlier_steps_not_caller_supplied_history() {
+        // Order-0 entries for "sb" hold a different action ("az") than the
+        // context entry keyed on the prior step's own action ("ax").
+        let mut entries = HashMap::new();
+        entries.insert("sb".to_string(), vec![action("az", 1, 0.5, 0.5)]);
+        let mut context_entries = HashMap::new();
+        context_entries.insert(
+            (vec!["ax".to_string()], "sb".to_string()),
+            vec![action("ay", 4, 0.9, 0.9)],
+        );
+        let book = PriorBook {
+            entries,
+            context_entries,
+        };
+
+        let result = book.score_sequence(&[
+            ("sa".to_string(), "ax".to_string()),
+            ("sb".to_string(), "ay".to_string()),
+        ]);
+
+        assert_eq!(result.steps[1].matched_order, 1);
+        assert!(result.steps[1].found);
+    }
+
+    #[test]
+    fn score_sequence_backoff_pinning_deep_sparse_context_can_shadow_order_zero_support() {
+        // state_b has strong order-0 support for action_z, but the deeper
+        // context rung reached via "action_x" only holds other actions.
+        // query_with_context resolves to the deepest rung with ANY data,
+        // so action_z reads as unseen here -- pinned as deliberate,
+        // documented behavior, not a bug.
+        let mut entries = HashMap::new();
+        entries.insert(
+            "state_b".to_string(),
+            vec![action("action_z", 10, 0.9, 0.9)],
+        );
+        let mut context_entries = HashMap::new();
+        context_entries.insert(
+            (vec!["action_x".to_string()], "state_b".to_string()),
+            vec![action("action_other", 1, 0.3, 0.2)],
+        );
+        let book = PriorBook {
+            entries,
+            context_entries,
+        };
+
+        let result = book.score_sequence(&[
+            ("state_a".to_string(), "action_x".to_string()),
+            ("state_b".to_string(), "action_z".to_string()),
+        ]);
+
+        assert_eq!(result.steps[1].matched_order, 1);
+        assert!(!result.steps[1].found);
+    }
+
+    #[test]
+    fn score_sequence_ignores_top_k_style_truncation_finds_low_ranked_action() {
+        let mut entries = HashMap::new();
+        entries.insert(
+            "s0".to_string(),
+            vec![
+                action("a1", 9, 0.9, 0.9),
+                action("a2", 8, 0.8, 0.8),
+                action("a3", 7, 0.7, 0.7),
+                action("a4", 6, 0.6, 0.6),
+                action("a_target", 1, 0.1, 0.1),
+            ],
+        );
+        let book = PriorBook {
+            entries,
+            ..Default::default()
+        };
+
+        let result = book.score_sequence(&[("s0".to_string(), "a_target".to_string())]);
+
+        assert!(result.steps[0].found);
+        assert_eq!(result.steps[0].confidence, Some(0.1));
+    }
+
+    #[test]
+    fn score_sequence_empty_path_returns_empty_score() {
+        let book = PriorBook::default();
+
+        let result = book.score_sequence(&[]);
+
+        assert_eq!(
+            result,
+            SequencePriorScore {
+                steps: vec![],
+                min_confidence: None,
+                unseen_steps: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn score_sequence_all_steps_unseen_min_confidence_is_none() {
+        let book = PriorBook::default();
+
+        let result = book.score_sequence(&[
+            ("s0".to_string(), "a0".to_string()),
+            ("s1".to_string(), "a1".to_string()),
+        ]);
+
+        assert_eq!(result.unseen_steps, 2);
+        assert_eq!(result.min_confidence, None);
     }
 }

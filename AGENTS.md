@@ -845,7 +845,7 @@ CSA games
 
 1. Prefix-tree representation.
 2. ~~Variable-order context fallback.~~ Done -- see README's "Variable-order context" (`BuildConfig::context_order`, `PriorBook::query_with_context`, `lineprior query --recent-actions`). Implemented as a flat `(context, state) -> action` map (`PriorBook::context_entries`), not a prefix tree (item 1 above) -- deliberately deferred since a flat map already gives O(1) lookup per backoff rung and the memory/complexity tradeoff of a real trie wasn't justified by anything measured yet.
-3. Sequence-level priors.
+3. ~~Sequence-level priors.~~ Done -- see README's "Sequence-level priors" (`PriorBook::score_sequence`). Implemented as query-time path scoring over an already-built book (walks `query_with_context` per step, no new storage or `BuildConfig` field) -- a build-time alternative, crediting each step by its sequence's own terminal outcome, was independently designed and deliberately deferred: it would weaken the streaming-memory guarantee (bounded by longest buffered sequence, not unique pairs) for a need nobody has evidenced yet.
 4. Macro-action suggestions.
 5. ~~Confidence intervals.~~ Done -- see `## Confidence` (`ConfidenceMode::WilsonLowerBound`/`Hybrid`).
 6. ~~Time-decay weighting.~~ Done -- see `## Time Decay and Source Reliability` (`BuildConfig::time_decay_half_life_days`). Per-observation source-reliability weighting (`source_weights`) shipped alongside it; merging separately-built prior books by source is still open.
