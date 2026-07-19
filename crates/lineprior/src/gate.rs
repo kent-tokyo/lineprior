@@ -150,8 +150,13 @@ pub struct GateCalibrationBin {
 #[derive(Debug, Clone, Serialize)]
 pub struct GateFitReport {
     pub selected_lambda: f64,
-    /// Actual fold count used (equals `GateModelConfig::cv_folds`, or the
-    /// number of distinct groups under the leave-one-group-out fallback).
+    /// Number of outer folds the nested cross-validation pass actually
+    /// evaluated (non-empty on both the training and validation side) --
+    /// measured from [`nested_cross_validate`]'s own fold loop, not assumed
+    /// from the requested `min(GateModelConfig::cv_folds, num_groups)`. The
+    /// two agree whenever `num_groups >= cv_folds`, since balanced
+    /// GroupKFold (see [`assign_folds`]) guarantees every requested fold is
+    /// non-empty in that case.
     pub cv_folds_used: usize,
     pub num_observations: usize,
     pub num_groups: usize,
@@ -248,6 +253,9 @@ pub struct GateModel {
     /// drift apart.
     m: Vec<Vec<f64>>,
     sigma2: f64,
+    /// `1.0 / n_eff` from the same full-data refit `m`/`sigma2` came from --
+    /// see [`RidgeFit::intercept_variance_factor`].
+    intercept_variance_factor: f64,
     interval_z: f64,
 }
 
@@ -302,10 +310,12 @@ impl GateModel {
     /// Fold assignment (both levels) is by `group_id`, never by individual
     /// observation, so no axis of relatedness the caller encoded into
     /// `group_id` can leak between train and validation (same rationale as
-    /// `eval.rs`'s `sequence_id`-based split). With at least the requested
-    /// fold count's worth of distinct groups: `fnv1a(group_id) % cv_folds`
-    /// (deterministic, same idiom as `eval::is_train`); with fewer, every
-    /// distinct group becomes its own fold (leave-one-group-out). Feature
+    /// `eval.rs`'s `sequence_id`-based split). Uses deterministic balanced
+    /// GroupKFold ([`assign_folds`]): `min(cv_folds, num_groups)` folds,
+    /// each group placed on whichever fold currently holds the least total
+    /// `gate_games_played` -- every fold is guaranteed non-empty whenever
+    /// `num_groups >= cv_folds` (see `assign_folds`'s doc comment for the
+    /// guarantee and its deterministic tie-breaking). Feature
     /// standardization and the ridge fit for a given fold use that fold's
     /// *training* rows only -- the held-out rows are never involved in
     /// choosing their own scale or fit, at either CV level.
@@ -346,7 +356,7 @@ impl GateModel {
             &config.lambda_grid,
         );
 
-        let (weighted_rmse, fold_predictions) = nested_cross_validate(
+        let (folds_used, weighted_rmse, fold_predictions) = nested_cross_validate(
             &all_rows,
             &feature_names,
             &fold_ids,
@@ -375,11 +385,12 @@ impl GateModel {
             coefficients: fit.coefficients,
             m: fit.m,
             sigma2: fit.sigma2,
+            intercept_variance_factor: fit.intercept_variance_factor,
             interval_z: config.interval_z,
         };
         let report = GateFitReport {
             selected_lambda,
-            cv_folds_used: effective_folds,
+            cv_folds_used: folds_used,
             num_observations: observations.len(),
             num_groups,
             weighted_rmse,
@@ -407,7 +418,8 @@ impl GateModel {
         );
 
         let expected_elo = self.intercept + dot(&x, &self.coefficients);
-        let variance = predictive_variance(&self.m, &x, self.sigma2);
+        let variance =
+            predictive_variance(&self.m, &x, self.sigma2, self.intercept_variance_factor);
         let sd = variance.sqrt();
         let probability_positive = probability_positive(expected_elo, variance, sd);
 
@@ -511,38 +523,66 @@ fn distinct_sorted<'a>(ids: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
     ids
 }
 
-/// Assigns each row to a cross-validation fold by its `group_id`. Takes a
-/// slice of references (not owned `GateObservation`s) so the exact same
-/// function serves the full dataset, an outer-CV training subset, and an
-/// inner-CV training subset within that -- one fold-assignment
-/// implementation shared by every level of [`GateModel::fit`]'s nested CV,
-/// so they can't silently disagree on how a group maps to a fold.
+/// Assigns each row to a cross-validation fold by its `group_id`, using
+/// deterministic balanced GroupKFold. Takes a slice of references (not
+/// owned `GateObservation`s) so the exact same function serves the full
+/// dataset, an outer-CV training subset, and an inner-CV training subset
+/// within that -- one fold-assignment implementation shared by every level
+/// of [`GateModel::fit`]'s nested CV, so they can't silently disagree on how
+/// a group maps to a fold.
 ///
-/// With `distinct_groups.len() >= cv_folds`: `fnv1a(group_id) % cv_folds`,
-/// same deterministic-hash idiom as `eval::is_train`. Otherwise: every
-/// distinct group becomes its own fold (leave-one-group-out), assigned by
-/// that group's position in the sorted-distinct list -- a plain hash-mod
-/// wouldn't guarantee one group per bucket at this scale. Returns the
-/// per-row fold id and the number of folds actually in play.
+/// Fold count is `min(cv_folds, num_groups)`. Groups are sorted by total
+/// `gate_games_played` descending (ties broken by `fnv1a(group_id)`, then
+/// `group_id` itself -- both deterministic and independent of input row
+/// order), then placed one at a time onto whichever fold currently holds the
+/// least total weight (ties broken by lowest fold index): a greedy
+/// longest-processing-time-first bin-packing that keeps validation weight
+/// close to balanced across folds. Unlike the previous `fnv1a(group_id) %
+/// cv_folds` hash-mod scheme -- which could collide multiple groups into one
+/// fold and leave another empty, with no guarantee `cv_folds_used` folds
+/// were actually non-empty -- every fold here is guaranteed non-empty
+/// whenever `num_groups >= cv_folds`: every fold starts at weight `0.0`,
+/// every group's weight is `> 0.0` (`gate_games_played` is validated
+/// positive), so the first `min(cv_folds, num_groups)` placements each land
+/// on a still-empty fold before any fold receives a second group. Returns
+/// the per-row fold id and the number of folds actually in play.
 fn assign_folds(rows: &[&GateObservation], cv_folds: usize) -> (Vec<usize>, usize) {
-    let distinct = distinct_sorted(rows.iter().map(|o| o.group_id.as_str()));
-    if distinct.len() >= cv_folds {
-        let folds = rows
-            .iter()
-            .map(|o| (fnv1a(o.group_id.as_bytes()) % cv_folds as u64) as usize)
-            .collect();
-        (folds, cv_folds)
-    } else {
-        let folds = rows
-            .iter()
-            .map(|o| {
-                distinct
-                    .binary_search(&o.group_id.as_str())
-                    .expect("group_id present in its own distinct-groups list")
-            })
-            .collect();
-        (folds, distinct.len())
+    let mut group_weight: BTreeMap<&str, f64> = BTreeMap::new();
+    for o in rows {
+        *group_weight.entry(o.group_id.as_str()).or_insert(0.0) += o.gate_games_played;
     }
+    let effective_folds = cv_folds.min(group_weight.len());
+
+    let mut groups: Vec<(&str, f64)> = group_weight.into_iter().collect();
+    groups.sort_by(|(a_id, a_weight), (b_id, b_weight)| {
+        b_weight
+            .total_cmp(a_weight)
+            .then_with(|| fnv1a(a_id.as_bytes()).cmp(&fnv1a(b_id.as_bytes())))
+            .then_with(|| a_id.cmp(b_id))
+    });
+
+    let mut fold_load = vec![0.0_f64; effective_folds];
+    let mut group_fold: BTreeMap<&str, usize> = BTreeMap::new();
+    for (group_id, weight) in groups {
+        let fold = fold_load
+            .iter()
+            .enumerate()
+            .min_by(|(ia, wa), (ib, wb)| wa.total_cmp(wb).then_with(|| ia.cmp(ib)))
+            .map(|(idx, _)| idx)
+            .expect("effective_folds > 0: every row contributes at least one distinct group");
+        fold_load[fold] += weight;
+        group_fold.insert(group_id, fold);
+    }
+
+    let fold_ids = rows
+        .iter()
+        .map(|o| {
+            *group_fold
+                .get(o.group_id.as_str())
+                .expect("every row's group_id was inserted into group_fold above")
+        })
+        .collect();
+    (fold_ids, effective_folds)
 }
 
 /// Per-feature weighted mean/std computed from a fixed set of rows (a
@@ -640,6 +680,11 @@ struct RidgeFit {
     /// `(XᵀWX + lambda*I)⁻¹`, reused by [`predictive_variance`].
     m: Vec<Vec<f64>>,
     sigma2: f64,
+    /// `1.0 / n_eff` -- the intercept's own posterior variance factor (the
+    /// intercept is `y`'s weighted mean, a quantity fit from this same
+    /// data, not a known constant), reused by [`predictive_variance`] so
+    /// intercept uncertainty is never silently dropped from a prediction.
+    intercept_variance_factor: f64,
 }
 
 /// Weighted ridge regression via the normal equations: minimizes
@@ -659,13 +704,15 @@ struct RidgeFit {
 /// data's row count instead of its label-reliability units.
 ///
 /// `sigma2` (residual variance) divides the weighted residual sum of squares
-/// by `(n_eff - df)`: `n_eff` reuses [`effective_sample_size`] (Kish's
+/// by `(n_eff - 1 - df)`: `n_eff` reuses [`effective_sample_size`] (Kish's
 /// formula, already used elsewhere in this crate for weighted-data effective
 /// sample size, and invariant to the weight-normalization above) rather than
-/// a raw row count or weight sum, and `df` is the ridge fit's effective
-/// degrees of freedom, `trace((XᵀWX + lambda*I)⁻¹ XᵀWX)`. Clamped to a small
-/// positive floor so a degenerate fold (`n_eff <= df`) can't produce a zero
-/// or negative variance.
+/// a raw row count or weight sum; `df` is the ridge fit's effective degrees
+/// of freedom for the standardized-feature coefficients,
+/// `trace((XᵀWX + lambda*I)⁻¹ XᵀWX)`; and the extra `1` accounts for the
+/// intercept (`y_mean`), which is also estimated from this same data rather
+/// than known exactly. Clamped to a small positive floor so a degenerate
+/// fold (`n_eff <= 1 + df`) can't produce a zero or negative variance.
 fn fit_weighted_ridge(x_std: &[Vec<f64>], y: &[f64], weights: &[f64], lambda: f64) -> RidgeFit {
     let n = x_std.len();
     let p = x_std[0].len();
@@ -706,13 +753,15 @@ fn fit_weighted_ridge(x_std: &[Vec<f64>], y: &[f64], weights: &[f64], lambda: f6
         .zip(a.iter())
         .map(|(m_row, a_row)| dot(m_row, a_row))
         .sum();
-    let sigma2 = rss / (n_eff - df).max(1e-6);
+    let sigma2 = rss / (n_eff - 1.0 - df).max(1e-6);
+    let intercept_variance_factor = 1.0 / n_eff;
 
     RidgeFit {
         intercept: y_mean,
         coefficients,
         m,
         sigma2,
+        intercept_variance_factor,
     }
 }
 
@@ -761,14 +810,30 @@ fn invert_regularized(a: &[Vec<f64>], lambda: f64) -> Vec<Vec<f64>> {
     (0..p).map(|i| aug[i][p..2 * p].to_vec()).collect()
 }
 
-/// Latent-mean predictive variance at `x_std`: `sigma2 * x_std^T M x_std`,
-/// the Bayesian-ridge posterior variance of `x*^T beta` (M = `(XᵀWX +
-/// lambda*I)⁻¹` doubles as the Gaussian-prior posterior covariance up to
-/// `sigma2`). Deliberately excludes the `+1` term a *prediction* interval for
-/// one new noisy gate run would add -- this module reports uncertainty about
-/// the candidate's true strength, not the sampling noise of a hypothetical
-/// future gate match (see the module doc and `GatePrediction::interval_low`).
-fn predictive_variance(m: &[Vec<f64>], x_std: &[f64], sigma2: f64) -> f64 {
+/// Latent-mean predictive variance at `x_std`: `sigma2 * (intercept_variance_factor
+/// plus x_std^T M x_std)`, the Bayesian-ridge posterior variance of
+/// `intercept plus x*^T beta` (`M` = `(XᵀWX + lambda*I)⁻¹` doubles as the
+/// Gaussian-prior posterior covariance of `beta` up to `sigma2`; the
+/// intercept was fit separately as the weighted mean of `y`, with its own
+/// posterior variance `sigma2 * intercept_variance_factor`, where
+/// `intercept_variance_factor` is `1.0 / n_eff` -- see
+/// [`fit_weighted_ridge`]'s doc comment). Standardized features are
+/// weighted-centered, so `Cov(intercept, beta)` is `0.0` and the two terms
+/// simply add, with no cross term. Without the `intercept_variance_factor`
+/// term, a query at the training feature mean (`x_std == 0`, e.g. every
+/// feature missing and imputed to its training mean) would report a
+/// zero-width interval -- treating the intercept, a quantity estimated from
+/// finite data, as if it were known exactly. Deliberately excludes the extra
+/// unit variance a *prediction* interval for one new noisy gate run would
+/// add -- this module reports uncertainty about the candidate's true
+/// strength, not the sampling noise of a hypothetical future gate match (see
+/// the module doc and `GatePrediction::interval_low`).
+fn predictive_variance(
+    m: &[Vec<f64>],
+    x_std: &[f64],
+    sigma2: f64,
+    intercept_variance_factor: f64,
+) -> f64 {
     let p = x_std.len();
     let mut q = 0.0;
     for j in 0..p {
@@ -776,7 +841,7 @@ fn predictive_variance(m: &[Vec<f64>], x_std: &[f64], sigma2: f64) -> f64 {
             q += x_std[j] * m[j][k] * x_std[k];
         }
     }
-    (sigma2 * q).max(0.0)
+    (sigma2 * (intercept_variance_factor + q)).max(0.0)
 }
 
 fn probability_positive(expected_elo: f64, variance: f64, sd: f64) -> f64 {
@@ -863,7 +928,7 @@ fn fit_and_score_fold(
     for obs in val_rows {
         let (x, _missing, _unknown) = standardizer.transform(&obs.features, feature_names);
         let pred = fit.intercept + dot(&x, &fit.coefficients);
-        let variance = predictive_variance(&fit.m, &x, fit.sigma2);
+        let variance = predictive_variance(&fit.m, &x, fit.sigma2, fit.intercept_variance_factor);
         let sd = variance.sqrt();
         let w = obs.gate_games_played;
         sq_err_sum += w * (obs.gate_elo_delta - pred).powi(2);
@@ -897,17 +962,21 @@ fn fit_and_score_fold(
 /// validation rows contributes nothing (skipped, not an error) -- this can
 /// happen at very small group counts and is an accepted engineering
 /// approximation for this small-data regime rather than a case worth
-/// hard-failing on.
+/// hard-failing on. The returned fold count is a measurement, not the
+/// `effective_folds` requested: it counts folds actually evaluated (skips
+/// excluded), so callers never have to trust that `effective_folds` folds
+/// were really all non-empty.
 fn run_folds(
     rows: &[&GateObservation],
     fold_ids: &[usize],
     effective_folds: usize,
     feature_names: &[String],
     lambda_for_fold: impl Fn(&[&GateObservation]) -> f64,
-) -> (f64, Vec<FoldPrediction>) {
+) -> (usize, f64, Vec<FoldPrediction>) {
     let mut predictions = Vec::new();
     let mut sq_err_sum = 0.0;
     let mut w_sum = 0.0;
+    let mut folds_used = 0;
 
     for fold in 0..effective_folds {
         let train_rows: Vec<&GateObservation> = (0..rows.len())
@@ -921,6 +990,7 @@ fn run_folds(
         if train_rows.is_empty() || val_rows.is_empty() {
             continue;
         }
+        folds_used += 1;
 
         let lambda = lambda_for_fold(&train_rows);
         let (sq_err, w, fold_predictions) =
@@ -938,7 +1008,7 @@ fn run_folds(
     } else {
         f64::INFINITY
     };
-    (weighted_rmse, predictions)
+    (folds_used, weighted_rmse, predictions)
 }
 
 /// Plain, single-level group-aware lambda grid search: runs [`run_folds`]
@@ -957,7 +1027,7 @@ fn select_lambda(
 ) -> (f64, f64, Vec<FoldPrediction>) {
     let mut best: Option<(f64, f64, Vec<FoldPrediction>)> = None;
     for &lambda in lambda_grid {
-        let (rmse, predictions) =
+        let (_folds_used, rmse, predictions) =
             run_folds(rows, fold_ids, effective_folds, feature_names, |_| lambda);
         let is_better = match &best {
             None => true,
@@ -999,6 +1069,13 @@ fn most_conservative_lambda(lambda_grid: &[f64]) -> f64 {
 /// dataset has only 2-3 groups), there is no honest way to run that fold's
 /// own inner CV -- [`most_conservative_lambda`] is used instead of an
 /// inner selection that couldn't hold anything out anyway.
+///
+/// Returns the number of outer folds actually evaluated (see
+/// [`run_folds`]'s doc comment) alongside the weighted RMSE and predictions
+/// -- [`GateModel::fit_with_validation`] reports this count directly as
+/// `GateFitReport::cv_folds_used` rather than the outer fold assignment's
+/// requested count, so that field is a measurement of what was actually
+/// evaluated, not an assumption.
 fn nested_cross_validate(
     all_rows: &[&GateObservation],
     feature_names: &[String],
@@ -1006,7 +1083,7 @@ fn nested_cross_validate(
     outer_effective_folds: usize,
     lambda_grid: &[f64],
     inner_cv_folds: usize,
-) -> (f64, Vec<FoldPrediction>) {
+) -> (usize, f64, Vec<FoldPrediction>) {
     run_folds(
         all_rows,
         outer_fold_ids,
@@ -1193,9 +1270,13 @@ mod tests {
         // invariance, which a scaled-but-still-wrong formula could also
         // satisfy): preds = x*beta = [-1, 0, 1], resid = y - preds =
         // [-1, 0, 1], rss = sum(resid^2) = 2. n_eff = sum_w^2/sum_w_sq =
-        // 9/3 = 3. df = trace(M*A) = 0.25 * 2 = 0.5. sigma2 = rss / (n_eff -
-        // df) = 2 / 2.5 = 0.8.
-        assert!((fit.sigma2 - 0.8).abs() < 1e-9);
+        // 9/3 = 3. df = trace(M*A) = 0.25 * 2 = 0.5. The fitted intercept
+        // (y_mean) also spends one degree of freedom of this same data, so
+        // sigma2 = rss / (n_eff - 1 - df) = 2 / (3 - 1 - 0.5) = 2 / 1.5 =
+        // 1.333333...
+        assert!((fit.sigma2 - 2.0 / 1.5).abs() < 1e-9);
+        // intercept_variance_factor = 1.0 / n_eff = 1.0 / 3.
+        assert!((fit.intercept_variance_factor - 1.0 / 3.0).abs() < 1e-9);
     }
 
     #[test]
@@ -1215,6 +1296,13 @@ mod tests {
         assert!((uniform_1.coefficients[0] - uniform_100.coefficients[0]).abs() < 1e-9);
         assert!((uniform_1.intercept - uniform_100.intercept).abs() < 1e-9);
         assert!((uniform_1.sigma2 - uniform_100.sigma2).abs() < 1e-9);
+        // n_eff (and so intercept_variance_factor = 1.0/n_eff) is also
+        // homogeneous-degree-0 in the weights -- must survive the same
+        // magnitude scaling as everything else this test pins.
+        assert!(
+            (uniform_1.intercept_variance_factor - uniform_100.intercept_variance_factor).abs()
+                < 1e-9
+        );
     }
 
     #[test]
@@ -1234,9 +1322,21 @@ mod tests {
     #[test]
     fn predictive_variance_grows_further_from_training_data() {
         let m = invert_regularized(&[vec![4.0]], 1.0); // A=4, lambda=1 -> M = 1/5
-        let near = predictive_variance(&m, &[0.5], 1.0);
-        let far = predictive_variance(&m, &[5.0], 1.0);
+        let near = predictive_variance(&m, &[0.5], 1.0, 0.0);
+        let far = predictive_variance(&m, &[5.0], 1.0, 0.0);
         assert!(far > near);
+    }
+
+    #[test]
+    fn predictive_variance_includes_intercept_uncertainty_even_at_x_zero() {
+        // At the training feature mean (x_std == 0) the x^T M x term
+        // vanishes entirely -- P0-1's fix: variance must not collapse to
+        // 0.0 there, since the intercept itself is fit from finite data.
+        let m = invert_regularized(&[vec![4.0]], 1.0);
+        let at_mean = predictive_variance(&m, &[0.0], 1.0, 0.2);
+        assert!(at_mean.is_finite());
+        assert!(at_mean > 0.0);
+        assert!((at_mean - 0.2).abs() < 1e-12); // sigma2 * (0.2 + 0) == 0.2
     }
 
     #[test]
@@ -1335,6 +1435,35 @@ mod tests {
     }
 
     #[test]
+    fn predictive_variance_at_the_training_feature_mean_is_finite_and_positive() {
+        // P0-1 regression guard at the GateModel::predict level: a query at
+        // exactly the training feature mean standardizes to x_std == 0, so
+        // the old `sigma2 * x^T M x` formula collapsed to 0.0 there --
+        // treating the fitted intercept as known exactly rather than as an
+        // estimate with its own uncertainty.
+        let output = GateModel::fit(&linear_dataset(), &GateModelConfig::default()).unwrap();
+        let mut features = BTreeMap::new();
+        features.insert("x".to_string(), 5.5); // linear_dataset()'s "x" mean
+        let prediction = output.model.predict(&GateQuery { features });
+        let half_width = prediction.interval_high - prediction.expected_elo;
+        assert!(half_width.is_finite());
+        assert!(half_width > 0.0);
+    }
+
+    #[test]
+    fn missing_all_features_query_does_not_get_a_zero_width_interval() {
+        // Same regression as above, reached through the documented
+        // missing-feature imputation path instead of an explicit mean value.
+        let output = GateModel::fit(&linear_dataset(), &GateModelConfig::default()).unwrap();
+        let prediction = output.model.predict(&GateQuery {
+            features: BTreeMap::new(),
+        });
+        assert_eq!(prediction.missing_features, vec!["x".to_string()]);
+        assert!(prediction.interval_high > prediction.interval_low);
+        assert!((prediction.interval_high - prediction.interval_low).is_finite());
+    }
+
+    #[test]
     fn fit_falls_back_to_conservative_lambda_when_an_outer_folds_training_rows_have_too_few_groups_for_inner_cv()
      {
         // Only 2 total groups -- the outer CV falls back to
@@ -1395,9 +1524,12 @@ mod tests {
     }
 
     #[test]
-    fn assign_folds_hash_based_also_keeps_a_group_together() {
+    fn assign_folds_balanced_branch_also_keeps_a_group_together() {
         // 5 distinct groups (== cv_folds), 4 rows each -- enough distinct
-        // groups to take the hash-mod branch, not leave-one-group-out.
+        // groups that fold count is cv_folds itself
+        // (min(cv_folds, num_groups) == cv_folds), not the
+        // fewer-groups-than-folds case where every group trivially gets its
+        // own fold.
         let data: Vec<GateObservation> = (0..20)
             .map(|i| {
                 obs(
@@ -1420,6 +1552,156 @@ mod tests {
                 "group g{group}'s rows landed in different folds: {folds:?}"
             );
         }
+    }
+
+    #[test]
+    fn every_requested_fold_is_non_empty_when_enough_groups_exist() {
+        // 12 distinct groups, default cv_folds == 5: fold count is
+        // min(cv_folds, num_groups) == 5, and balanced GroupKFold guarantees
+        // every one of those 5 folds gets at least one group. Regression
+        // guard for the old `fnv1a(group_id) % cv_folds` scheme, where a
+        // hash collision could leave a fold empty and `run_folds` would
+        // silently skip it -- so a "5-fold" report could actually reflect
+        // only 3-4 evaluated folds.
+        let data = linear_dataset();
+        let output = GateModel::fit_with_validation(&data, &GateModelConfig::default()).unwrap();
+        assert_eq!(output.report.cv_folds_used, 5);
+
+        let observed_folds: std::collections::BTreeSet<usize> = output
+            .oof_predictions
+            .iter()
+            .map(|p| p.outer_fold)
+            .collect();
+        let expected_folds: std::collections::BTreeSet<usize> = (0..5).collect();
+        assert_eq!(observed_folds, expected_folds);
+
+        // Every OOF observation still appears exactly once in this branch
+        // too (not just under leave-one-group-out, covered elsewhere).
+        assert_eq!(output.oof_predictions.len(), data.len());
+        let mut got: Vec<&str> = output
+            .oof_predictions
+            .iter()
+            .map(|p| p.candidate_id.as_str())
+            .collect();
+        got.sort_unstable();
+        let mut expected: Vec<&str> = data.iter().map(|o| o.candidate_id.as_str()).collect();
+        expected.sort_unstable();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn assign_folds_balances_fold_weight_within_the_largest_group_weight() {
+        // 5 "whale" groups worth 1000 games each plus 8 "small" groups
+        // worth 10 games each, cv_folds requested at 4: more whales than
+        // folds forces at least one fold to double up (a naive hash-mod
+        // split could instead dump several whales into the same fold and
+        // leave another empty). The greedy min-load GroupKFold has a
+        // provable bound -- max_fold_weight <= total_weight/folds +
+        // max_group_weight -- checked here directly against a deliberately
+        // skewed fixture, not by re-implementing the algorithm and checking
+        // it agrees with itself. With 5 whales over 4 folds the bound is
+        // actually stressed (max fold ends up double a single-whale fold's
+        // weight, not equal to every other fold's).
+        let mut data = Vec::new();
+        for i in 0..5 {
+            data.push(obs(
+                &format!("whale{i}"),
+                &format!("gWhale{i}"),
+                i as f64,
+                i as f64,
+                1000.0,
+            ));
+        }
+        for i in 0..8 {
+            data.push(obs(
+                &format!("small{i}"),
+                &format!("gSmall{i}"),
+                i as f64,
+                i as f64,
+                10.0,
+            ));
+        }
+        let rows: Vec<&GateObservation> = data.iter().collect();
+        let (fold_ids, effective_folds) = assign_folds(&rows, 4);
+        assert_eq!(effective_folds, 4);
+
+        let mut fold_weight = vec![0.0; effective_folds];
+        for (i, o) in data.iter().enumerate() {
+            fold_weight[fold_ids[i]] += o.gate_games_played;
+        }
+        let total_weight: f64 = data.iter().map(|o| o.gate_games_played).sum();
+        let max_group_weight = 1000.0;
+        let bound = total_weight / effective_folds as f64 + max_group_weight;
+        let max_fold_weight = fold_weight.iter().copied().fold(f64::MIN, f64::max);
+        let min_fold_weight = fold_weight.iter().copied().fold(f64::MAX, f64::min);
+        assert!(
+            max_fold_weight > min_fold_weight + 1e-9,
+            "fixture didn't stress the bound: every fold landed at the same weight {fold_weight:?}"
+        );
+        for (fold, &w) in fold_weight.iter().enumerate() {
+            assert!(
+                w <= bound + 1e-9,
+                "fold {fold} weight {w} exceeds the LPT bound {bound}"
+            );
+            assert!(w > 0.0, "fold {fold} is empty");
+        }
+    }
+
+    #[test]
+    fn assign_folds_is_deterministic_and_input_order_invariant() {
+        // Multi-row groups with clearly separated (non-round) total
+        // weights, not one row per group: `assign_folds` accumulates each
+        // group's weight via `+=` in row-iteration order, and float
+        // addition isn't associative, so a single-row-per-group fixture
+        // would never exercise that accumulation at all. Group totals are
+        // spaced far enough apart (multiples of ~30) that summation order
+        // can't perturb which group has the larger total by anywhere near
+        // enough to flip the sort -- this proves order-invariance on the
+        // path that could actually break it, without becoming a flaky
+        // near-tie test.
+        let mut data = Vec::new();
+        let per_group_row_weights = [
+            [3.1, 3.0, 2.9],    // gA total ~9.0
+            [13.3, 13.0, 12.7], // gB total ~39.0
+            [23.4, 23.0, 22.6], // gC total ~69.0
+            [33.5, 33.0, 32.5], // gD total ~99.0
+        ];
+        for (g, weights) in per_group_row_weights.iter().enumerate() {
+            for (r, &w) in weights.iter().enumerate() {
+                data.push(obs(
+                    &format!("c{g}_{r}"),
+                    &format!("g{g}"),
+                    g as f64,
+                    g as f64,
+                    w,
+                ));
+            }
+        }
+        let rows: Vec<&GateObservation> = data.iter().collect();
+        let (fold_ids_a, effective_a) = assign_folds(&rows, 3);
+
+        // Scramble both cross-group order and each group's own row order.
+        let mut shuffled = data.clone();
+        shuffled.reverse();
+        shuffled.swap(0, 6);
+        shuffled.swap(2, 9);
+        shuffled.swap(4, 11);
+        let shuffled_rows: Vec<&GateObservation> = shuffled.iter().collect();
+        let (fold_ids_b, effective_b) = assign_folds(&shuffled_rows, 3);
+
+        assert_eq!(effective_a, effective_b);
+
+        let group_fold_a: BTreeMap<&str, usize> = data
+            .iter()
+            .zip(&fold_ids_a)
+            .map(|(o, &f)| (o.group_id.as_str(), f))
+            .collect();
+        let group_fold_b: BTreeMap<&str, usize> = shuffled
+            .iter()
+            .zip(&fold_ids_b)
+            .map(|(o, &f)| (o.group_id.as_str(), f))
+            .collect();
+        assert_eq!(group_fold_a, group_fold_b);
     }
 
     #[test]
