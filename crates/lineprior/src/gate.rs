@@ -172,6 +172,65 @@ pub struct GateFitOutput {
     pub report: GateFitReport,
 }
 
+/// One nested-CV out-of-fold audit row: `predicted_elo`/`probability_positive`
+/// were produced by a model that never saw this candidate's own row *or* its
+/// `group_id` during fitting *or* lambda selection (see
+/// [`GateModel::fit_with_validation`]'s doc comment) -- exactly the
+/// population `GateFitReport::weighted_rmse`/`calibration` are computed
+/// from, exposed per-candidate for real-data validation (comparing against
+/// an external baseline, auditing calibration and interval coverage by
+/// hand) before building anything on top of Round A. Not deduplicated by
+/// `candidate_id`: a caller whose data happens to repeat one is still owed
+/// every row, not a silently-collapsed one.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GateOofPrediction {
+    pub candidate_id: String,
+    pub group_id: String,
+    pub actual_elo: f64,
+    pub predicted_elo: f64,
+    pub prediction_stddev: f64,
+    /// `predicted_elo -/+ GateModelConfig::interval_z` standard deviations --
+    /// same latent-candidate-strength interval [`GatePrediction::interval_low`]
+    /// documents, not a future single-gate-result prediction interval. See
+    /// [`GateValidationOutput::interval_level`] for this interval's
+    /// confidence level, stated once rather than repeated per row.
+    pub interval_low: f64,
+    pub interval_high: f64,
+    pub probability_positive: f64,
+    /// `actual_elo - predicted_elo`.
+    pub residual: f64,
+    pub gate_games_played: f64,
+    /// Which outer CV fold held this row out (see
+    /// [`GateModel::fit_with_validation`]'s doc comment). Rows sharing an
+    /// `outer_fold` were scored by the identical fitted model -- and, under
+    /// the leave-one-group-out fallback, share the identical `group_id` too.
+    pub outer_fold: usize,
+    /// The lambda that fold's own inner CV selected (or
+    /// [`most_conservative_lambda`], when that fold's training rows had too
+    /// few distinct groups to run one) -- not necessarily
+    /// `GateFitReport::selected_lambda`, which is chosen separately over the
+    /// whole dataset for the deployed model.
+    pub inner_selected_lambda: f64,
+}
+
+/// Result of [`GateModel::fit_with_validation`]: everything [`GateFitOutput`]
+/// carries, plus the nested-CV out-of-fold audit table and the confidence
+/// level its intervals represent. A superset, not a fork -- `report` is the
+/// exact same [`GateFitReport`] `fit` returns, so the two functions can
+/// never disagree about the aggregate metrics.
+#[derive(Debug, Clone)]
+pub struct GateValidationOutput {
+    pub model: GateModel,
+    pub report: GateFitReport,
+    pub oof_predictions: Vec<GateOofPrediction>,
+    /// `2 * Phi(GateModelConfig::interval_z) - 1`, e.g. `~0.95` for the
+    /// default `interval_z` (`DEFAULT_CONFIDENCE_Z` = `1.96`) -- the
+    /// two-sided confidence level `interval_low`/`interval_high` (on both
+    /// [`GatePrediction`] and [`GateOofPrediction`]) represent, stated once
+    /// here rather than repeated on every row.
+    pub interval_level: f64,
+}
+
 /// A fitted gate-outcome surrogate. Opaque by design -- [`GateModel::fit`]
 /// and [`GateModel::predict`] are the API; the standardized-space
 /// coefficients are an implementation detail, not something callers should
@@ -194,23 +253,51 @@ pub struct GateModel {
 
 impl GateModel {
     /// Fits a weighted ridge regression from `observations` to
-    /// `gate_elo_delta`. Two group-aware cross-validations run side by
-    /// side, deliberately not sharing predictions:
+    /// `gate_elo_delta`. A thin wrapper over [`Self::fit_with_validation`]
+    /// that discards the out-of-fold audit table and interval level (the
+    /// table is still computed either way -- this only spares the caller
+    /// from receiving/reading it) -- mirrors this crate's existing
+    /// `finish`/`finish_with_stats` shape (`build.rs`'s `PriorAccumulator`),
+    /// so both entry points share one fitting path and can never disagree
+    /// on the model or its metrics.
+    pub fn fit(
+        observations: &[GateObservation],
+        config: &GateModelConfig,
+    ) -> Result<GateFitOutput> {
+        let validated = Self::fit_with_validation(observations, config)?;
+        Ok(GateFitOutput {
+            model: validated.model,
+            report: validated.report,
+        })
+    }
+
+    /// Like [`Self::fit`], but also returns the nested-CV out-of-fold audit
+    /// table (one [`GateOofPrediction`] per outer-validation row) and the
+    /// interval's confidence level -- for validating Round A itself against
+    /// real gate history (an external baseline comparison, a calibration
+    /// audit, interval-coverage checks) before any acquisition logic is
+    /// built on top of it.
+    ///
+    /// Two group-aware cross-validations run side by side, deliberately not
+    /// sharing predictions:
     ///
     /// 1. **Deployed-model lambda** (`report.selected_lambda`): a plain,
     ///    single-level group CV over the *entire* dataset ([`select_lambda`]).
-    /// 2. **`report.weighted_rmse`/`report.calibration`**: a *nested* group
-    ///    CV ([`nested_cross_validate`]) -- for each outer fold, lambda is
-    ///    chosen by an inner CV scoped to that fold's own training rows
-    ///    only, then that fold's held-out rows are scored by a model fit at
-    ///    the inner-selected lambda. Reusing (1)'s held-out predictions
-    ///    directly for the report would be optimistically biased: picking
-    ///    the best lambda by its held-out score already uses information
-    ///    from every validation fold, so those same folds' predictions
-    ///    aren't honestly out-of-sample with respect to the selection that
-    ///    produced them. Nesting keeps every reported prediction genuinely
-    ///    unseen by both the coefficients *and* the lambda that produced
-    ///    them.
+    /// 2. **`report.weighted_rmse`/`report.calibration`/`oof_predictions`**:
+    ///    a *nested* group CV ([`nested_cross_validate`]) -- for each outer
+    ///    fold, lambda is chosen by an inner CV scoped to that fold's own
+    ///    training rows only, then that fold's held-out rows are scored by
+    ///    a model fit at the inner-selected lambda. Reusing (1)'s held-out
+    ///    predictions directly for the report would be optimistically
+    ///    biased: picking the best lambda by its held-out score already
+    ///    uses information from every validation fold, so those same
+    ///    folds' predictions aren't honestly out-of-sample with respect to
+    ///    the selection that produced them. Nesting keeps every reported
+    ///    prediction genuinely unseen by both the coefficients *and* the
+    ///    lambda that produced them. `oof_predictions` is built from this
+    ///    *same* nested-CV pass, not a second run of it -- one population of
+    ///    predictions backs both the aggregate metrics and the per-row
+    ///    audit table, so they can never describe different data.
     ///
     /// Fold assignment (both levels) is by `group_id`, never by individual
     /// observation, so no axis of relatedness the caller encoded into
@@ -226,10 +313,10 @@ impl GateModel {
     /// The final returned model is refit on all of `observations` at (1)'s
     /// deployed-model lambda (same "CV picks the config, then refit on 100%
     /// of the data" shape as this crate's `tune` -> `build --config` flow).
-    pub fn fit(
+    pub fn fit_with_validation(
         observations: &[GateObservation],
         config: &GateModelConfig,
-    ) -> Result<GateFitOutput> {
+    ) -> Result<GateValidationOutput> {
         validate_config(config)?;
         let feature_names = validate_observations(observations)?;
 
@@ -268,6 +355,8 @@ impl GateModel {
             config.cv_folds,
         );
         let calibration = build_calibration(&fold_predictions, config.calibration_bins);
+        let oof_predictions = build_oof_table(&fold_predictions, config.interval_z);
+        let interval_level = 2.0 * standard_normal_cdf(config.interval_z) - 1.0;
 
         let weights: Vec<f64> = observations.iter().map(|o| o.gate_games_played).collect();
         let standardizer = Standardizer::fit(&all_rows, &feature_names, &weights);
@@ -296,7 +385,12 @@ impl GateModel {
             weighted_rmse,
             calibration,
         };
-        Ok(GateFitOutput { model, report })
+        Ok(GateValidationOutput {
+            model,
+            report,
+            oof_predictions,
+            interval_level,
+        })
     }
 
     /// Scores `query` against the fitted model. Infallible: an unseen
@@ -719,10 +813,24 @@ fn erf(x: f64) -> f64 {
     sign * y
 }
 
-/// One held-out prediction from [`run_folds`], kept for [`build_calibration`].
+/// One held-out prediction from [`run_folds`], kept for both
+/// [`build_calibration`] and [`build_oof_table`] -- the same records feed
+/// both, so the aggregate report and the per-candidate audit table can
+/// never silently disagree about which predictions they're summarizing.
+/// `outer_fold` is meaningless for [`select_lambda`]'s own (non-nested)
+/// usage -- callers that only need the plain lambda selection discard the
+/// predictions entirely rather than reading it there.
 struct FoldPrediction {
+    candidate_id: String,
+    group_id: String,
+    actual_elo: f64,
+    predicted_elo: f64,
+    stddev: f64,
     probability_positive: f64,
     actual_positive: bool,
+    lambda: f64,
+    gate_games_played: f64,
+    outer_fold: usize,
 }
 
 /// Fits weighted ridge on `train_rows` at `lambda` (standardizing using
@@ -732,7 +840,8 @@ struct FoldPrediction {
 /// [`run_folds`]'s single level and by each outer fold of
 /// [`nested_cross_validate`]'s inner level, so the two CVs can't silently
 /// diverge in how a fold's model is fit or scored. Returns this fold's
-/// weighted squared-error sum, weight sum, and every held-out prediction.
+/// weighted squared-error sum, weight sum, and every held-out prediction
+/// (`outer_fold` left at `0`; [`run_folds`] stamps the real fold index).
 fn fit_and_score_fold(
     train_rows: &[&GateObservation],
     val_rows: &[&GateObservation],
@@ -760,8 +869,16 @@ fn fit_and_score_fold(
         sq_err_sum += w * (obs.gate_elo_delta - pred).powi(2);
         w_sum += w;
         predictions.push(FoldPrediction {
+            candidate_id: obs.candidate_id.clone(),
+            group_id: obs.group_id.clone(),
+            actual_elo: obs.gate_elo_delta,
+            predicted_elo: pred,
+            stddev: sd,
             probability_positive: probability_positive(pred, variance, sd),
             actual_positive: obs.gate_elo_delta > 0.0,
+            lambda,
+            gate_games_played: w,
+            outer_fold: 0,
         });
     }
     (sq_err_sum, w_sum, predictions)
@@ -773,10 +890,14 @@ fn fit_and_score_fold(
 /// CV [`select_lambda`] uses; a closure that itself runs an inner CV gives
 /// [`nested_cross_validate`]. One shared fold loop so the two can't
 /// silently diverge in accumulation (weighted RMSE, predictions collected).
-/// A fold with no training or no validation rows contributes nothing
-/// (skipped, not an error) -- this can happen at very small group counts
-/// and is an accepted engineering approximation for this small-data regime
-/// rather than a case worth hard-failing on.
+/// Stamps each returned [`FoldPrediction::outer_fold`] with this loop's own
+/// fold index (meaningful only for [`nested_cross_validate`]'s outer level;
+/// harmless and unread for [`select_lambda`]'s single-level usage, which
+/// discards the predictions entirely). A fold with no training or no
+/// validation rows contributes nothing (skipped, not an error) -- this can
+/// happen at very small group counts and is an accepted engineering
+/// approximation for this small-data regime rather than a case worth
+/// hard-failing on.
 fn run_folds(
     rows: &[&GateObservation],
     fold_ids: &[usize],
@@ -806,7 +927,10 @@ fn run_folds(
             fit_and_score_fold(&train_rows, &val_rows, feature_names, lambda);
         sq_err_sum += sq_err;
         w_sum += w;
-        predictions.extend(fold_predictions);
+        predictions.extend(fold_predictions.into_iter().map(|p| FoldPrediction {
+            outer_fold: fold,
+            ..p
+        }));
     }
 
     let weighted_rmse = if w_sum > 0.0 {
@@ -935,6 +1059,46 @@ fn build_calibration(predictions: &[FoldPrediction], bins: usize) -> Vec<GateCal
         .collect()
 }
 
+/// Maps every nested-CV out-of-fold [`FoldPrediction`] into a public
+/// [`GateOofPrediction`] audit row (1:1, no deduplication -- a repeated
+/// `candidate_id` in the input is not this crate's contract to enforce, so
+/// it is preserved verbatim rather than collapsed through a map), then
+/// sorts deterministically by `(outer_fold, group_id, candidate_id)` so the
+/// same dataset always serializes identically regardless of input row order
+/// (`fit_and_score_fold`'s internal `Vec` ordering follows fold iteration and
+/// slice-filter order, neither of which is a stable contract on their own).
+/// This determinism is over that sort key: two rows that are *fully*
+/// identical on it (same fold, same group, same duplicate `candidate_id`)
+/// keep whatever relative order `sort_by`'s stability gives them, which can
+/// still trace back to input order -- harmless, since no field a caller
+/// would sort or group by distinguishes them anyway.
+fn build_oof_table(predictions: &[FoldPrediction], interval_z: f64) -> Vec<GateOofPrediction> {
+    let mut rows: Vec<GateOofPrediction> = predictions
+        .iter()
+        .map(|p| GateOofPrediction {
+            candidate_id: p.candidate_id.clone(),
+            group_id: p.group_id.clone(),
+            actual_elo: p.actual_elo,
+            predicted_elo: p.predicted_elo,
+            prediction_stddev: p.stddev,
+            interval_low: p.predicted_elo - interval_z * p.stddev,
+            interval_high: p.predicted_elo + interval_z * p.stddev,
+            probability_positive: p.probability_positive,
+            residual: p.actual_elo - p.predicted_elo,
+            gate_games_played: p.gate_games_played,
+            outer_fold: p.outer_fold,
+            inner_selected_lambda: p.lambda,
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        a.outer_fold
+            .cmp(&b.outer_fold)
+            .then_with(|| a.group_id.cmp(&b.group_id))
+            .then_with(|| a.candidate_id.cmp(&b.candidate_id))
+    });
+    rows
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -965,6 +1129,28 @@ mod tests {
                 obs(
                     &format!("c{i}"),
                     &format!("g{i}"),
+                    x,
+                    10.0 * x + noise,
+                    100.0,
+                )
+            })
+            .collect()
+    }
+
+    /// 4 distinct groups (< cv_folds default of 5, guaranteeing
+    /// leave-one-group-out: every group becomes its own outer fold, so no
+    /// outer fold's training or validation side can ever be empty), 3 rows
+    /// each -- 12 rows total, satisfying `required = max(6, 1 + 2) = 6` with
+    /// headroom. Same linear-plus-alternating-noise shape as
+    /// `linear_dataset`, just grouped instead of one group per row.
+    fn logo_dataset() -> Vec<GateObservation> {
+        (0..12)
+            .map(|i| {
+                let x = i as f64;
+                let noise = if i % 2 == 0 { 1.0 } else { -1.0 };
+                obs(
+                    &format!("c{i}"),
+                    &format!("g{}", i / 3),
                     x,
                     10.0 * x + noise,
                     100.0,
@@ -1323,5 +1509,172 @@ mod tests {
         )
         .unwrap();
         assert_eq!(output.report.calibration.len(), 4);
+    }
+
+    #[test]
+    fn oof_predictions_cover_every_observation_exactly_once_under_leave_one_group_out() {
+        let data = logo_dataset();
+        let output = GateModel::fit_with_validation(&data, &GateModelConfig::default()).unwrap();
+        assert_eq!(output.oof_predictions.len(), data.len());
+
+        let mut got: Vec<&str> = output
+            .oof_predictions
+            .iter()
+            .map(|p| p.candidate_id.as_str())
+            .collect();
+        got.sort_unstable();
+        let mut expected: Vec<&str> = data.iter().map(|o| o.candidate_id.as_str()).collect();
+        expected.sort_unstable();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn oof_predictions_never_train_on_their_own_group_under_leave_one_group_out() {
+        // Under LOGO every outer fold's held-out rows come from exactly one
+        // group; proving each fold's rows share a single group_id directly
+        // proves that group's own rows never appeared in that fold's
+        // training set (fit_and_score_fold's train_rows is precisely "every
+        // row not in this fold").
+        let data = logo_dataset();
+        let output = GateModel::fit_with_validation(&data, &GateModelConfig::default()).unwrap();
+        let mut by_fold: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
+        for p in &output.oof_predictions {
+            by_fold.entry(p.outer_fold).or_default().push(&p.group_id);
+        }
+        for (fold, groups) in &by_fold {
+            assert!(
+                groups.iter().all(|g| *g == groups[0]),
+                "fold {fold} mixes groups: {groups:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn inner_selected_lambda_is_uniform_within_an_outer_fold() {
+        let data = logo_dataset();
+        let output = GateModel::fit_with_validation(&data, &GateModelConfig::default()).unwrap();
+        let mut by_fold: BTreeMap<usize, Vec<f64>> = BTreeMap::new();
+        for p in &output.oof_predictions {
+            by_fold
+                .entry(p.outer_fold)
+                .or_default()
+                .push(p.inner_selected_lambda);
+        }
+        for (fold, lambdas) in &by_fold {
+            assert!(
+                lambdas.iter().all(|&l| (l - lambdas[0]).abs() < 1e-12),
+                "fold {fold} used more than one lambda: {lambdas:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn weighted_rmse_is_exactly_reproducible_from_oof_predictions() {
+        let output =
+            GateModel::fit_with_validation(&linear_dataset(), &GateModelConfig::default()).unwrap();
+        let sq_err_sum: f64 = output
+            .oof_predictions
+            .iter()
+            .map(|p| p.gate_games_played * p.residual * p.residual)
+            .sum();
+        let w_sum: f64 = output
+            .oof_predictions
+            .iter()
+            .map(|p| p.gate_games_played)
+            .sum();
+        let recomputed = (sq_err_sum / w_sum).sqrt();
+        assert!((recomputed - output.report.weighted_rmse).abs() < 1e-9);
+    }
+
+    #[test]
+    fn calibration_bins_are_exactly_reproducible_from_oof_predictions() {
+        let output =
+            GateModel::fit_with_validation(&linear_dataset(), &GateModelConfig::default()).unwrap();
+        let bins = output.report.calibration.len();
+        let width = 1.0 / bins as f64;
+        let mut counts = vec![0u64; bins];
+        let mut positive_counts = vec![0u64; bins];
+        for p in &output.oof_predictions {
+            let idx = ((p.probability_positive / width) as usize).min(bins - 1);
+            counts[idx] += 1;
+            if p.actual_elo > 0.0 {
+                positive_counts[idx] += 1;
+            }
+        }
+        for (i, bin) in output.report.calibration.iter().enumerate() {
+            assert_eq!(bin.num_observations, counts[i]);
+            let expected_rate = if counts[i] > 0 {
+                Some(positive_counts[i] as f64 / counts[i] as f64)
+            } else {
+                None
+            };
+            assert_eq!(bin.empirical_positive_rate, expected_rate);
+        }
+    }
+
+    #[test]
+    fn interval_width_matches_the_configured_interval_level() {
+        let config = GateModelConfig::default();
+        let output = GateModel::fit_with_validation(&linear_dataset(), &config).unwrap();
+
+        let expected_level = 2.0 * standard_normal_cdf(config.interval_z) - 1.0;
+        assert!((output.interval_level - expected_level).abs() < 1e-9);
+
+        for p in &output.oof_predictions {
+            assert!(p.interval_low <= p.predicted_elo);
+            assert!(p.predicted_elo <= p.interval_high);
+            if p.prediction_stddev > 0.0 {
+                let implied_z = (p.interval_high - p.interval_low) / (2.0 * p.prediction_stddev);
+                assert!((implied_z - config.interval_z).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn oof_predictions_are_ordered_deterministically_regardless_of_input_order() {
+        let data = linear_dataset();
+        let mut reversed = data.clone();
+        reversed.reverse();
+
+        let a = GateModel::fit_with_validation(&data, &GateModelConfig::default()).unwrap();
+        let b = GateModel::fit_with_validation(&reversed, &GateModelConfig::default()).unwrap();
+
+        // Sort-key sequence must match regardless of input row order --
+        // comparing full rows with `==` would also compare floating-point
+        // predictions, which summation-order (a real effect of the
+        // differently-ordered fold slices) could nudge by a few ULPs even
+        // though the ordering itself is exactly reproducible.
+        let keys = |predictions: &[GateOofPrediction]| -> Vec<(usize, String, String)> {
+            predictions
+                .iter()
+                .map(|p| (p.outer_fold, p.group_id.clone(), p.candidate_id.clone()))
+                .collect()
+        };
+        assert_eq!(keys(&a.oof_predictions), keys(&b.oof_predictions));
+
+        assert_eq!(a.oof_predictions.len(), b.oof_predictions.len());
+        for (pa, pb) in a.oof_predictions.iter().zip(&b.oof_predictions) {
+            assert_eq!(pa.candidate_id, pb.candidate_id);
+            assert!((pa.predicted_elo - pb.predicted_elo).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn duplicate_candidate_ids_are_preserved_not_collapsed() {
+        // Two rows from different groups deliberately share a candidate_id
+        // -- lineprior doesn't treat candidate_id as unique, so both rows
+        // must survive in oof_predictions rather than being deduplicated
+        // through a map.
+        let mut data = logo_dataset();
+        data[0].candidate_id = "dup".to_string(); // group g0
+        data[3].candidate_id = "dup".to_string(); // group g1
+        let output = GateModel::fit_with_validation(&data, &GateModelConfig::default()).unwrap();
+        assert_eq!(output.oof_predictions.len(), data.len());
+        let dup_count = output
+            .oof_predictions
+            .iter()
+            .filter(|p| p.candidate_id == "dup")
+            .count();
+        assert_eq!(dup_count, 2);
     }
 }

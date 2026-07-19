@@ -462,10 +462,33 @@ let prediction = output.model.predict(&GateQuery { features });
   cross-validation when selecting the ridge regularization strength -- never parsed by this crate.
   Falls back to leave-one-group-out when fewer than the requested fold count has distinct groups.
 - **Uncertainty is latent-strength confidence, not next-gate-run noise.** `interval_low`/
-  `interval_high` describe how much to trust `expected_elo` as an estimate of the candidate's true
-  strength (a closed-form Bayesian-ridge posterior variance) -- not the added sampling noise of one
-  hypothetical future gate match. A missing feature at query time is imputed as its training-set
-  mean and reported via `missing_features`, never invented silently.
+  `interval_high` -- on both `GatePrediction` and `GateOofPrediction` below -- describe how much to
+  trust the point estimate as a read on the candidate's *true* strength (a closed-form
+  Bayesian-ridge posterior variance), not the added sampling noise of one hypothetical future gate
+  match. This holds everywhere in the module; it is not a per-call opt-in. A missing feature at
+  query time is imputed as its training-set mean and reported via `missing_features`, never invented
+  silently.
+- **Validating Round A itself, before building anything on top of it.** `GateModel::fit_with_validation`
+  returns everything `fit` does, plus a per-candidate out-of-fold audit table:
+
+  ```rust
+  let validated = GateModel::fit_with_validation(&observations, &GateModelConfig::default())?;
+  // validated.interval_level: the two-sided confidence level interval_low/interval_high represent
+  // (e.g. ~0.95 at the default interval_z), stated once here rather than repeated per row.
+  for row in &validated.oof_predictions {
+      // row.candidate_id, .group_id, .actual_elo, .predicted_elo, .residual, .prediction_stddev,
+      // .interval_low/.interval_high, .probability_positive, .outer_fold, .inner_selected_lambda
+  }
+  ```
+
+  Every row comes from the *same* nested group cross-validation `report.weighted_rmse`/
+  `report.calibration` are built from -- not a second CV run solely to populate the table, so the
+  aggregate metrics and the per-row audit can never describe a different population of predictions.
+  Rows are sorted deterministically by `(outer_fold, group_id, candidate_id)`, and a repeated
+  `candidate_id` in the input is preserved as separate rows rather than collapsed. `fit` itself is
+  a thin wrapper over `fit_with_validation` that discards the table (still computed either way --
+  this only spares a caller who only wants the model from receiving/reading it) -- both share one
+  fitting path, so the two entry points can never disagree about the model or its aggregate metrics.
 - **This is the first, smallest slice of a larger design** (uncertainty-first prediction, then a
   gate acquisition function, then monotonic constraints) -- see `tasks/todo.md` for what's
   deliberately deferred and why. No CLI subcommand yet.
