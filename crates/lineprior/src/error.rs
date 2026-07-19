@@ -64,6 +64,44 @@ pub enum Error {
         step: u32,
         last_step: u32,
     },
+
+    /// Raised by [`crate::gate::GateModel::fit`]: fewer than 2 distinct
+    /// `group_id`s means there is no way to hold out a group for
+    /// cross-validation without training on 100% of the data.
+    #[error("gate fit requires at least 2 distinct group_ids, found {num_groups}")]
+    InsufficientGateGroups { num_groups: usize },
+
+    /// Raised by [`crate::gate::GateModel::fit`]: too few observations to fit
+    /// `num_features` coefficients without massively overfitting. `required`
+    /// is `max(6, num_features + 2)`.
+    #[error(
+        "gate fit requires at least {required} observations for {num_features} features, found {num_observations}"
+    )]
+    InsufficientGateObservations {
+        num_observations: usize,
+        num_features: usize,
+        required: usize,
+    },
+
+    /// Raised by [`crate::gate::GateModel::fit`]: every [`crate::gate::GateObservation`]
+    /// must carry the same set of feature names -- a per-row-varying feature
+    /// set would silently change what each coefficient means, unlike
+    /// `predict`'s query-time missing/unknown-feature handling, which is
+    /// explicit and reported rather than baked into training.
+    #[error(
+        "gate observation `{candidate_id}` has a different feature set than the first observation"
+    )]
+    InconsistentGateFeatures { candidate_id: String },
+
+    /// Raised by [`crate::gate::GateModel::fit`]: a `gate_elo_delta`,
+    /// `gate_games_played`, or feature value was NaN or infinite.
+    #[error("gate observation `{candidate_id}` has a non-finite value in field `{field}`")]
+    NonFiniteGateValue { candidate_id: String, field: String },
+
+    /// Raised by [`crate::gate::GateModel::fit`]: `gate_games_played` must be
+    /// a positive, finite reliability weight for the label.
+    #[error("gate observation `{candidate_id}` has gate_games_played <= 0: {value}")]
+    NonPositiveGateWeight { candidate_id: String, value: f64 },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

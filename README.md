@@ -436,6 +436,40 @@ lineprior build observations.jsonl --out prior.jsonl --config best_config.json
 **prior, not an oracle**. It automates what you'd otherwise do by hand-sweeping `eval`; it doesn't
 make the resulting prior any less something the caller should verify before acting on.
 
+## Gate outcome prediction (library only)
+
+A different question from the rest of this crate: not "what action should I take," but "is this
+training candidate worth an expensive real evaluation (a 'gate' run of many games) at all?"
+`GateModel::fit`/`GateModel::predict` (in `gate.rs`) fit a small, regularized surrogate that
+predicts a candidate's real-gate Elo delta -- and how much to trust that prediction -- from cheap
+validation-time diagnostics, so gate runs can be reserved for candidates likely to be worth them.
+
+```rust
+let output = GateModel::fit(&observations, &GateModelConfig::default())?;
+// output.report: selected_lambda, weighted_rmse, and a probability_positive calibration report --
+// check this before trusting predictions from output.model.
+
+let prediction = output.model.predict(&GateQuery { features });
+// prediction.expected_elo, .interval_low/.interval_high, .probability_positive
+```
+
+- **Named features, not a fixed schema.** `GateObservation.features`/`GateQuery.features` are a
+  caller-named `BTreeMap<String, f64>` (e.g. `valid_cp_mse_delta`, `output_std`, `conflict_rate`),
+  so the diagnostic set can evolve without a schema break. Deliberately excludes anything like a
+  training seed -- a categorical id, not a quantity a linear model can treat as "more" or "less."
+- **Group-aware, not a random split.** `GateObservation.group_id` is an opaque caller-composed key
+  (e.g. an experiment family/recipe/lineage/dataset version joined together) used for k-fold
+  cross-validation when selecting the ridge regularization strength -- never parsed by this crate.
+  Falls back to leave-one-group-out when fewer than the requested fold count has distinct groups.
+- **Uncertainty is latent-strength confidence, not next-gate-run noise.** `interval_low`/
+  `interval_high` describe how much to trust `expected_elo` as an estimate of the candidate's true
+  strength (a closed-form Bayesian-ridge posterior variance) -- not the added sampling noise of one
+  hypothetical future gate match. A missing feature at query time is imputed as its training-set
+  mean and reported via `missing_features`, never invented silently.
+- **This is the first, smallest slice of a larger design** (uncertainty-first prediction, then a
+  gate acquisition function, then monotonic constraints) -- see `tasks/todo.md` for what's
+  deliberately deferred and why. No CLI subcommand yet.
+
 ## Academic positioning
 
 `lineprior` is an engineering-oriented Rust implementation inspired by existing ideas in case-based planning, plan reuse, sequence prediction, variable-order Markov models, and policy-guided search. It is not a new theoretical algorithm.

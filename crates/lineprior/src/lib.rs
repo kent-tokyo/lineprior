@@ -10,6 +10,7 @@
 mod build;
 mod error;
 mod eval;
+mod gate;
 mod hash;
 mod input;
 mod model;
@@ -22,6 +23,10 @@ pub use build::{BuildStats, build_prior_book};
 pub use error::{Error, Result, Warning};
 pub use eval::{
     CalibrationBin, EvalConfig, EvalOutput, EvalReport, ThresholdSweepEntry, TopKHitRate, evaluate,
+};
+pub use gate::{
+    GateCalibrationBin, GateFitOutput, GateFitReport, GateModel, GateModelConfig, GateObservation,
+    GatePrediction, GateQuery, default_gate_lambda_grid,
 };
 pub use input::{BuildOutput, ParseOutcome, build_prior_book_from_reader, parse_jsonl};
 pub use model::{
