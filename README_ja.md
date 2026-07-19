@@ -438,6 +438,64 @@ lineprior build observations.jsonl --out prior.jsonl --config best_config.json
 — **oracle ではなく prior** です。`tune` は、人手で `eval` を掃引していた作業を自動化するだけであ
 り、結果として得られた prior を呼び出し側が行動前に検証すべきという点を何も変えません。
 
+## ゲート結果の予測(ライブラリ限定)
+
+このクレートの他の部分とは違う種類の問いです。「どの行動を取るべきか」ではなく、「この学習候補は、
+高コストな実評価(多数対局の 'gate' 実行)にかける価値があるか」です。`GateModel::fit`/
+`GateModel::predict`(`gate.rs`)は、安価な validation 時点の診断値から、候補の実 gate Elo delta と
+—そしてその予測をどれだけ信じられるか—を予測する、小さく正則化されたサロゲートモデルを学習します。
+これにより、実際の gate 実行は、その価値が見込める候補にだけ回せます。
+
+```rust
+let output = GateModel::fit(&observations, &GateModelConfig::default())?;
+// output.report: selected_lambda、weighted_rmse、probability_positive のキャリブレーションレポート
+// -- output.model の予測を信じる前に確認する。
+
+let prediction = output.model.predict(&GateQuery { features });
+// prediction.expected_elo, .interval_low/.interval_high, .probability_positive
+```
+
+- **固定スキーマではなく、名前付き特徴量。** `GateObservation.features`/`GateQuery.features` は
+  呼び出し側が名前を付ける `BTreeMap<String, f64>`(例: `valid_cp_mse_delta`、`output_std`、
+  `conflict_rate`)です。診断項目のセットは、スキーマを壊さずに進化できます。training seed のような
+  ものは意図的に除外しています — カテゴリ的な id であって、線形モデルにとって「多い/少ない」が意味
+  を持つ量ではないためです。
+- **ランダム分割ではなく、group を意識した分割。** `GateObservation.group_id` は呼び出し側が合成する
+  不透明なキーです(例えば experiment family/recipe/lineage/dataset version を結合したもの)。リッジ
+  の正則化強度を選ぶ k-fold cross-validation に使われ、このクレート自身は一切パースしません。
+  要求した fold 数より distinct な group が少ない場合は leave-one-group-out にフォールバックします。
+- **不確実性は「候補の潜在的な強さ」への確信度であり、次回1回の gate 結果のばらつきではありません。**
+  `interval_low`/`interval_high` は(下記の `GatePrediction` と `GateOofPrediction` の両方で)、
+  期待値をその候補の*真の*強さの見積もりとしてどれだけ信じられるか(閉形式の Bayesian-ridge 事後分散)
+  を表すものであり、次に1回 gate を実行した場合に加わる標本ノイズではありません。これはモジュール
+  全体に一貫して当てはまる規約であり、呼び出しごとのオプトインではありません。クエリ時に欠けている
+  特徴量は学習時平均で補完され、`missing_features` に必ず記録されます — 黙って作り出すことはありま
+  せん。
+- **Round A 自体を実データで検証するための機能。** `GateModel::fit_with_validation` は `fit` が返す
+  ものすべてに加えて、候補ごとの out-of-fold 監査テーブルを返します:
+
+  ```rust
+  let validated = GateModel::fit_with_validation(&observations, &GateModelConfig::default())?;
+  // validated.interval_level: interval_low/interval_high が表す両側信頼水準(デフォルトの interval_z
+  // ではおよそ0.95)。各行で繰り返さず、ここで一度だけ示されます。
+  for row in &validated.oof_predictions {
+      // row.candidate_id, .group_id, .actual_elo, .predicted_elo, .residual, .prediction_stddev,
+      // .interval_low/.interval_high, .probability_positive, .outer_fold, .inner_selected_lambda
+  }
+  ```
+
+  すべての行は、`report.weighted_rmse`/`report.calibration` の元になっているのと*同じ* nested
+  group cross-validation から得られます — 監査テーブルのためだけに2回目の CV を回すことはしません。
+  そのため、集計指標と候補別の監査結果が異なる予測母集団を指すことはあり得ません。行は
+  `(outer_fold, group_id, candidate_id)` で決定的にソートされ、入力に重複する `candidate_id` があっ
+  てもそれぞれ別の行として保持されます(まとめません)。`fit` 自体は `fit_with_validation` の薄い
+  ラッパーで、監査テーブルを破棄します(いずれにせよ計算は行われます — 破棄によって節約されるのは
+  受け取り・読み取りのコストだけです)。両者は1つの学習経路を共有するため、モデルや集計指標について
+  食い違うことはあり得ません。
+- **これは、より大きな設計の最初の・最小のスライスです**(不確実性を最優先した予測 → gate
+  acquisition function → 単調制約、という順)。何を意図的に後回しにしたか・その理由は
+  `tasks/todo.md` を参照してください。CLI サブコマンドはまだありません。
+
 ## 学術的な位置づけ
 
 `lineprior` は、case-based planning(事例ベース計画)、plan reuse(計画の再利用)、sequence prediction(系列予測)、variable-order Markov models(可変次数マルコフモデル)、policy-guided search(方策誘導探索)といった既存のアイデアに着想を得た、工学的な Rust 実装です。新しい理論的アルゴリズムではありません。
