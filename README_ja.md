@@ -492,6 +492,44 @@ let prediction = output.model.predict(&GateQuery { features });
   ラッパーで、監査テーブルを破棄します(いずれにせよ計算は行われます — 破棄によって節約されるのは
   受け取り・読み取りのコストだけです)。両者は1つの学習経路を共有するため、モデルや集計指標について
   食い違うことはあり得ません。
+- **Elo 観測の不確実性: すべてのラベルが同じ確度ではありません。** `GateObservation` は
+  `gate_elo_delta` に加えて `actual_elo_stddev`(または `elo_ci_low`/`elo_ci_high` — 両方あれば
+  `GateModelConfig::observation_ci_z` を使った対称正規区間として stddev を逆算します。`interval_z`
+  とは別の独立したノブです — 呼び出し側の CI がどの信頼水準で計算されたかは、このモデル自身の出力
+  区間をどれだけ広くすべきかとは無関係だからです)を持てます。20 ペアの burn-in Elo と
+  1700 ペアの formal gate Elo は、同じ確度の教師ラベルとして扱うべきではありません。指定された場合、
+  これが行ごとに `gate_games_played` ベースの重みに代わってリッジ回帰の信頼性重み(`1 / stddev^2`、
+  逆分散)になります — 一部の行だけ stddev があるような混在データセットも正しく合成されます。
+  `completed_pairs` と `gate_status`(その候補の実際の過去の formal gate 判定 PASS/FAIL/INCONCLUSIVE)
+  も受け付けますが、現状は監査専用です — `features` にも fit にも投入されません(既存の
+  `training_seed` を除外している理由と同じです)。`provenance: BTreeMap<String, String>` フィールドは
+  呼び出し側が合成する不透明な来歴情報(experiment/dataset/teacher-manifest の id、seed、
+  schema version など)を保持します — `group_id` と同じ「このクレートは一切パースしない」という規約
+  です。
+- **1 観測につき不確実性のソースはちょうど1つ — 暗黙の優先順位はありません。** 同じ観測に
+  `actual_elo_stddev` と完全な `elo_ci_low`/`elo_ci_high` の両方を指定するとエラーになります
+  (`Error::ConflictingGateUncertaintySources`)。CI の片方だけを指定した場合も同様です
+  (`Error::IncompleteGateConfidenceInterval`)。また `gate_elo_delta` が自身の
+  `[elo_ci_low, elo_ci_high]` の外にある場合もエラーになります
+  (`Error::GateEloOutsideConfidenceInterval`)。どちらも指定されていない観測は、これまで通り
+  `gate_games_played` ベースの重みにフォールバックします。
+- **極端な行重みが fit を支配しないようにします。** 平均 `1.0` に正規化した後、各行の信頼性重みは
+  `[1 / max_weight_ratio, max_weight_ratio]`(`GateModelConfig::max_weight_ratio`、デフォルト
+  `100.0`、`1.0` 以上である必要があります)にクランプされます — そうしなければ、極端に小さい
+  `actual_elo_stddev` を申告した1行(入力ミス、あるいは本当にノイズがほぼゼロの計測)が、他のどの
+  行より何千倍も大きい逆分散重みを持ち、その1行だけで fit を事実上支配しかねません。このクランプの
+  後にもう一度平均 `1.0` へ再正規化することは意図的に行いません — クランプ済みの重みを再び平均 `1.0`
+  へ正規化し直すと、約束したはずの範囲の外へ押し戻されてしまう可能性があるためです。トレードオフと
+  して、クランプが実際に働いた場合に限り重みの平均が `1.0` からわずかにずれることを許容します。
+  `GateFitReport` はこれを隠さないよう `min_observation_weight`/`max_observation_weight`/
+  `effective_sample_size`/`clamped_observation_count` を公開します。
+- **`GateFitReport.dispersion_factor`: 申告された stddev 自体のキャリブレーションチェック。**
+  fit に含まれる全観測が使用可能な stddev を持つ場合にのみ `Some` になります — out-of-fold な
+  reduced chi-square(`sum((actual_elo - predicted_elo)^2 / stddev^2) / n`、`weighted_rmse`/
+  `calibration` と同じ nested-CV 予測から計算)です。おおよそ `1.0` であれば、申告された stddev が
+  実際の予測と結果のズレに対してよくキャリブレーションされていることを意味します。`>> 1` は実際の
+  ノイズが申告値を上回っている、または線形モデルが構造を捉えきれていない(この統計量だけでは両者を
+  区別できません)ことを、`<< 1` は申告された stddev が過大であることを示します。
 - **これは、より大きな設計の最初の・最小のスライスです**(不確実性を最優先した予測 → gate
   acquisition function → 単調制約、という順)。何を意図的に後回しにしたか・その理由は
   `tasks/todo.md` を参照してください。CLI サブコマンドはまだありません。

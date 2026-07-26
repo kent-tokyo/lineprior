@@ -489,6 +489,45 @@ let prediction = output.model.predict(&GateQuery { features });
   a thin wrapper over `fit_with_validation` that discards the table (still computed either way --
   this only spares a caller who only wants the model from receiving/reading it) -- both share one
   fitting path, so the two entry points can never disagree about the model or its aggregate metrics.
+- **Elo observation uncertainty: not every label is equally trustworthy.** A `GateObservation` may
+  carry `actual_elo_stddev` (or `elo_ci_low`/`elo_ci_high`, from which a stddev is implied assuming
+  a symmetric normal interval at `GateModelConfig::observation_ci_z` -- a *separate* knob from
+  `interval_z`, since the caller's CI was computed at whatever confidence level they used,
+  independent of how wide this model's own output intervals should be) alongside `gate_elo_delta`
+  -- a 20-pair burn-in Elo and a 1700-pair formal-gate Elo are not equally trustworthy teacher
+  labels. When present, this becomes the ridge fit's reliability weight (`1 / stddev^2`,
+  inverse-variance) in place of the `gate_games_played`-based weight, per row -- mixed datasets
+  (some rows with a stated stddev, some without) combine correctly. `completed_pairs` and
+  `gate_status` (this candidate's actual historical
+  PASS/FAIL/INCONCLUSIVE verdict) are also accepted, audit-only for now -- never fed into `features`
+  or the fit, same reasoning as the existing `training_seed` exclusion. A `provenance:
+  BTreeMap<String, String>` field carries opaque caller-composed provenance (experiment/dataset/
+  teacher-manifest ids, seeds, schema version, ...), same "never parsed by this crate" convention as
+  `group_id`.
+- **Exactly one uncertainty source per observation, never a silent priority.** Specifying both
+  `actual_elo_stddev` and a complete `elo_ci_low`/`elo_ci_high` pair on the same observation is
+  rejected (`Error::ConflictingGateUncertaintySources`), as is providing only one bound of a CI
+  (`Error::IncompleteGateConfidenceInterval`) or a `gate_elo_delta` outside its own stated
+  `[elo_ci_low, elo_ci_high]` (`Error::GateEloOutsideConfidenceInterval`). An observation with
+  neither falls back to the `gate_games_played`-based weight, unchanged.
+- **Extreme per-row weights can't dominate the fit.** After normalizing to mean `1.0`, each row's
+  reliability weight is clamped to `[1 / max_weight_ratio, max_weight_ratio]`
+  (`GateModelConfig::max_weight_ratio`, default `100.0`, must be `>= 1.0`) -- otherwise one
+  observation with a tiny stated `actual_elo_stddev` (a data-entry slip, or a genuinely
+  near-noiseless measurement) could produce an inverse-variance weight thousands of times any other
+  row's and effectively dictate the fit alone. This clamp is deliberately not followed by a second
+  renormalization, since re-normalizing clamped weights back to mean `1.0` could push a
+  just-clamped weight back outside the bound it was promised; the trade-off is that the weight mean
+  can drift (only when the clamp actually engages) instead. `GateFitReport` surfaces
+  `min_observation_weight`/`max_observation_weight`/`effective_sample_size`/
+  `clamped_observation_count` so this isn't a silent safety net.
+- **`GateFitReport.dispersion_factor`: a calibration check on the stated stddevs themselves.**
+  `Some` only when every observation in the fit supplied a usable stddev -- an out-of-fold reduced
+  chi-square (`sum((actual_elo - predicted_elo)^2 / stddev^2) / n`, from the same nested-CV
+  predictions `weighted_rmse`/`calibration` are built from). Roughly `1.0` means the stated stddevs
+  are well-calibrated against how far predictions actually land from real outcomes; `>> 1` means
+  real noise exceeds what's being reported *or* the linear model is missing structure (the two
+  aren't separable by this statistic alone); `<< 1` means stated stddevs are overstated.
 - **This is the first, smallest slice of a larger design** (uncertainty-first prediction, then a
   gate acquisition function, then monotonic constraints) -- see `tasks/todo.md` for what's
   deliberately deferred and why. No CLI subcommand yet.

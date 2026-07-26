@@ -102,6 +102,41 @@ pub enum Error {
     /// a positive, finite reliability weight for the label.
     #[error("gate observation `{candidate_id}` has gate_games_played <= 0: {value}")]
     NonPositiveGateWeight { candidate_id: String, value: f64 },
+
+    /// Raised by [`crate::gate::GateModel::fit`]: a provided
+    /// `actual_elo_stddev` must be a positive, finite measurement-noise
+    /// stddev (it becomes a divisor in the inverse-variance reliability
+    /// weight).
+    #[error("gate observation `{candidate_id}` has actual_elo_stddev <= 0: {value}")]
+    NonPositiveGateStddev { candidate_id: String, value: f64 },
+
+    /// Raised by [`crate::gate::GateModel::fit`]: an observation must not
+    /// specify both `actual_elo_stddev` and a complete `elo_ci_low`/
+    /// `elo_ci_high` pair -- exactly one uncertainty source per observation,
+    /// never a silent priority between them.
+    #[error(
+        "gate observation `{candidate_id}` specifies both actual_elo_stddev and an elo confidence interval -- provide exactly one"
+    )]
+    ConflictingGateUncertaintySources { candidate_id: String },
+
+    /// Raised by [`crate::gate::GateModel::fit`]: `elo_ci_low`/`elo_ci_high`
+    /// must be provided together, or neither at all.
+    #[error(
+        "gate observation `{candidate_id}` specifies only one of elo_ci_low/elo_ci_high -- both are required together"
+    )]
+    IncompleteGateConfidenceInterval { candidate_id: String },
+
+    /// Raised by [`crate::gate::GateModel::fit`]: `gate_elo_delta` must lie
+    /// within its own stated `elo_ci_low`/`elo_ci_high` bounds.
+    #[error(
+        "gate observation `{candidate_id}` has gate_elo_delta {gate_elo_delta} outside its own [elo_ci_low, elo_ci_high] = [{elo_ci_low}, {elo_ci_high}]"
+    )]
+    GateEloOutsideConfidenceInterval {
+        candidate_id: String,
+        gate_elo_delta: f64,
+        elo_ci_low: f64,
+        elo_ci_high: f64,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

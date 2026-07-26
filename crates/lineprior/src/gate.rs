@@ -14,6 +14,13 @@
 //! Round A scope only: fit, predict, and a calibration report. No
 //! acquisition function, no CLI, no monotonic constraints, no bootstrap --
 //! see the project task log for why each is deferred.
+//!
+//! Extended (still Round A): a [`GateObservation`] may also carry a directly
+//! measured `actual_elo_stddev`/`elo_ci_low`/`elo_ci_high` for its
+//! `gate_elo_delta` -- a 20-pair burn-in Elo and a 1700-pair formal-gate Elo
+//! are not equally trustworthy teacher labels, so when available this
+//! replaces the `gate_games_played`-based reliability weight with a real
+//! inverse-variance one (see [`implied_elo_stddev`]/[`effective_gate_weight`]).
 
 use crate::error::{Error, Result};
 use crate::hash::fnv1a;
@@ -21,6 +28,19 @@ use crate::model::DEFAULT_CONFIDENCE_Z;
 use crate::score::effective_sample_size;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+/// Real-gate PASS/FAIL/INCONCLUSIVE verdict, carried on a [`GateObservation`]
+/// purely for audit (e.g. eventually checking a predicted PASS probability
+/// against what actually happened historically). Deliberately never fed into
+/// `features` or the regression -- a categorical id, not a quantity where
+/// "more" or "less" means anything to a linear model, same reasoning as this
+/// struct's existing `training_seed` exclusion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GateStatus {
+    Pass,
+    Fail,
+    Inconclusive,
+}
 
 /// One historical training candidate that has already been through a real
 /// gate run, used as training data for [`GateModel::fit`].
@@ -45,15 +65,59 @@ pub struct GateObservation {
     /// Measured Elo delta from the real gate run -- the regression label.
     pub gate_elo_delta: f64,
     /// Games played behind `gate_elo_delta`, used as this label's
-    /// reliability weight in the ridge fit: a 20-game delta is noisier than
-    /// a 396-game one and should count for less. Must be `> 0.0`.
+    /// reliability weight in the ridge fit when no better measurement is
+    /// available (see `actual_elo_stddev` below). Must be `> 0.0`.
     pub gate_games_played: f64,
+    /// A directly measured stddev of `gate_elo_delta`, when the caller has
+    /// one (e.g. from veridict's own paired-Elo estimate). When present,
+    /// this -- not `gate_games_played` -- becomes the ridge fit's
+    /// reliability weight (`1 / actual_elo_stddev^2`): a stated measurement
+    /// error is a strictly better reliability signal than a raw game count,
+    /// since it already reflects completion status, draw rate, and anything
+    /// else that affects how noisy this particular `gate_elo_delta` is. Must
+    /// be `> 0.0` when present (see [`Error::NonPositiveGateStddev`]).
+    pub actual_elo_stddev: Option<f64>,
+    /// A confidence-interval alternative to `actual_elo_stddev`: when both
+    /// are present and `actual_elo_stddev` is absent, an implied stddev is
+    /// derived from this interval's width (see [`implied_elo_stddev`]).
+    /// Audit-only when `actual_elo_stddev` is also present.
+    pub elo_ci_low: Option<f64>,
+    pub elo_ci_high: Option<f64>,
+    /// Paired-game count behind `gate_elo_delta`, when the caller's gate
+    /// counts pairs rather than (or in addition to) raw games. Audit-only --
+    /// never used as a weight (`gate_games_played`/`actual_elo_stddev`
+    /// already cover that).
+    pub completed_pairs: Option<f64>,
+    /// This candidate's actual historical formal-gate verdict. Audit-only --
+    /// see [`GateStatus`].
+    pub gate_status: Option<GateStatus>,
+    /// Opaque caller-composed provenance (e.g. `experiment_id`,
+    /// `dataset_sha256`, `teacher_manifest_sha256`, seeds, `schema_version`)
+    /// -- unparsed and undecomposed by this crate, same convention as
+    /// `group_id`. Carried through purely so callers can audit which
+    /// artifacts produced this observation; never read by `fit`/`predict`.
+    #[serde(default)]
+    pub provenance: BTreeMap<String, String>,
 }
 
 /// A not-yet-gated candidate to score with [`GateModel::predict`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GateQuery {
     pub features: BTreeMap<String, f64>,
+}
+
+/// Whether a query falls within the range [`GateModel::fit`] was actually
+/// trained on. See [`GateModelConfig::ood_leverage_ratio_threshold`]/
+/// `ood_missing_fraction_threshold` for the classification rule. Reported,
+/// not enforced -- `expected_elo`/`probability_positive` are still computed
+/// and returned regardless of status, same "report rather than refuse"
+/// convention as `missing_features`; a caller that wants to abstain on
+/// `Extrapolation`/`Unsupported` decides that for itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum PredictionStatus {
+    Supported,
+    Extrapolation,
+    Unsupported,
 }
 
 /// [`GateModel::predict`]'s output for one [`GateQuery`].
@@ -81,6 +145,32 @@ pub struct GatePrediction {
     /// trained on -- ignored (there is no coefficient for them), reported
     /// here rather than silently dropped.
     pub unknown_features: Vec<String>,
+    /// The ridge-analogue leverage/hat term at this query (see
+    /// [`leverage`]) -- how far the query sits from the training data in
+    /// the fitted ridge metric. Grows without bound moving away from the
+    /// training feature mean; `0.0` exactly at the mean (including an
+    /// all-missing query -- see `missing_feature_fraction` for why leverage
+    /// alone can't be trusted to catch that case).
+    pub leverage: f64,
+    /// `leverage.sqrt()` -- a Mahalanobis-style distance in the fitted
+    /// ridge metric, on the same scale a caller would compare across
+    /// queries more intuitively than the squared `leverage` term.
+    pub support_distance: f64,
+    /// Standardized-feature-space distance from this query to the nearest
+    /// training group's (weighted) centroid.
+    pub nearest_group_distance: f64,
+    /// `missing_features.len() / (number of features the model trained on)`.
+    pub missing_feature_fraction: f64,
+    pub prediction_status: PredictionStatus,
+    /// Exactly `prediction_status == PredictionStatus::Supported` -- no
+    /// other logic. A caller that only wants a yes/no gating decision reads
+    /// this instead of matching on `prediction_status` itself; it encodes
+    /// nothing `prediction_status` doesn't already say. `expected_elo`/
+    /// `interval_low`/`interval_high`/`probability_positive` above are
+    /// still the model's real estimate even when this is `false` -- an
+    /// out-of-distribution query is never silently zeroed, only flagged as
+    /// not a basis for a gating decision.
+    pub recommend_for_gate: bool,
 }
 
 /// Tuning knobs for [`GateModel::fit`].
@@ -106,6 +196,40 @@ pub struct GateModelConfig {
     /// [`DEFAULT_CONFIDENCE_Z`], the same one-sided-conservative z already
     /// used for this crate's Wilson-bound confidence.
     pub interval_z: f64,
+    /// z-score assumed for decoding a `GateObservation`'s
+    /// `elo_ci_low`/`elo_ci_high` width into an implied stddev (see
+    /// [`implied_elo_stddev`]) -- deliberately a *separate* knob from
+    /// `interval_z`: that one controls how wide this model's *own output*
+    /// intervals should be, while this one describes the confidence level
+    /// the *caller's* CI was already computed at (e.g. veridict's). The two
+    /// happen to share a default, but conflating them would mean changing
+    /// `interval_z` silently reinterprets every CI-derived stddev too.
+    pub observation_ci_z: f64,
+    /// `leverage / mean_leverage` above this multiple classifies a query as
+    /// [`PredictionStatus::Extrapolation`] (unless already `Unsupported` on
+    /// missing features -- see `ood_missing_fraction_threshold`).
+    /// `mean_leverage = df / n_eff` is the ridge-correct analogue of the OLS
+    /// hat matrix's uniform `p/n` -- not a fixed constant, since it depends
+    /// on the fitted model's own effective degrees of freedom and sample
+    /// size. Must be `> 0.0`.
+    pub ood_leverage_ratio_threshold: f64,
+    /// A query with at least this fraction of the fitted model's features
+    /// missing (imputed to the training mean) is
+    /// [`PredictionStatus::Unsupported`], checked ahead of and independently
+    /// of leverage: an all-missing query imputes to the training feature
+    /// mean, the *lowest* possible leverage, which would otherwise look
+    /// like maximum support while carrying zero real information. Must be
+    /// in `(0.0, 1.0]`.
+    pub ood_missing_fraction_threshold: f64,
+    /// Bounds how much any single observation's reliability weight can
+    /// dominate the fit: after normalizing weights to mean `1.0`, each is
+    /// clamped to `[1 / max_weight_ratio, max_weight_ratio]` before a second
+    /// mean-`1.0` renormalization (see [`fit_weighted_ridge`]'s doc
+    /// comment). A near-zero stated `actual_elo_stddev` (a data-entry slip,
+    /// or a genuinely near-noiseless measurement) would otherwise produce an
+    /// inverse-variance weight thousands of times any other row's. Must be
+    /// `>= 1.0` (a ratio below `1.0` would invert or collapse every weight).
+    pub max_weight_ratio: f64,
 }
 
 /// `1e-4` through `100.0`, log-spaced-ish, chosen to bias toward strong
@@ -123,6 +247,10 @@ impl Default for GateModelConfig {
             cv_folds: 5,
             calibration_bins: 5,
             interval_z: DEFAULT_CONFIDENCE_Z,
+            observation_ci_z: DEFAULT_CONFIDENCE_Z,
+            ood_leverage_ratio_threshold: 3.0,
+            ood_missing_fraction_threshold: 0.5,
+            max_weight_ratio: 100.0,
         }
     }
 }
@@ -168,6 +296,34 @@ pub struct GateFitReport {
     /// `calibration` is built from.
     pub weighted_rmse: f64,
     pub calibration: Vec<GateCalibrationBin>,
+    /// Out-of-fold reduced chi-square over the caller's stated Elo stddevs
+    /// (see [`implied_elo_stddev`]): `sum((actual_elo - predicted_elo)^2 /
+    /// stddev^2) / n`, from the same nested-CV predictions `weighted_rmse`/
+    /// `calibration` are built from. `Some` only when *every* observation
+    /// supplied a usable `actual_elo_stddev`/CI -- the statistic isn't
+    /// meaningful for a dataset that's only partly heteroscedastically
+    /// weighted. Roughly `1.0` means the stated stddevs are well-calibrated
+    /// against how far predictions actually land from real outcomes; `>> 1`
+    /// means real noise exceeds what's being reported *or* this linear
+    /// model is missing structure (the two aren't separable by this
+    /// statistic alone); `<< 1` means stated stddevs are overstated. `None`
+    /// otherwise (mixed or absent stddev data).
+    pub dispersion_factor: Option<f64>,
+    /// The deployed model's own final refit weight distribution, *after*
+    /// [`GateModelConfig::max_weight_ratio`] clamping and renormalization
+    /// (see [`fit_weighted_ridge`]'s doc comment) -- how unevenly this fit
+    /// actually weighted its rows, not just an assumption that clamping
+    /// happened reasonably.
+    pub min_observation_weight: f64,
+    pub max_observation_weight: f64,
+    /// Kish's effective sample size of the deployed model's final refit
+    /// (same quantity as the model's internal `n_eff`, surfaced here since
+    /// `GateModel`'s fields are otherwise private).
+    pub effective_sample_size: f64,
+    /// Count of rows whose weight was pulled to
+    /// `GateModelConfig::max_weight_ratio`'s bound during the deployed
+    /// model's final refit. `0` in the common case.
+    pub clamped_observation_count: usize,
 }
 
 /// Result of [`GateModel::fit`]: the fitted model plus its own diagnostics.
@@ -216,6 +372,19 @@ pub struct GateOofPrediction {
     /// `GateFitReport::selected_lambda`, which is chosen separately over the
     /// whole dataset for the deployed model.
     pub inner_selected_lambda: f64,
+    /// This row's leverage/support/status against the model fit on *this
+    /// row's own outer fold's training rows* -- the same OOD diagnostics
+    /// [`GatePrediction`] carries, for auditing whether the configured
+    /// thresholds are sane against real held-out history before trusting
+    /// them on a live query. See [`GatePrediction::leverage`].
+    pub leverage: f64,
+    pub support_distance: f64,
+    pub nearest_group_distance: f64,
+    pub missing_feature_fraction: f64,
+    pub prediction_status: PredictionStatus,
+    /// Exactly `prediction_status == PredictionStatus::Supported` -- see
+    /// [`GatePrediction::recommend_for_gate`].
+    pub recommend_for_gate: bool,
 }
 
 /// Result of [`GateModel::fit_with_validation`]: everything [`GateFitOutput`]
@@ -257,6 +426,17 @@ pub struct GateModel {
     /// see [`RidgeFit::intercept_variance_factor`].
     intercept_variance_factor: f64,
     interval_z: f64,
+    /// Each training group's weighted-mean standardized feature vector, from
+    /// the same full-data refit -- see [`group_centroids`].
+    group_centroids: BTreeMap<String, Vec<f64>>,
+    /// `df / n_eff` from the same full-data refit -- the ridge-correct
+    /// reference leverage [`classify_prediction_status`] compares a query's
+    /// own [`leverage`] against.
+    mean_leverage: f64,
+    /// [`max_training_group_distance`] over `group_centroids`.
+    max_training_group_distance: f64,
+    ood_leverage_ratio_threshold: f64,
+    ood_missing_fraction_threshold: f64,
 }
 
 impl GateModel {
@@ -313,7 +493,8 @@ impl GateModel {
     /// `eval.rs`'s `sequence_id`-based split). Uses deterministic balanced
     /// GroupKFold ([`assign_folds`]): `min(cv_folds, num_groups)` folds,
     /// each group placed on whichever fold currently holds the least total
-    /// `gate_games_played` -- every fold is guaranteed non-empty whenever
+    /// reliability weight ([`effective_gate_weight`]) -- every fold is
+    /// guaranteed non-empty whenever
     /// `num_groups >= cv_folds` (see `assign_folds`'s doc comment for the
     /// guarantee and its deterministic tie-breaking). Feature
     /// standardization and the ridge fit for a given fold use that fold's
@@ -346,7 +527,7 @@ impl GateModel {
             return Err(Error::InsufficientGateGroups { num_groups });
         }
 
-        let (fold_ids, effective_folds) = assign_folds(&all_rows, config.cv_folds);
+        let (fold_ids, effective_folds) = assign_folds(&all_rows, config.cv_folds, config);
 
         let (selected_lambda, _plain_rmse, _plain_predictions) = select_lambda(
             &all_rows,
@@ -354,6 +535,7 @@ impl GateModel {
             &fold_ids,
             effective_folds,
             &config.lambda_grid,
+            config,
         );
 
         let (folds_used, weighted_rmse, fold_predictions) = nested_cross_validate(
@@ -363,19 +545,27 @@ impl GateModel {
             effective_folds,
             &config.lambda_grid,
             config.cv_folds,
+            config,
         );
         let calibration = build_calibration(&fold_predictions, config.calibration_bins);
         let oof_predictions = build_oof_table(&fold_predictions, config.interval_z);
         let interval_level = 2.0 * standard_normal_cdf(config.interval_z) - 1.0;
+        let dispersion_factor = out_of_fold_dispersion_factor(&fold_predictions);
 
-        let weights: Vec<f64> = observations.iter().map(|o| o.gate_games_played).collect();
+        let weights: Vec<f64> = observations
+            .iter()
+            .map(|o| effective_gate_weight(o, config.observation_ci_z))
+            .collect();
         let standardizer = Standardizer::fit(&all_rows, &feature_names, &weights);
         let x: Vec<Vec<f64>> = observations
             .iter()
             .map(|o| standardizer.transform(&o.features, &feature_names).0)
             .collect();
         let y: Vec<f64> = observations.iter().map(|o| o.gate_elo_delta).collect();
-        let fit = fit_weighted_ridge(&x, &y, &weights, selected_lambda);
+        let fit = fit_weighted_ridge(&x, &y, &weights, selected_lambda, config.max_weight_ratio);
+        let centroids = group_centroids(&all_rows, &x, config.observation_ci_z);
+        let mean_leverage = fit.df / fit.n_eff;
+        let max_group_distance = max_training_group_distance(&centroids);
 
         let model = GateModel {
             feature_names,
@@ -387,6 +577,11 @@ impl GateModel {
             sigma2: fit.sigma2,
             intercept_variance_factor: fit.intercept_variance_factor,
             interval_z: config.interval_z,
+            group_centroids: centroids,
+            mean_leverage,
+            max_training_group_distance: max_group_distance,
+            ood_leverage_ratio_threshold: config.ood_leverage_ratio_threshold,
+            ood_missing_fraction_threshold: config.ood_missing_fraction_threshold,
         };
         let report = GateFitReport {
             selected_lambda,
@@ -395,6 +590,11 @@ impl GateModel {
             num_groups,
             weighted_rmse,
             calibration,
+            dispersion_factor,
+            min_observation_weight: fit.min_observation_weight,
+            max_observation_weight: fit.max_observation_weight,
+            effective_sample_size: fit.n_eff,
+            clamped_observation_count: fit.clamped_observation_count,
         };
         Ok(GateValidationOutput {
             model,
@@ -423,6 +623,20 @@ impl GateModel {
         let sd = variance.sqrt();
         let probability_positive = probability_positive(expected_elo, variance, sd);
 
+        let leverage_value = leverage(&self.m, &x);
+        let nearest_group_distance_value = nearest_group_distance(&self.group_centroids, &x);
+        let missing_feature_fraction =
+            missing_features.len() as f64 / self.feature_names.len() as f64;
+        let prediction_status = classify_prediction_status(
+            leverage_value,
+            self.mean_leverage,
+            nearest_group_distance_value,
+            self.max_training_group_distance,
+            missing_feature_fraction,
+            self.ood_leverage_ratio_threshold,
+            self.ood_missing_fraction_threshold,
+        );
+
         GatePrediction {
             expected_elo,
             interval_low: expected_elo - self.interval_z * sd,
@@ -430,6 +644,12 @@ impl GateModel {
             probability_positive,
             missing_features,
             unknown_features,
+            leverage: leverage_value,
+            support_distance: leverage_value.sqrt(),
+            nearest_group_distance: nearest_group_distance_value,
+            missing_feature_fraction,
+            prediction_status,
+            recommend_for_gate: prediction_status == PredictionStatus::Supported,
         }
     }
 }
@@ -440,6 +660,39 @@ impl GateModel {
 /// partially-ordered types).
 fn is_positive_finite(x: f64) -> bool {
     x.is_finite() && x > 0.0
+}
+
+/// The measured stddev of `gate_elo_delta` implied by `obs`, if any is
+/// available: a directly-stated `actual_elo_stddev`, else one derived from
+/// `elo_ci_low`/`elo_ci_high`'s width (assuming a symmetric normal interval
+/// at `ci_z` -- deliberately [`GateModelConfig::observation_ci_z`], *not*
+/// `interval_z`: the caller's CI was computed at whatever confidence level
+/// they used, independent of how wide this model's own output intervals
+/// should be -- see that field's doc comment), else `None` when neither is
+/// provided or the derived width is non-positive (e.g. `elo_ci_low >=
+/// elo_ci_high`) -- silently falls through to `None` rather than erroring,
+/// same "absent/bad data isn't invented" convention as a missing feature at
+/// query time.
+fn implied_elo_stddev(obs: &GateObservation, ci_z: f64) -> Option<f64> {
+    if let Some(sd) = obs.actual_elo_stddev {
+        return Some(sd);
+    }
+    let (low, high) = (obs.elo_ci_low?, obs.elo_ci_high?);
+    let sd = (high - low) / (2.0 * ci_z);
+    is_positive_finite(sd).then_some(sd)
+}
+
+/// Per-row reliability weight for the ridge fit and fold balancing:
+/// inverse-variance (`1 / stddev^2`) from [`implied_elo_stddev`] when
+/// available, else the existing `gate_games_played`-based weight. Mixed
+/// datasets (some rows heteroscedastic, some not) combine correctly since
+/// every weight -- whichever source produced it -- is renormalized to mean
+/// 1.0 downstream in [`fit_weighted_ridge`].
+fn effective_gate_weight(obs: &GateObservation, ci_z: f64) -> f64 {
+    match implied_elo_stddev(obs, ci_z) {
+        Some(sd) => 1.0 / (sd * sd),
+        None => obs.gate_games_played,
+    }
 }
 
 fn validate_config(config: &GateModelConfig) -> Result<()> {
@@ -468,14 +721,49 @@ fn validate_config(config: &GateModelConfig) -> Result<()> {
             message: "gate interval_z must be finite and > 0.0".to_string(),
         });
     }
+    if !is_positive_finite(config.observation_ci_z) {
+        return Err(Error::InvalidConfig {
+            message: "gate observation_ci_z must be finite and > 0.0".to_string(),
+        });
+    }
+    if !is_positive_finite(config.ood_leverage_ratio_threshold) {
+        return Err(Error::InvalidConfig {
+            message: "gate ood_leverage_ratio_threshold must be finite and > 0.0".to_string(),
+        });
+    }
+    if !(config.ood_missing_fraction_threshold > 0.0
+        && config.ood_missing_fraction_threshold <= 1.0)
+    {
+        return Err(Error::InvalidConfig {
+            message: "gate ood_missing_fraction_threshold must be in (0.0, 1.0]".to_string(),
+        });
+    }
+    if !(config.max_weight_ratio.is_finite() && config.max_weight_ratio >= 1.0) {
+        return Err(Error::InvalidConfig {
+            message: "gate max_weight_ratio must be finite and >= 1.0".to_string(),
+        });
+    }
     Ok(())
 }
 
 /// Validates every observation (finite feature/label/weight values, positive
-/// weight, an identical feature-name set across all rows) and returns that
-/// shared, sorted feature-name list. Training-time inconsistency is a hard
-/// error (unlike `predict`'s query-time handling) -- see
+/// weight, a positive-finite `actual_elo_stddev` when provided, finite
+/// `elo_ci_low`/`elo_ci_high`/`completed_pairs` when provided, an identical
+/// feature-name set across all rows) and returns that shared, sorted
+/// feature-name list. Training-time inconsistency is a hard error (unlike
+/// `predict`'s query-time handling) -- see
 /// [`Error::InconsistentGateFeatures`]'s doc comment for why.
+///
+/// Also enforces the uncertainty-source contract, no silent priority
+/// between sources: `elo_ci_low`/`elo_ci_high` must be given together or not
+/// at all ([`Error::IncompleteGateConfidenceInterval`]); `actual_elo_stddev`
+/// and a complete CI must never both be present on the same row
+/// ([`Error::ConflictingGateUncertaintySources`] -- this is also why
+/// [`implied_elo_stddev`]'s "prefer `actual_elo_stddev`" branch can never
+/// actually choose between two present sources once an observation has
+/// passed validation, only when called directly on unvalidated data); and a
+/// complete CI must bracket its own `gate_elo_delta`
+/// ([`Error::GateEloOutsideConfidenceInterval`]).
 fn validate_observations(observations: &[GateObservation]) -> Result<Vec<String>> {
     if observations.is_empty() {
         return Err(Error::InsufficientGateObservations {
@@ -497,6 +785,48 @@ fn validate_observations(observations: &[GateObservation]) -> Result<Vec<String>
                 candidate_id: obs.candidate_id.clone(),
                 value: obs.gate_games_played,
             });
+        }
+        if let Some(sd) = obs.actual_elo_stddev
+            && !is_positive_finite(sd)
+        {
+            return Err(Error::NonPositiveGateStddev {
+                candidate_id: obs.candidate_id.clone(),
+                value: sd,
+            });
+        }
+        for (field, value) in [
+            ("elo_ci_low", obs.elo_ci_low),
+            ("elo_ci_high", obs.elo_ci_high),
+            ("completed_pairs", obs.completed_pairs),
+        ] {
+            if let Some(v) = value
+                && !v.is_finite()
+            {
+                return Err(Error::NonFiniteGateValue {
+                    candidate_id: obs.candidate_id.clone(),
+                    field: field.to_string(),
+                });
+            }
+        }
+        if obs.elo_ci_low.is_some() != obs.elo_ci_high.is_some() {
+            return Err(Error::IncompleteGateConfidenceInterval {
+                candidate_id: obs.candidate_id.clone(),
+            });
+        }
+        if let (Some(low), Some(high)) = (obs.elo_ci_low, obs.elo_ci_high) {
+            if obs.actual_elo_stddev.is_some() {
+                return Err(Error::ConflictingGateUncertaintySources {
+                    candidate_id: obs.candidate_id.clone(),
+                });
+            }
+            if !(low..=high).contains(&obs.gate_elo_delta) {
+                return Err(Error::GateEloOutsideConfidenceInterval {
+                    candidate_id: obs.candidate_id.clone(),
+                    gate_elo_delta: obs.gate_elo_delta,
+                    elo_ci_low: low,
+                    elo_ci_high: high,
+                });
+            }
         }
         let keys: Vec<String> = obs.features.keys().cloned().collect();
         if keys != feature_names {
@@ -532,24 +862,34 @@ fn distinct_sorted<'a>(ids: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
 /// a group maps to a fold.
 ///
 /// Fold count is `min(cv_folds, num_groups)`. Groups are sorted by total
-/// `gate_games_played` descending (ties broken by `fnv1a(group_id)`, then
-/// `group_id` itself -- both deterministic and independent of input row
+/// [`effective_gate_weight`] descending (ties broken by `fnv1a(group_id)`,
+/// then `group_id` itself -- both deterministic and independent of input row
 /// order), then placed one at a time onto whichever fold currently holds the
 /// least total weight (ties broken by lowest fold index): a greedy
 /// longest-processing-time-first bin-packing that keeps validation weight
-/// close to balanced across folds. Unlike the previous `fnv1a(group_id) %
-/// cv_folds` hash-mod scheme -- which could collide multiple groups into one
-/// fold and leave another empty, with no guarantee `cv_folds_used` folds
-/// were actually non-empty -- every fold here is guaranteed non-empty
-/// whenever `num_groups >= cv_folds`: every fold starts at weight `0.0`,
-/// every group's weight is `> 0.0` (`gate_games_played` is validated
-/// positive), so the first `min(cv_folds, num_groups)` placements each land
-/// on a still-empty fold before any fold receives a second group. Returns
-/// the per-row fold id and the number of folds actually in play.
-fn assign_folds(rows: &[&GateObservation], cv_folds: usize) -> (Vec<usize>, usize) {
+/// close to balanced across folds -- balanced by *information*, not
+/// necessarily by row or game count, since a group of low-stddev
+/// (highly-reliable) rows can carry more weight than a group of many
+/// high-stddev ones. Unlike the previous `fnv1a(group_id) % cv_folds`
+/// hash-mod scheme -- which could collide multiple groups into one fold and
+/// leave another empty, with no guarantee `cv_folds_used` folds were
+/// actually non-empty -- every fold here is guaranteed non-empty whenever
+/// `num_groups >= cv_folds`: every fold starts at weight `0.0`, every
+/// group's weight is `> 0.0` (`effective_gate_weight` is always positive:
+/// either an inverse-variance derived from a positive-finite stddev, or the
+/// validated-positive `gate_games_played` fallback), so the first
+/// `min(cv_folds, num_groups)` placements each land on a still-empty fold
+/// before any fold receives a second group. Returns the per-row fold id and
+/// the number of folds actually in play.
+fn assign_folds(
+    rows: &[&GateObservation],
+    cv_folds: usize,
+    config: &GateModelConfig,
+) -> (Vec<usize>, usize) {
     let mut group_weight: BTreeMap<&str, f64> = BTreeMap::new();
     for o in rows {
-        *group_weight.entry(o.group_id.as_str()).or_insert(0.0) += o.gate_games_played;
+        *group_weight.entry(o.group_id.as_str()).or_insert(0.0) +=
+            effective_gate_weight(o, config.observation_ci_z);
     }
     let effective_folds = cv_folds.min(group_weight.len());
 
@@ -677,7 +1017,7 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 struct RidgeFit {
     intercept: f64,
     coefficients: Vec<f64>,
-    /// `(XᵀWX + lambda*I)⁻¹`, reused by [`predictive_variance`].
+    /// `(XᵀWX + lambda*I)⁻¹`, reused by [`predictive_variance`]/[`leverage`].
     m: Vec<Vec<f64>>,
     sigma2: f64,
     /// `1.0 / n_eff` -- the intercept's own posterior variance factor (the
@@ -685,6 +1025,27 @@ struct RidgeFit {
     /// data, not a known constant), reused by [`predictive_variance`] so
     /// intercept uncertainty is never silently dropped from a prediction.
     intercept_variance_factor: f64,
+    /// Kish's effective sample size of this fit's (weight-normalized)
+    /// training rows -- named directly rather than left only recoverable by
+    /// inverting `intercept_variance_factor`, since OOD diagnostics need it
+    /// on its own (`mean_leverage = df / n_eff`, see [`GateModel::predict`]).
+    n_eff: f64,
+    /// Ridge effective degrees of freedom, `trace((XᵀWX + lambda*I)⁻¹ XᵀWX)`
+    /// -- the same quantity [`Self::sigma2`]'s denominator already computed
+    /// and discarded; named here so `mean_leverage = df / n_eff` (the
+    /// ridge-correct analogue of the OLS hat matrix's uniform `p/n`) can be
+    /// computed without re-deriving it.
+    df: f64,
+    /// Smallest/largest per-row weight actually used, *after* clamping to
+    /// [`GateModelConfig::max_weight_ratio`] -- see [`fit_weighted_ridge`]'s
+    /// doc comment. Surfaced so a caller can see how unevenly the fit
+    /// weighted its rows, not just trust that it happened reasonably.
+    min_observation_weight: f64,
+    max_observation_weight: f64,
+    /// Count of rows whose *pre-clamp* normalized weight fell outside
+    /// `[1 / max_weight_ratio, max_weight_ratio]` and was pulled back to
+    /// that bound. `0` in the common case.
+    clamped_observation_count: usize,
 }
 
 /// Weighted ridge regression via the normal equations: minimizes
@@ -695,13 +1056,16 @@ struct RidgeFit {
 /// `weights` is normalized here to mean `1.0` (sum `n`) before anything else
 /// is computed from it: `A`'s diagonal is `~sum(weights)`, so without this,
 /// `lambda`'s effective strength would depend on the *absolute* magnitude of
-/// `gate_games_played` (tens vs. hundreds of games) rather than the relative
-/// reliability it's meant to express -- with raw game counts, `A`'s diagonal
-/// can dwarf every value in `GateModelConfig::lambda_grid`, silently
-/// disabling regularization across most of the grid. Normalizing preserves
-/// every pairwise weight *ratio* (so a 400-game row still counts 20x a
-/// 20-game row) while pinning the grid's regularization strength to the
-/// data's row count instead of its label-reliability units.
+/// the caller's reliability weight -- whether that's `gate_games_played`
+/// (tens vs. hundreds of games) or an inverse-variance derived from
+/// `actual_elo_stddev`/CI (see [`effective_gate_weight`]) -- rather than the
+/// relative reliability it's meant to express. With raw, unnormalized
+/// weights, `A`'s diagonal can dwarf every value in
+/// `GateModelConfig::lambda_grid`, silently disabling regularization across
+/// most of the grid. Normalizing preserves every pairwise weight *ratio* (so
+/// a 400-game row still counts 20x a 20-game row, and a stddev-2.0 row still
+/// counts 4x a stddev-4.0 row) while pinning the grid's regularization
+/// strength to the data's row count instead of its label-reliability units.
 ///
 /// `sigma2` (residual variance) divides the weighted residual sum of squares
 /// by `(n_eff - 1 - df)`: `n_eff` reuses [`effective_sample_size`] (Kish's
@@ -713,13 +1077,51 @@ struct RidgeFit {
 /// intercept (`y_mean`), which is also estimated from this same data rather
 /// than known exactly. Clamped to a small positive floor so a degenerate
 /// fold (`n_eff <= 1 + df`) can't produce a zero or negative variance.
-fn fit_weighted_ridge(x_std: &[Vec<f64>], y: &[f64], weights: &[f64], lambda: f64) -> RidgeFit {
+///
+/// After the mean-1 normalization above, every weight is also clamped to
+/// `[1 / max_weight_ratio, max_weight_ratio]` -- otherwise one observation
+/// with a tiny stated `actual_elo_stddev` (a data-entry slip, or a genuinely
+/// near-noiseless measurement) could produce an inverse-variance weight
+/// thousands of times any other row's, effectively letting that single
+/// observation dictate the fit regardless of every other row. This clamp is
+/// deliberately the *last* step, not followed by a second renormalization:
+/// re-normalizing clamped weights back to mean `1.0` would rescale every
+/// weight by a common factor, which can push a just-clamped weight back
+/// outside `[1 / max_weight_ratio, max_weight_ratio]` -- the bound the
+/// caller was promised. Skipping that step means the mean can drift below
+/// `1.0` when clamping actually engages (already-pathological weight
+/// spread), slightly perturbing how strong `lambda` reads on that fit --
+/// a bounded, inspectable trade-off, preferable to either unbounded
+/// single-row domination or a clamp that silently doesn't hold.
+/// [`RidgeFit::min_observation_weight`]/`max_observation_weight`/
+/// `clamped_observation_count` report what actually happened, so this isn't
+/// a silent safety net; `clamped_observation_count > 0` is the signal a
+/// caller reads to know the clamp engaged at all.
+fn fit_weighted_ridge(
+    x_std: &[Vec<f64>],
+    y: &[f64],
+    weights: &[f64],
+    lambda: f64,
+    max_weight_ratio: f64,
+) -> RidgeFit {
     let n = x_std.len();
     let p = x_std[0].len();
     let raw_sum_w: f64 = weights.iter().sum();
     let weights: Vec<f64> = weights.iter().map(|w| w * n as f64 / raw_sum_w).collect();
+    let clamp_low = 1.0 / max_weight_ratio;
+    let clamp_high = max_weight_ratio;
+    let clamped_observation_count = weights
+        .iter()
+        .filter(|&&w| w < clamp_low || w > clamp_high)
+        .count();
+    let weights: Vec<f64> = weights
+        .iter()
+        .map(|&w| w.clamp(clamp_low, clamp_high))
+        .collect();
+    let min_observation_weight = weights.iter().copied().fold(f64::INFINITY, f64::min);
+    let max_observation_weight = weights.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let weights = &weights;
-    let sum_w: f64 = weights.iter().sum(); // == n, kept symbolic for clarity below
+    let sum_w: f64 = weights.iter().sum(); // == n unless clamping engaged, see doc comment above
     let y_mean = weights.iter().zip(y).map(|(w, yy)| w * yy).sum::<f64>() / sum_w;
     let y_centered: Vec<f64> = y.iter().map(|yy| yy - y_mean).collect();
 
@@ -762,6 +1164,11 @@ fn fit_weighted_ridge(x_std: &[Vec<f64>], y: &[f64], weights: &[f64], lambda: f6
         m,
         sigma2,
         intercept_variance_factor,
+        n_eff,
+        df,
+        min_observation_weight,
+        max_observation_weight,
+        clamped_observation_count,
     }
 }
 
@@ -834,6 +1241,24 @@ fn predictive_variance(
     sigma2: f64,
     intercept_variance_factor: f64,
 ) -> f64 {
+    (sigma2 * (intercept_variance_factor + leverage(m, x_std))).max(0.0)
+}
+
+/// The ridge-analogue leverage/hat term `q = x_std^T M x_std` (`M =
+/// (XᵀWX + lambda*I)⁻¹`) at a standardized query point -- how far `x_std`
+/// sits from the training data in the ridge-regularized metric, growing
+/// without bound as `x_std` moves away from the training feature mean.
+/// Split out from [`predictive_variance`] (which adds
+/// `intercept_variance_factor` and scales by `sigma2`) because OOD
+/// diagnostics need this term on its own, in standardized-feature units,
+/// not folded into a variance. **Not sufficient alone to judge support**: a
+/// query with every feature missing (imputed to the training mean,
+/// `x_std == 0`) gets `q == 0` -- the *lowest* possible leverage while
+/// carrying *zero* real information (see
+/// [`GateModelConfig::ood_missing_fraction_threshold`], which gates
+/// `PredictionStatus::Unsupported` independently and unconditionally rather
+/// than relying on leverage to catch this case).
+fn leverage(m: &[Vec<f64>], x_std: &[f64]) -> f64 {
     let p = x_std.len();
     let mut q = 0.0;
     for j in 0..p {
@@ -841,7 +1266,102 @@ fn predictive_variance(
             q += x_std[j] * m[j][k] * x_std[k];
         }
     }
-    (sigma2 * (intercept_variance_factor + q)).max(0.0)
+    q
+}
+
+/// Each group's weighted-mean standardized feature vector -- the reference
+/// points [`nearest_group_distance`] measures against. `rows`/`x_std` must
+/// be the *same* rows a fold (or the deployed model) was fit on, standardized
+/// by that fit's own [`Standardizer`], so centroids never leak information
+/// from outside that fit's own training set. Weighted by
+/// [`effective_gate_weight`], same reliability weighting as the fit itself.
+fn group_centroids(
+    rows: &[&GateObservation],
+    x_std: &[Vec<f64>],
+    ci_z: f64,
+) -> BTreeMap<String, Vec<f64>> {
+    let mut sums: BTreeMap<&str, (Vec<f64>, f64)> = BTreeMap::new();
+    for (o, x) in rows.iter().zip(x_std) {
+        let w = effective_gate_weight(o, ci_z);
+        let entry = sums
+            .entry(o.group_id.as_str())
+            .or_insert_with(|| (vec![0.0; x.len()], 0.0));
+        for (s, &xj) in entry.0.iter_mut().zip(x) {
+            *s += w * xj;
+        }
+        entry.1 += w;
+    }
+    sums.into_iter()
+        .map(|(group_id, (sum, w))| (group_id.to_string(), sum.iter().map(|s| s / w).collect()))
+        .collect()
+}
+
+fn euclidean_distance(a: &[f64], b: &[f64]) -> f64 {
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| (x - y).powi(2))
+        .sum::<f64>()
+        .sqrt()
+}
+
+/// Standardized-feature-space distance from `x_std` to the nearest entry in
+/// `centroids`. `f64::INFINITY` when `centroids` is empty (never happens in
+/// practice -- [`GateModel::fit`] already requires at least 2 groups -- kept
+/// total rather than panicking).
+fn nearest_group_distance(centroids: &BTreeMap<String, Vec<f64>>, x_std: &[f64]) -> f64 {
+    centroids
+        .values()
+        .map(|c| euclidean_distance(c, x_std))
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// The largest nearest-neighbor centroid-to-centroid distance among
+/// `centroids` themselves -- a self-calibrating reference scale (no
+/// arbitrary constant) for flagging a query's own [`nearest_group_distance`]
+/// as further from every training group than any two training groups are
+/// from each other. `0.0` when fewer than 2 groups (nothing to compare).
+fn max_training_group_distance(centroids: &BTreeMap<String, Vec<f64>>) -> f64 {
+    let points: Vec<&Vec<f64>> = centroids.values().collect();
+    let mut max_nearest = 0.0_f64;
+    for (i, a) in points.iter().enumerate() {
+        let nearest = points
+            .iter()
+            .enumerate()
+            .filter(|&(j, _)| j != i)
+            .map(|(_, b)| euclidean_distance(a, b))
+            .fold(f64::INFINITY, f64::min);
+        if nearest.is_finite() {
+            max_nearest = max_nearest.max(nearest);
+        }
+    }
+    max_nearest
+}
+
+/// Classifies a query by how far it sits from the training data it's scored
+/// against, per [`GateModelConfig::ood_leverage_ratio_threshold`]/
+/// `ood_missing_fraction_threshold`. `missing_feature_fraction` is checked
+/// first and unconditionally -- see [`leverage`]'s doc comment for why an
+/// all-missing query must never read as `Supported` just because its
+/// leverage looks low.
+fn classify_prediction_status(
+    leverage_value: f64,
+    mean_leverage: f64,
+    nearest_group_distance_value: f64,
+    max_training_group_distance: f64,
+    missing_feature_fraction: f64,
+    ood_leverage_ratio_threshold: f64,
+    ood_missing_fraction_threshold: f64,
+) -> PredictionStatus {
+    if missing_feature_fraction >= ood_missing_fraction_threshold {
+        return PredictionStatus::Unsupported;
+    }
+    let leverage_ratio = leverage_value / mean_leverage;
+    if leverage_ratio > ood_leverage_ratio_threshold
+        || nearest_group_distance_value > max_training_group_distance
+    {
+        return PredictionStatus::Extrapolation;
+    }
+    PredictionStatus::Supported
 }
 
 fn probability_positive(expected_elo: f64, variance: f64, sd: f64) -> f64 {
@@ -895,7 +1415,16 @@ struct FoldPrediction {
     actual_positive: bool,
     lambda: f64,
     gate_games_played: f64,
+    /// [`implied_elo_stddev`] for this row -- carried alongside the raw
+    /// [`Self::gate_games_played`] count (not derived from it) so
+    /// [`out_of_fold_dispersion_factor`] can compute a real chi-square
+    /// without re-joining back to the original observations.
+    actual_elo_stddev: Option<f64>,
     outer_fold: usize,
+    leverage: f64,
+    nearest_group_distance: f64,
+    missing_feature_fraction: f64,
+    prediction_status: PredictionStatus,
 }
 
 /// Fits weighted ridge on `train_rows` at `lambda` (standardizing using
@@ -912,27 +1441,52 @@ fn fit_and_score_fold(
     val_rows: &[&GateObservation],
     feature_names: &[String],
     lambda: f64,
+    config: &GateModelConfig,
 ) -> (f64, f64, Vec<FoldPrediction>) {
-    let train_weights: Vec<f64> = train_rows.iter().map(|o| o.gate_games_played).collect();
+    let train_weights: Vec<f64> = train_rows
+        .iter()
+        .map(|o| effective_gate_weight(o, config.observation_ci_z))
+        .collect();
     let standardizer = Standardizer::fit(train_rows, feature_names, &train_weights);
     let x_train: Vec<Vec<f64>> = train_rows
         .iter()
         .map(|o| standardizer.transform(&o.features, feature_names).0)
         .collect();
     let y_train: Vec<f64> = train_rows.iter().map(|o| o.gate_elo_delta).collect();
-    let fit = fit_weighted_ridge(&x_train, &y_train, &train_weights, lambda);
+    let fit = fit_weighted_ridge(
+        &x_train,
+        &y_train,
+        &train_weights,
+        lambda,
+        config.max_weight_ratio,
+    );
+    let centroids = group_centroids(train_rows, &x_train, config.observation_ci_z);
+    let mean_leverage = fit.df / fit.n_eff;
+    let max_group_distance = max_training_group_distance(&centroids);
 
     let mut sq_err_sum = 0.0;
     let mut w_sum = 0.0;
     let mut predictions = Vec::new();
     for obs in val_rows {
-        let (x, _missing, _unknown) = standardizer.transform(&obs.features, feature_names);
+        let (x, missing, _unknown) = standardizer.transform(&obs.features, feature_names);
         let pred = fit.intercept + dot(&x, &fit.coefficients);
         let variance = predictive_variance(&fit.m, &x, fit.sigma2, fit.intercept_variance_factor);
         let sd = variance.sqrt();
-        let w = obs.gate_games_played;
-        sq_err_sum += w * (obs.gate_elo_delta - pred).powi(2);
-        w_sum += w;
+        let weight = effective_gate_weight(obs, config.observation_ci_z);
+        sq_err_sum += weight * (obs.gate_elo_delta - pred).powi(2);
+        w_sum += weight;
+        let leverage_value = leverage(&fit.m, &x);
+        let nearest_group_distance_value = nearest_group_distance(&centroids, &x);
+        let missing_feature_fraction = missing.len() as f64 / feature_names.len() as f64;
+        let prediction_status = classify_prediction_status(
+            leverage_value,
+            mean_leverage,
+            nearest_group_distance_value,
+            max_group_distance,
+            missing_feature_fraction,
+            config.ood_leverage_ratio_threshold,
+            config.ood_missing_fraction_threshold,
+        );
         predictions.push(FoldPrediction {
             candidate_id: obs.candidate_id.clone(),
             group_id: obs.group_id.clone(),
@@ -942,8 +1496,13 @@ fn fit_and_score_fold(
             probability_positive: probability_positive(pred, variance, sd),
             actual_positive: obs.gate_elo_delta > 0.0,
             lambda,
-            gate_games_played: w,
+            gate_games_played: obs.gate_games_played,
+            actual_elo_stddev: implied_elo_stddev(obs, config.observation_ci_z),
             outer_fold: 0,
+            leverage: leverage_value,
+            nearest_group_distance: nearest_group_distance_value,
+            missing_feature_fraction,
+            prediction_status,
         });
     }
     (sq_err_sum, w_sum, predictions)
@@ -971,6 +1530,7 @@ fn run_folds(
     fold_ids: &[usize],
     effective_folds: usize,
     feature_names: &[String],
+    config: &GateModelConfig,
     lambda_for_fold: impl Fn(&[&GateObservation]) -> f64,
 ) -> (usize, f64, Vec<FoldPrediction>) {
     let mut predictions = Vec::new();
@@ -994,7 +1554,7 @@ fn run_folds(
 
         let lambda = lambda_for_fold(&train_rows);
         let (sq_err, w, fold_predictions) =
-            fit_and_score_fold(&train_rows, &val_rows, feature_names, lambda);
+            fit_and_score_fold(&train_rows, &val_rows, feature_names, lambda, config);
         sq_err_sum += sq_err;
         w_sum += w;
         predictions.extend(fold_predictions.into_iter().map(|p| FoldPrediction {
@@ -1024,11 +1584,18 @@ fn select_lambda(
     fold_ids: &[usize],
     effective_folds: usize,
     lambda_grid: &[f64],
+    config: &GateModelConfig,
 ) -> (f64, f64, Vec<FoldPrediction>) {
     let mut best: Option<(f64, f64, Vec<FoldPrediction>)> = None;
     for &lambda in lambda_grid {
-        let (_folds_used, rmse, predictions) =
-            run_folds(rows, fold_ids, effective_folds, feature_names, |_| lambda);
+        let (_folds_used, rmse, predictions) = run_folds(
+            rows,
+            fold_ids,
+            effective_folds,
+            feature_names,
+            config,
+            |_| lambda,
+        );
         let is_better = match &best {
             None => true,
             Some((_, best_rmse, _)) => rmse < *best_rmse,
@@ -1083,15 +1650,17 @@ fn nested_cross_validate(
     outer_effective_folds: usize,
     lambda_grid: &[f64],
     inner_cv_folds: usize,
+    config: &GateModelConfig,
 ) -> (usize, f64, Vec<FoldPrediction>) {
     run_folds(
         all_rows,
         outer_fold_ids,
         outer_effective_folds,
         feature_names,
+        config,
         |outer_train_rows| {
             let (inner_fold_ids, inner_effective_folds) =
-                assign_folds(outer_train_rows, inner_cv_folds);
+                assign_folds(outer_train_rows, inner_cv_folds, config);
             if inner_effective_folds >= 2 {
                 select_lambda(
                     outer_train_rows,
@@ -1099,6 +1668,7 @@ fn nested_cross_validate(
                     &inner_fold_ids,
                     inner_effective_folds,
                     lambda_grid,
+                    config,
                 )
                 .0
             } else {
@@ -1136,6 +1706,35 @@ fn build_calibration(predictions: &[FoldPrediction], bins: usize) -> Vec<GateCal
         .collect()
 }
 
+/// [`GateFitReport::dispersion_factor`]: an out-of-fold reduced chi-square
+/// over the caller's stated Elo stddevs, `sum((actual_elo - predicted_elo)^2
+/// / stddev^2) / n`. Deliberately built from `predictions` -- the *same*
+/// nested-CV out-of-fold rows `weighted_rmse`/`calibration` are built from,
+/// not a second pass over the full-data refit -- since in-sample residuals
+/// from a model fit on the same rows it's scored against are systematically
+/// too small and would read as a falsely-optimistic (too-low) dispersion.
+/// Plain `n` (not an effective-sample-size or degrees-of-freedom-adjusted
+/// denominator) is correct here specifically because these are out-of-fold
+/// predictions: no degrees of freedom were spent on the row being scored, so
+/// none need to be subtracted back out, unlike the in-sample `sigma2`
+/// denominator in [`fit_weighted_ridge`]. `None` unless every prediction
+/// carries a stddev -- see the field's own doc comment for why a partially
+/// heteroscedastic dataset doesn't get a value.
+fn out_of_fold_dispersion_factor(predictions: &[FoldPrediction]) -> Option<f64> {
+    if predictions.is_empty() || predictions.iter().any(|p| p.actual_elo_stddev.is_none()) {
+        return None;
+    }
+    let n = predictions.len() as f64;
+    let chi2: f64 = predictions
+        .iter()
+        .map(|p| {
+            let sd = p.actual_elo_stddev.expect("checked all Some above");
+            ((p.actual_elo - p.predicted_elo) / sd).powi(2)
+        })
+        .sum();
+    Some(chi2 / n)
+}
+
 /// Maps every nested-CV out-of-fold [`FoldPrediction`] into a public
 /// [`GateOofPrediction`] audit row (1:1, no deduplication -- a repeated
 /// `candidate_id` in the input is not this crate's contract to enforce, so
@@ -1165,6 +1764,12 @@ fn build_oof_table(predictions: &[FoldPrediction], interval_z: f64) -> Vec<GateO
             gate_games_played: p.gate_games_played,
             outer_fold: p.outer_fold,
             inner_selected_lambda: p.lambda,
+            leverage: p.leverage,
+            support_distance: p.leverage.sqrt(),
+            nearest_group_distance: p.nearest_group_distance,
+            missing_feature_fraction: p.missing_feature_fraction,
+            prediction_status: p.prediction_status,
+            recommend_for_gate: p.prediction_status == PredictionStatus::Supported,
         })
         .collect();
     rows.sort_by(|a, b| {
@@ -1189,6 +1794,12 @@ mod tests {
             features,
             gate_elo_delta: y,
             gate_games_played: games,
+            actual_elo_stddev: None,
+            elo_ci_low: None,
+            elo_ci_high: None,
+            completed_pairs: None,
+            gate_status: None,
+            provenance: BTreeMap::new(),
         }
     }
 
@@ -1237,6 +1848,31 @@ mod tests {
     }
 
     #[test]
+    fn gate_observation_deserializes_pre_0_8_json_with_only_the_original_five_fields() {
+        // GateObservation's JSON shape changed in 0.8.0 (new Option fields
+        // plus `provenance`). A record shaped like what an 0.7.x caller
+        // would have written -- only candidate_id/group_id/features/
+        // gate_elo_delta/gate_games_played -- must still deserialize,
+        // relying on serde's built-in "a missing Option<T> field is None"
+        // behavior (not `#[serde(default)]`, which is only on `provenance`).
+        let json = r#"{
+            "candidate_id": "c1",
+            "group_id": "g1",
+            "features": {"x": 1.0},
+            "gate_elo_delta": 5.0,
+            "gate_games_played": 100.0
+        }"#;
+        let parsed: GateObservation = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.candidate_id, "c1");
+        assert_eq!(parsed.actual_elo_stddev, None);
+        assert_eq!(parsed.elo_ci_low, None);
+        assert_eq!(parsed.elo_ci_high, None);
+        assert_eq!(parsed.completed_pairs, None);
+        assert_eq!(parsed.gate_status, None);
+        assert!(parsed.provenance.is_empty());
+    }
+
+    #[test]
     fn standard_normal_cdf_matches_known_values() {
         assert!((standard_normal_cdf(0.0) - 0.5).abs() < 1e-6);
         assert!((standard_normal_cdf(1.96) - 0.975).abs() < 1e-3);
@@ -1262,7 +1898,7 @@ mod tests {
         let x = vec![vec![-1.0], vec![0.0], vec![1.0]];
         let y = vec![-2.0, 0.0, 2.0];
         let w = vec![1.0, 1.0, 1.0];
-        let fit = fit_weighted_ridge(&x, &y, &w, 2.0);
+        let fit = fit_weighted_ridge(&x, &y, &w, 2.0, 100.0);
         // beta = 4 / (2 + 2) = 1.0
         assert!((fit.coefficients[0] - 1.0).abs() < 1e-9);
         assert!((fit.intercept - 0.0).abs() < 1e-9);
@@ -1291,8 +1927,8 @@ mod tests {
         // whatever units the caller's gate_games_played happens to use.
         let x = vec![vec![-1.0], vec![0.0], vec![1.0]];
         let y = vec![-2.0, 0.5, 2.0]; // slightly noisy, not perfectly linear
-        let uniform_1 = fit_weighted_ridge(&x, &y, &[1.0, 1.0, 1.0], 2.0);
-        let uniform_100 = fit_weighted_ridge(&x, &y, &[100.0, 100.0, 100.0], 2.0);
+        let uniform_1 = fit_weighted_ridge(&x, &y, &[1.0, 1.0, 1.0], 2.0, 100.0);
+        let uniform_100 = fit_weighted_ridge(&x, &y, &[100.0, 100.0, 100.0], 2.0, 100.0);
         assert!((uniform_1.coefficients[0] - uniform_100.coefficients[0]).abs() < 1e-9);
         assert!((uniform_1.intercept - uniform_100.intercept).abs() < 1e-9);
         assert!((uniform_1.sigma2 - uniform_100.sigma2).abs() < 1e-9);
@@ -1313,10 +1949,103 @@ mod tests {
         // row's absolute gate_games_played value.
         let x = vec![vec![-1.0], vec![0.0], vec![1.0]];
         let y = vec![-2.0, 0.5, 2.0];
-        let ratio_2_1 = fit_weighted_ridge(&x, &y, &[2.0, 2.0, 1.0], 2.0);
-        let same_ratio_scaled = fit_weighted_ridge(&x, &y, &[200.0, 200.0, 100.0], 2.0);
+        let ratio_2_1 = fit_weighted_ridge(&x, &y, &[2.0, 2.0, 1.0], 2.0, 100.0);
+        let same_ratio_scaled = fit_weighted_ridge(&x, &y, &[200.0, 200.0, 100.0], 2.0, 100.0);
         assert!((ratio_2_1.coefficients[0] - same_ratio_scaled.coefficients[0]).abs() < 1e-9);
         assert!((ratio_2_1.intercept - same_ratio_scaled.intercept).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fit_weighted_ridge_clamps_extreme_weight_ratios() {
+        // Raw weight 1e6 for the second row vs 1.0 for the first -- after
+        // mean-1 normalization the first row's weight would collapse close
+        // to 0 (a 1e6:1 raw ratio). max_weight_ratio = 10.0 must clamp it
+        // back up to the floor instead of letting the second row dictate
+        // the fit almost alone.
+        let x = vec![vec![-1.0], vec![1.0]];
+        let y = vec![-2.0, 2.0];
+        let fit = fit_weighted_ridge(&x, &y, &[1.0, 1_000_000.0], 2.0, 10.0);
+        assert_eq!(fit.clamped_observation_count, 1);
+        assert!(fit.max_observation_weight <= 10.0 + 1e-6);
+        assert!(fit.min_observation_weight >= 1.0 / 10.0 - 1e-6);
+    }
+
+    #[test]
+    fn fit_weighted_ridge_does_not_clamp_within_the_configured_ratio() {
+        let x = vec![vec![-1.0], vec![0.0], vec![1.0]];
+        let y = vec![-2.0, 0.5, 2.0];
+        let fit = fit_weighted_ridge(&x, &y, &[2.0, 2.0, 1.0], 2.0, 100.0);
+        assert_eq!(fit.clamped_observation_count, 0);
+    }
+
+    #[test]
+    fn effective_gate_weight_prefers_actual_elo_stddev_over_games_played() {
+        let mut o = obs("c", "g", 0.0, 0.0, 100.0);
+        o.actual_elo_stddev = Some(2.0);
+        assert!((effective_gate_weight(&o, DEFAULT_CONFIDENCE_Z) - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn effective_gate_weight_derives_from_ci_width_when_stddev_absent() {
+        let mut o = obs("c", "g", 0.0, 0.0, 100.0);
+        // width 7.84 at z=1.96 -> implied stddev = 7.84 / (2*1.96) = 2.0.
+        o.elo_ci_low = Some(-3.92);
+        o.elo_ci_high = Some(3.92);
+        let w = effective_gate_weight(&o, DEFAULT_CONFIDENCE_Z);
+        assert!((w - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn implied_elo_stddev_uses_the_z_passed_in_not_a_fixed_constant() {
+        // Same CI, decoded at two different z's -- this is exactly why
+        // observation_ci_z must be a separate knob from interval_z: whoever
+        // controls the z passed in changes the implied stddev.
+        let mut o = obs("c", "g", 0.0, 0.0, 100.0);
+        o.elo_ci_low = Some(-3.92);
+        o.elo_ci_high = Some(3.92);
+        let at_1_96 = implied_elo_stddev(&o, 1.96).unwrap();
+        let at_1_0 = implied_elo_stddev(&o, 1.0).unwrap();
+        assert!((at_1_96 - 2.0).abs() < 1e-9);
+        assert!((at_1_0 - 3.92).abs() < 1e-9);
+    }
+
+    #[test]
+    fn effective_gate_weight_falls_back_to_games_played_without_stddev_or_ci() {
+        let o = obs("c", "g", 0.0, 0.0, 42.0);
+        assert_eq!(effective_gate_weight(&o, DEFAULT_CONFIDENCE_Z), 42.0);
+    }
+
+    #[test]
+    fn effective_gate_weight_falls_back_to_games_played_when_ci_bounds_are_inverted() {
+        // low > high implies a non-positive width -- silently falls through
+        // to the games_played weight rather than producing a negative or
+        // infinite implied stddev.
+        let mut o = obs("c", "g", 0.0, 0.0, 42.0);
+        o.elo_ci_low = Some(5.0);
+        o.elo_ci_high = Some(1.0);
+        assert_eq!(effective_gate_weight(&o, DEFAULT_CONFIDENCE_Z), 42.0);
+    }
+
+    #[test]
+    fn fit_is_invariant_to_the_uniform_magnitude_of_actual_elo_stddev() {
+        // Same relationship, same relative reliability (uniform stddev
+        // across rows, so every row's inverse-variance weight is uniform
+        // too) -- only the absolute stddev units differ (1.0 vs. 5.0 Elo).
+        // fit_weighted_ridge is already proven invariant to the uniform
+        // magnitude of its weight vector, so the deployed fit must be
+        // identical regardless of which uniform stddev is stated.
+        let mut tight = linear_dataset();
+        for o in &mut tight {
+            o.actual_elo_stddev = Some(1.0);
+        }
+        let mut loose = linear_dataset();
+        for o in &mut loose {
+            o.actual_elo_stddev = Some(5.0);
+        }
+        let a = GateModel::fit(&tight, &GateModelConfig::default()).unwrap();
+        let b = GateModel::fit(&loose, &GateModelConfig::default()).unwrap();
+        assert_eq!(a.report.selected_lambda, b.report.selected_lambda);
+        assert!((a.report.weighted_rmse - b.report.weighted_rmse).abs() < 1e-9);
     }
 
     #[test]
@@ -1325,6 +2054,41 @@ mod tests {
         let near = predictive_variance(&m, &[0.5], 1.0, 0.0);
         let far = predictive_variance(&m, &[5.0], 1.0, 0.0);
         assert!(far > near);
+    }
+
+    #[test]
+    fn leverage_grows_further_from_training_data() {
+        let m = invert_regularized(&[vec![4.0]], 1.0); // A=4, lambda=1 -> M = 1/5
+        let near = leverage(&m, &[0.5]);
+        let far = leverage(&m, &[5.0]);
+        assert!(far > near);
+    }
+
+    #[test]
+    fn leverage_is_exactly_zero_at_the_training_feature_mean() {
+        let m = invert_regularized(&[vec![4.0]], 1.0);
+        assert_eq!(leverage(&m, &[0.0]), 0.0);
+    }
+
+    #[test]
+    fn nearest_group_distance_and_max_training_group_distance_are_hand_computable() {
+        let mut centroids = BTreeMap::new();
+        centroids.insert("a".to_string(), vec![0.0]);
+        centroids.insert("b".to_string(), vec![4.0]);
+        centroids.insert("c".to_string(), vec![10.0]);
+        // Nearest-neighbor distances: a's nearest is b (4), b's nearest is a
+        // (4), c's nearest is b (6) -- the largest of those is 6.
+        assert!((max_training_group_distance(&centroids) - 6.0).abs() < 1e-9);
+        assert!((nearest_group_distance(&centroids, &[4.5]) - 0.5).abs() < 1e-9);
+        assert!((nearest_group_distance(&centroids, &[20.0]) - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn max_training_group_distance_is_zero_with_fewer_than_two_groups() {
+        let mut centroids = BTreeMap::new();
+        centroids.insert("a".to_string(), vec![0.0]);
+        assert_eq!(max_training_group_distance(&centroids), 0.0);
+        assert_eq!(max_training_group_distance(&BTreeMap::new()), 0.0);
     }
 
     #[test]
@@ -1464,6 +2228,285 @@ mod tests {
     }
 
     #[test]
+    fn missing_all_features_query_is_unsupported_despite_minimal_leverage() {
+        // x_std == 0 at an all-missing query is the *lowest* possible
+        // leverage -- it must not read as Supported just because leverage
+        // looks minimal (see `leverage`'s and
+        // `classify_prediction_status`'s doc comments).
+        let output = GateModel::fit(&linear_dataset(), &GateModelConfig::default()).unwrap();
+        let prediction = output.model.predict(&GateQuery {
+            features: BTreeMap::new(),
+        });
+        assert_eq!(prediction.missing_feature_fraction, 1.0);
+        assert_eq!(prediction.leverage, 0.0);
+        assert_eq!(prediction.prediction_status, PredictionStatus::Unsupported);
+        assert!(!prediction.recommend_for_gate);
+
+        // Unsupported must never fake the Elo estimate: expected_elo/interval
+        // stay the model's real prediction at the training feature mean
+        // (linear_dataset()'s x ranges 0..11, mean 5.5) -- separate from,
+        // and not zeroed by, prediction_status.
+        let mut explicit_mean_features = BTreeMap::new();
+        explicit_mean_features.insert("x".to_string(), 5.5);
+        let explicit_mean = output.model.predict(&GateQuery {
+            features: explicit_mean_features,
+        });
+        assert!(prediction.expected_elo.is_finite());
+        assert!((prediction.expected_elo - explicit_mean.expected_elo).abs() < 1e-9);
+        assert!((prediction.interval_low - explicit_mean.interval_low).abs() < 1e-9);
+        assert!((prediction.interval_high - explicit_mean.interval_high).abs() < 1e-9);
+    }
+
+    #[test]
+    fn unsupported_and_extrapolation_predictions_keep_a_real_numeric_estimate_but_are_not_recommended()
+     {
+        let output = GateModel::fit(&linear_dataset(), &GateModelConfig::default()).unwrap();
+
+        let mut far_features = BTreeMap::new();
+        far_features.insert("x".to_string(), 1_000.0);
+        let far = output.model.predict(&GateQuery {
+            features: far_features,
+        });
+        assert_eq!(far.prediction_status, PredictionStatus::Extrapolation);
+        assert!(!far.recommend_for_gate);
+        assert!(far.expected_elo.is_finite());
+        assert!(far.expected_elo != 0.0);
+
+        let unsupported = output.model.predict(&GateQuery {
+            features: BTreeMap::new(),
+        });
+        assert_eq!(unsupported.prediction_status, PredictionStatus::Unsupported);
+        assert!(!unsupported.recommend_for_gate);
+        assert!(unsupported.expected_elo.is_finite());
+
+        let mut typical_features = BTreeMap::new();
+        typical_features.insert("x".to_string(), 6.0);
+        let typical = output.model.predict(&GateQuery {
+            features: typical_features,
+        });
+        assert_eq!(typical.prediction_status, PredictionStatus::Supported);
+        assert!(typical.recommend_for_gate);
+    }
+
+    /// Three named features per row: `x` varies (the actual predictor),
+    /// `c` is literally constant across every row (zero training variance),
+    /// `z` varies mildly and uncorrelated with `y`. Lets tests exercise a
+    /// zero-variance feature and partial query missingness without also
+    /// tripping the `missing_feature_fraction >= 0.5` `Unsupported` gate
+    /// (1 missing of 3 named features is below it; 1 of 2 would not be).
+    fn multi_feature_dataset() -> Vec<GateObservation> {
+        (0..12)
+            .map(|i| {
+                let x = i as f64;
+                let noise = if i % 2 == 0 { 1.0 } else { -1.0 };
+                let mut features = BTreeMap::new();
+                features.insert("x".to_string(), x);
+                features.insert("c".to_string(), 42.0);
+                features.insert("z".to_string(), noise * 0.1);
+                GateObservation {
+                    candidate_id: format!("c{i}"),
+                    group_id: format!("g{i}"),
+                    features,
+                    gate_elo_delta: 10.0 * x + noise,
+                    gate_games_played: 100.0,
+                    actual_elo_stddev: None,
+                    elo_ci_low: None,
+                    elo_ci_high: None,
+                    completed_pairs: None,
+                    gate_status: None,
+                    provenance: BTreeMap::new(),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn constant_training_feature_does_not_panic_or_produce_nan() {
+        // `c` has zero training variance -- Standardizer::fit must not
+        // divide by it (see its `sd > 1e-12 else 1.0` guard) and every
+        // downstream OOD/prediction quantity must stay finite.
+        let output = GateModel::fit(&multi_feature_dataset(), &GateModelConfig::default()).unwrap();
+        let mut features = BTreeMap::new();
+        features.insert("x".to_string(), 6.0);
+        features.insert("c".to_string(), 42.0);
+        features.insert("z".to_string(), 0.0);
+        let prediction = output.model.predict(&GateQuery { features });
+        assert!(prediction.expected_elo.is_finite());
+        assert!(prediction.leverage.is_finite());
+        assert!(prediction.support_distance.is_finite());
+        assert!(prediction.nearest_group_distance.is_finite());
+        assert!(!prediction.expected_elo.is_nan());
+    }
+
+    #[test]
+    fn partial_missing_query_still_detects_extrapolation_on_the_features_it_has() {
+        // Only `z` is missing (1 of 3 named features, fraction ~0.33, below
+        // the default 0.5 Unsupported threshold) -- imputing it to its
+        // training mean (x_std == 0 on that one axis) must not dilute or
+        // mask genuine extrapolation on `x`, since leverage sums squared
+        // standardized deviations per-axis rather than averaging them.
+        let output = GateModel::fit(&multi_feature_dataset(), &GateModelConfig::default()).unwrap();
+        let mut features = BTreeMap::new();
+        features.insert("x".to_string(), 1_000.0);
+        features.insert("c".to_string(), 42.0);
+        // "z" deliberately omitted.
+        let prediction = output.model.predict(&GateQuery { features });
+        assert!((prediction.missing_feature_fraction - 1.0 / 3.0).abs() < 1e-9);
+        assert_eq!(
+            prediction.prediction_status,
+            PredictionStatus::Extrapolation
+        );
+        assert!(!prediction.recommend_for_gate);
+        assert!(prediction.leverage > 10.0);
+    }
+
+    #[test]
+    fn predict_ood_diagnostics_are_invariant_to_training_row_order() {
+        let data = linear_dataset();
+        let mut reversed = data.clone();
+        reversed.reverse();
+
+        let a = GateModel::fit(&data, &GateModelConfig::default()).unwrap();
+        let b = GateModel::fit(&reversed, &GateModelConfig::default()).unwrap();
+
+        let mut far_features = BTreeMap::new();
+        far_features.insert("x".to_string(), 1_000.0);
+        let pred_a = a.model.predict(&GateQuery {
+            features: far_features.clone(),
+        });
+        let pred_b = b.model.predict(&GateQuery {
+            features: far_features,
+        });
+        assert_eq!(pred_a.prediction_status, pred_b.prediction_status);
+        assert_eq!(pred_a.recommend_for_gate, pred_b.recommend_for_gate);
+        assert!((pred_a.leverage - pred_b.leverage).abs() < 1e-9);
+        assert!((pred_a.nearest_group_distance - pred_b.nearest_group_distance).abs() < 1e-9);
+    }
+
+    #[test]
+    fn predict_classifies_a_typical_query_as_supported_and_a_far_query_as_extrapolation() {
+        let output = GateModel::fit(&linear_dataset(), &GateModelConfig::default()).unwrap();
+
+        let mut typical_features = BTreeMap::new();
+        typical_features.insert("x".to_string(), 6.0);
+        let typical = output.model.predict(&GateQuery {
+            features: typical_features,
+        });
+        assert_eq!(typical.prediction_status, PredictionStatus::Supported);
+
+        let mut far_features = BTreeMap::new();
+        far_features.insert("x".to_string(), 1000.0);
+        let far = output.model.predict(&GateQuery {
+            features: far_features,
+        });
+        assert_eq!(far.prediction_status, PredictionStatus::Extrapolation);
+        assert!(far.leverage > typical.leverage);
+        assert!(far.nearest_group_distance > typical.nearest_group_distance);
+        assert!((far.support_distance - far.leverage.sqrt()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn oof_predictions_carry_sane_ood_diagnostics() {
+        let validated =
+            GateModel::fit_with_validation(&linear_dataset(), &GateModelConfig::default()).unwrap();
+        assert!(!validated.oof_predictions.is_empty());
+        for row in &validated.oof_predictions {
+            assert!(row.leverage >= 0.0);
+            assert!((row.support_distance - row.leverage.sqrt()).abs() < 1e-9);
+            assert!(row.nearest_group_distance >= 0.0);
+            assert!((0.0..=1.0).contains(&row.missing_feature_fraction));
+            assert_eq!(
+                row.recommend_for_gate,
+                row.prediction_status == PredictionStatus::Supported
+            );
+            assert!(row.predicted_elo.is_finite());
+        }
+    }
+
+    #[test]
+    fn fit_rejects_invalid_ood_thresholds() {
+        let data = linear_dataset();
+        let err = GateModel::fit(
+            &data,
+            &GateModelConfig {
+                ood_leverage_ratio_threshold: 0.0,
+                ..GateModelConfig::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig { .. }));
+
+        let err = GateModel::fit(
+            &data,
+            &GateModelConfig {
+                ood_missing_fraction_threshold: 1.5,
+                ..GateModelConfig::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig { .. }));
+
+        let err = GateModel::fit(
+            &data,
+            &GateModelConfig {
+                ood_missing_fraction_threshold: 0.0,
+                ..GateModelConfig::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig { .. }));
+    }
+
+    #[test]
+    fn fit_rejects_max_weight_ratio_below_one() {
+        let data = linear_dataset();
+        let err = GateModel::fit(
+            &data,
+            &GateModelConfig {
+                max_weight_ratio: 0.5,
+                ..GateModelConfig::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig { .. }));
+    }
+
+    #[test]
+    fn fit_report_exposes_unclamped_uniform_weights_by_default() {
+        // linear_dataset() has 12 rows, all with the same gate_games_played
+        // and no stated stddev -- every row's weight is identical, so
+        // nothing should be clamped and every weight-diagnostic should read
+        // as exactly uniform.
+        let output = GateModel::fit(&linear_dataset(), &GateModelConfig::default()).unwrap();
+        assert_eq!(output.report.clamped_observation_count, 0);
+        assert!((output.report.min_observation_weight - 1.0).abs() < 1e-9);
+        assert!((output.report.max_observation_weight - 1.0).abs() < 1e-9);
+        assert!((output.report.effective_sample_size - 12.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fit_report_flags_clamped_observations_with_extreme_stddev_spread() {
+        // One row's actual_elo_stddev is 1000x tighter than the rest --
+        // without clamping this would completely dominate the fit; the
+        // report must say so.
+        let mut data = linear_dataset();
+        for o in &mut data {
+            o.actual_elo_stddev = Some(10.0);
+        }
+        data[0].actual_elo_stddev = Some(0.01); // weight ratio ~1e6 vs the rest
+        let output = GateModel::fit(
+            &data,
+            &GateModelConfig {
+                max_weight_ratio: 10.0,
+                ..GateModelConfig::default()
+            },
+        )
+        .unwrap();
+        assert!(output.report.clamped_observation_count > 0);
+        assert!(output.report.max_observation_weight <= 10.0 + 1e-6);
+    }
+
+    #[test]
     fn fit_falls_back_to_conservative_lambda_when_an_outer_folds_training_rows_have_too_few_groups_for_inner_cv()
      {
         // Only 2 total groups -- the outer CV falls back to
@@ -1512,7 +2555,7 @@ mod tests {
             obs("c5", "gC", 5.0, 6.0, 10.0),
         ];
         let rows: Vec<&GateObservation> = data.iter().collect();
-        let (fold_ids, effective_folds) = assign_folds(&rows, 5);
+        let (fold_ids, effective_folds) = assign_folds(&rows, 5, &GateModelConfig::default());
         assert_eq!(effective_folds, 3);
         // Every row sharing a group_id must land in the same fold.
         assert_eq!(fold_ids[0], fold_ids[1]); // both gA
@@ -1542,7 +2585,7 @@ mod tests {
             })
             .collect();
         let rows: Vec<&GateObservation> = data.iter().collect();
-        let (fold_ids, effective_folds) = assign_folds(&rows, 5);
+        let (fold_ids, effective_folds) = assign_folds(&rows, 5, &GateModelConfig::default());
         assert_eq!(effective_folds, 5);
         for group in 0..5 {
             let rows_in_group: Vec<usize> = (0..20).filter(|&i| i % 5 == group).collect();
@@ -1590,6 +2633,34 @@ mod tests {
     }
 
     #[test]
+    fn assign_folds_balances_by_stated_stddev_not_just_games_played_when_both_present() {
+        // Group "reliable" has few games but a tiny stated stddev (high
+        // inverse-variance weight); group "noisy" has many games but a huge
+        // stated stddev (tiny inverse-variance weight). Ranked by raw
+        // gate_games_played alone, "noisy" would sort first; ranked by the
+        // actual reliability weight assign_folds is supposed to use now,
+        // "reliable" must sort first instead -- proving fold balancing
+        // genuinely switched weighting schemes, not just accepted a wider
+        // signature without using it.
+        let mut reliable = obs("c_reliable", "g_reliable", 0.0, 0.0, 5.0);
+        reliable.actual_elo_stddev = Some(0.5); // weight = 1 / 0.5^2 = 4.0
+        let mut noisy = obs("c_noisy", "g_noisy", 1.0, 1.0, 1000.0);
+        noisy.actual_elo_stddev = Some(100.0); // weight = 1 / 100.0^2 = 0.0001
+
+        let rows = vec![&reliable, &noisy];
+        let (fold_ids, effective_folds) = assign_folds(&rows, 2, &GateModelConfig::default());
+        assert_eq!(effective_folds, 2);
+        // The first-placed (heaviest-weighted) group always lands on fold
+        // 0, since every fold starts empty and ties break to the lowest
+        // index -- so which row ends up on fold 0 reveals sort order.
+        assert_eq!(
+            fold_ids[0], 0,
+            "reliable (low games, tiny stddev) should be the heavier group"
+        );
+        assert_eq!(fold_ids[1], 1);
+    }
+
+    #[test]
     fn assign_folds_balances_fold_weight_within_the_largest_group_weight() {
         // 5 "whale" groups worth 1000 games each plus 8 "small" groups
         // worth 10 games each, cv_folds requested at 4: more whales than
@@ -1622,7 +2693,7 @@ mod tests {
             ));
         }
         let rows: Vec<&GateObservation> = data.iter().collect();
-        let (fold_ids, effective_folds) = assign_folds(&rows, 4);
+        let (fold_ids, effective_folds) = assign_folds(&rows, 4, &GateModelConfig::default());
         assert_eq!(effective_folds, 4);
 
         let mut fold_weight = vec![0.0; effective_folds];
@@ -1678,7 +2749,7 @@ mod tests {
             }
         }
         let rows: Vec<&GateObservation> = data.iter().collect();
-        let (fold_ids_a, effective_a) = assign_folds(&rows, 3);
+        let (fold_ids_a, effective_a) = assign_folds(&rows, 3, &GateModelConfig::default());
 
         // Scramble both cross-group order and each group's own row order.
         let mut shuffled = data.clone();
@@ -1687,7 +2758,8 @@ mod tests {
         shuffled.swap(2, 9);
         shuffled.swap(4, 11);
         let shuffled_rows: Vec<&GateObservation> = shuffled.iter().collect();
-        let (fold_ids_b, effective_b) = assign_folds(&shuffled_rows, 3);
+        let (fold_ids_b, effective_b) =
+            assign_folds(&shuffled_rows, 3, &GateModelConfig::default());
 
         assert_eq!(effective_a, effective_b);
 
@@ -1754,6 +2826,154 @@ mod tests {
         data[0].gate_games_played = 0.0;
         let err = GateModel::fit(&data, &GateModelConfig::default()).unwrap_err();
         assert!(matches!(err, Error::NonPositiveGateWeight { .. }));
+    }
+
+    #[test]
+    fn fit_rejects_non_positive_actual_elo_stddev() {
+        let mut data = linear_dataset();
+        data[0].actual_elo_stddev = Some(0.0);
+        let err = GateModel::fit(&data, &GateModelConfig::default()).unwrap_err();
+        assert!(matches!(err, Error::NonPositiveGateStddev { .. }));
+    }
+
+    #[test]
+    fn fit_rejects_stddev_and_complete_ci_specified_together() {
+        let mut data = linear_dataset();
+        data[0].actual_elo_stddev = Some(2.0);
+        data[0].elo_ci_low = Some(data[0].gate_elo_delta - 5.0);
+        data[0].elo_ci_high = Some(data[0].gate_elo_delta + 5.0);
+        let err = GateModel::fit(&data, &GateModelConfig::default()).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::ConflictingGateUncertaintySources { .. }
+        ));
+    }
+
+    #[test]
+    fn fit_rejects_a_partial_confidence_interval() {
+        let mut low_only = linear_dataset();
+        low_only[0].elo_ci_low = Some(low_only[0].gate_elo_delta - 5.0);
+        let err = GateModel::fit(&low_only, &GateModelConfig::default()).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::IncompleteGateConfidenceInterval { .. }
+        ));
+
+        let mut high_only = linear_dataset();
+        high_only[0].elo_ci_high = Some(high_only[0].gate_elo_delta + 5.0);
+        let err = GateModel::fit(&high_only, &GateModelConfig::default()).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::IncompleteGateConfidenceInterval { .. }
+        ));
+    }
+
+    #[test]
+    fn fit_rejects_gate_elo_delta_outside_its_own_confidence_interval() {
+        let mut data = linear_dataset();
+        data[0].elo_ci_low = Some(data[0].gate_elo_delta + 1.0);
+        data[0].elo_ci_high = Some(data[0].gate_elo_delta + 5.0);
+        let err = GateModel::fit(&data, &GateModelConfig::default()).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::GateEloOutsideConfidenceInterval { .. }
+        ));
+    }
+
+    #[test]
+    fn fit_accepts_gate_elo_delta_exactly_on_a_confidence_interval_boundary() {
+        let mut data = linear_dataset();
+        data[0].elo_ci_low = Some(data[0].gate_elo_delta);
+        data[0].elo_ci_high = Some(data[0].gate_elo_delta + 5.0);
+        assert!(GateModel::fit(&data, &GateModelConfig::default()).is_ok());
+    }
+
+    /// 12 rows (one group each, matching `linear_dataset`'s structure): the
+    /// *actual* residual behind `gate_elo_delta` is always exactly `+/- 2.0`
+    /// Elo (a deterministic zig-zag, no RNG) -- fixed independently of
+    /// `stated_stddev`, so tests can isolate "the declared confidence
+    /// changed" from "the underlying data changed".
+    fn heteroscedastic_dataset(stated_stddev: f64) -> Vec<GateObservation> {
+        (0..12)
+            .map(|i| {
+                let x = i as f64;
+                let noise = if i % 2 == 0 { 1.0 } else { -1.0 };
+                let mut o = obs(
+                    &format!("c{i}"),
+                    &format!("g{i}"),
+                    x,
+                    10.0 * x + noise * 2.0,
+                    100.0,
+                );
+                o.actual_elo_stddev = Some(stated_stddev);
+                o
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dispersion_factor_lands_in_a_reasonable_band_when_stated_stddev_is_calibrated() {
+        // stated_stddev (2.0) matches the fixture's real residual magnitude
+        // (2.0) -- a well-calibrated caller. Out-of-fold estimation noise
+        // (each fold's slope is fit from 11 of 12 rows) keeps this from
+        // landing exactly on 1.0, so this checks a band, not a point.
+        let output = GateModel::fit_with_validation(
+            &heteroscedastic_dataset(2.0),
+            &GateModelConfig::default(),
+        )
+        .unwrap();
+        let d = output
+            .report
+            .dispersion_factor
+            .expect("every row supplies actual_elo_stddev");
+        assert!(
+            d > 0.3 && d < 3.0,
+            "dispersion_factor {d} outside expected band"
+        );
+    }
+
+    #[test]
+    fn dispersion_factor_rises_when_stated_stddev_is_understated() {
+        // Same underlying data (residual magnitude fixed at 2.0 Elo) --
+        // only the *stated* stddev differs. Halving it should roughly
+        // quadruple the reduced chi-square (each term is
+        // (residual/stated_stddev)^2).
+        let config = GateModelConfig::default();
+        let calibrated =
+            GateModel::fit_with_validation(&heteroscedastic_dataset(2.0), &config).unwrap();
+        let understated =
+            GateModel::fit_with_validation(&heteroscedastic_dataset(1.0), &config).unwrap();
+        let calibrated_d = calibrated.report.dispersion_factor.unwrap();
+        let understated_d = understated.report.dispersion_factor.unwrap();
+        assert!(
+            understated_d > calibrated_d * 3.0,
+            "expected roughly 4x from halving stated stddev, got {understated_d} vs {calibrated_d}"
+        );
+    }
+
+    #[test]
+    fn dispersion_factor_is_none_without_any_stated_stddev() {
+        let output =
+            GateModel::fit_with_validation(&linear_dataset(), &GateModelConfig::default()).unwrap();
+        assert!(output.report.dispersion_factor.is_none());
+    }
+
+    #[test]
+    fn dispersion_factor_is_none_when_only_some_rows_state_a_stddev() {
+        // Mixed availability must still produce a successful fit (both
+        // weight sources combine), but the chi-square-over-stated-stddev
+        // statistic isn't meaningful for a partially heteroscedastic
+        // dataset, so this stays None rather than silently computed over a
+        // subset.
+        let mut data = linear_dataset();
+        for (i, o) in data.iter_mut().enumerate() {
+            if i % 2 == 0 {
+                o.actual_elo_stddev = Some(1.0);
+            }
+        }
+        let output = GateModel::fit_with_validation(&data, &GateModelConfig::default()).unwrap();
+        assert!(output.report.dispersion_factor.is_none());
+        assert!(output.report.weighted_rmse.is_finite());
     }
 
     #[test]
@@ -1827,6 +3047,133 @@ mod tests {
             assert!(
                 groups.iter().all(|g| *g == groups[0]),
                 "fold {fold} mixes groups: {groups:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fit_and_score_fold_does_not_leak_held_out_rows_into_its_support_model() {
+        // The standardizer, group centroids, and mean_leverage that drive a
+        // held-out row's OOD diagnostics must come from train_rows alone.
+        // Proven by showing a shared candidate's diagnostics are unaffected
+        // by what ELSE is held out alongside it -- if any of those
+        // quantities were even partially derived from val_rows, adding a
+        // wildly different second val row would shift the shared
+        // candidate's leverage/nearest_group_distance/prediction.
+        let data = linear_dataset();
+        let train_rows: Vec<&GateObservation> = data.iter().collect();
+        let feature_names = vec!["x".to_string()];
+        let config = GateModelConfig::default();
+        let query = obs("q", "gq", 5.5, 0.0, 100.0);
+        let extreme = obs("extreme", "gextreme", 1_000_000.0, 0.0, 100.0);
+
+        let (_, _, alone) =
+            fit_and_score_fold(&train_rows, &[&query], &feature_names, 1.0, &config);
+        let (_, _, with_extreme_sibling) = fit_and_score_fold(
+            &train_rows,
+            &[&query, &extreme],
+            &feature_names,
+            1.0,
+            &config,
+        );
+
+        let a = alone.iter().find(|p| p.candidate_id == "q").unwrap();
+        let b = with_extreme_sibling
+            .iter()
+            .find(|p| p.candidate_id == "q")
+            .unwrap();
+        assert_eq!(a.leverage, b.leverage);
+        assert_eq!(a.nearest_group_distance, b.nearest_group_distance);
+        assert_eq!(a.predicted_elo, b.predicted_elo);
+        assert_eq!(a.stddev, b.stddev);
+        assert_eq!(a.prediction_status, b.prediction_status);
+    }
+
+    #[test]
+    fn logo_oof_ood_diagnostics_match_a_support_model_fit_on_only_that_folds_training_rows() {
+        // Rebuilds, from first principles, exactly what fit_and_score_fold
+        // computes for the group held out as outer fold 0: a standardizer,
+        // group centroids, and mean_leverage from the OTHER groups' rows
+        // only. The OOF table's leverage/nearest_group_distance for that
+        // group's own rows must match this train-only reconstruction
+        // exactly, and must differ from the same computation "leaked" by
+        // fitting the support model on the full dataset (including the
+        // held-out group itself) -- otherwise the fixture wouldn't actually
+        // distinguish leak-free from leaked.
+        let data = logo_dataset();
+        let output = GateModel::fit_with_validation(&data, &GateModelConfig::default()).unwrap();
+        let all_rows: Vec<&GateObservation> = data.iter().collect();
+        let feature_names = vec!["x".to_string()];
+        let config = GateModelConfig::default();
+
+        let fold0 = output
+            .oof_predictions
+            .iter()
+            .find(|p| p.outer_fold == 0)
+            .unwrap();
+        let held_out_group = fold0.group_id.clone();
+        let fold_lambda = fold0.inner_selected_lambda;
+
+        let train_rows: Vec<&GateObservation> = all_rows
+            .iter()
+            .filter(|o| o.group_id != held_out_group)
+            .copied()
+            .collect();
+        let train_weights: Vec<f64> = train_rows
+            .iter()
+            .map(|o| effective_gate_weight(o, config.observation_ci_z))
+            .collect();
+        let standardizer = Standardizer::fit(&train_rows, &feature_names, &train_weights);
+        let x_train: Vec<Vec<f64>> = train_rows
+            .iter()
+            .map(|o| standardizer.transform(&o.features, &feature_names).0)
+            .collect();
+        let y_train: Vec<f64> = train_rows.iter().map(|o| o.gate_elo_delta).collect();
+        let fit = fit_weighted_ridge(
+            &x_train,
+            &y_train,
+            &train_weights,
+            fold_lambda,
+            config.max_weight_ratio,
+        );
+        let centroids = group_centroids(&train_rows, &x_train, config.observation_ci_z);
+
+        let all_weights: Vec<f64> = all_rows
+            .iter()
+            .map(|o| effective_gate_weight(o, config.observation_ci_z))
+            .collect();
+        let leaked_standardizer = Standardizer::fit(&all_rows, &feature_names, &all_weights);
+        let x_leaked: Vec<Vec<f64>> = all_rows
+            .iter()
+            .map(|o| leaked_standardizer.transform(&o.features, &feature_names).0)
+            .collect();
+        let y_all: Vec<f64> = all_rows.iter().map(|o| o.gate_elo_delta).collect();
+        let leaked_fit = fit_weighted_ridge(
+            &x_leaked,
+            &y_all,
+            &all_weights,
+            fold_lambda,
+            config.max_weight_ratio,
+        );
+
+        for held_out in all_rows.iter().filter(|o| o.group_id == held_out_group) {
+            let (x, _, _) = standardizer.transform(&held_out.features, &feature_names);
+            let expected_leverage = leverage(&fit.m, &x);
+            let expected_nearest = nearest_group_distance(&centroids, &x);
+
+            let actual = output
+                .oof_predictions
+                .iter()
+                .find(|p| p.candidate_id == held_out.candidate_id)
+                .unwrap();
+            assert!((actual.leverage - expected_leverage).abs() < 1e-9);
+            assert!((actual.nearest_group_distance - expected_nearest).abs() < 1e-9);
+
+            let (x_leak, _, _) = leaked_standardizer.transform(&held_out.features, &feature_names);
+            let leaked_leverage = leverage(&leaked_fit.m, &x_leak);
+            assert!(
+                (leaked_leverage - expected_leverage).abs() > 1e-6,
+                "fixture doesn't distinguish leak-free from leaked computation"
             );
         }
     }
