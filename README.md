@@ -575,3 +575,7 @@ cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 ```
+
+See [`CHANGELOG.md`](./CHANGELOG.md) for release history, including which versions are published to
+crates.io and, from 0.9.0 on, notes on Rust source compatibility (distinct from JSON/serde input
+compatibility) for public API changes.

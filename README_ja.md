@@ -576,4 +576,8 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 ```
 
+リリース履歴は [`CHANGELOG.md`](./CHANGELOG.md)(英語)を参照してください。crates.io への公開状況、
+および 0.9.0 以降は公開 Rust API の変更点について、JSON/serde の入力互換性とは別に Rust のソース互換性
+を明記しています。
+
 設計仕様とロードマップの全体は [`AGENTS.md`](./AGENTS.md) を参照してください。
