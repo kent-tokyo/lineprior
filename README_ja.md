@@ -452,7 +452,9 @@ let output = GateModel::fit(&observations, &GateModelConfig::default())?;
 // -- output.model の予測を信じる前に確認する。
 
 let prediction = output.model.predict(&GateQuery { features });
-// prediction.expected_elo, .interval_low/.interval_high, .probability_positive
+// prediction.expected_elo, .interval_low/.interval_high, .probability_positive,
+// .leverage, .support_distance, .nearest_group_distance, .missing_feature_fraction,
+// .prediction_status, .recommend_for_gate
 ```
 
 - **固定スキーマではなく、名前付き特徴量。** `GateObservation.features`/`GateQuery.features` は
@@ -480,7 +482,9 @@ let prediction = output.model.predict(&GateQuery { features });
   // ではおよそ0.95)。各行で繰り返さず、ここで一度だけ示されます。
   for row in &validated.oof_predictions {
       // row.candidate_id, .group_id, .actual_elo, .predicted_elo, .residual, .prediction_stddev,
-      // .interval_low/.interval_high, .probability_positive, .outer_fold, .inner_selected_lambda
+      // .interval_low/.interval_high, .probability_positive, .outer_fold, .inner_selected_lambda,
+      // .leverage, .support_distance, .nearest_group_distance, .missing_feature_fraction,
+      // .prediction_status, .recommend_for_gate
   }
   ```
 
@@ -530,6 +534,32 @@ let prediction = output.model.predict(&GateQuery { features });
   実際の予測と結果のズレに対してよくキャリブレーションされていることを意味します。`>> 1` は実際の
   ノイズが申告値を上回っている、または線形モデルが構造を捉えきれていない(この統計量だけでは両者を
   区別できません)ことを、`<< 1` は申告された stddev が過大であることを示します。
+- **OOD(分布外)時の棄権: 表示するだけで強制はしません。** `GateOofPrediction` の各 OOD 指標は、
+  その outer fold の*学習行だけ*から fit したサポートモデル(standardizer、group の重心、平均
+  leverage)から計算されます — その fold の係数を fit したのと同じ行であり、held-out 行自身や他の
+  fold の行は一切含みません。最終的にデプロイされる `GateModel`(全 CV 完了後)は、係数と同様、
+  サポートモデルも学習データ全体で fit します。すべての `GatePrediction`/
+  `GateOofPrediction` は、`leverage`(リッジの hat/leverage 項に相当し、クエリが学習時の特徴量平均から
+  離れるほど際限なく大きくなります)、`support_distance`(`leverage.sqrt()`)、
+  `nearest_group_distance`(標準化空間での、最も近い学習 group の重心までの距離)、
+  `missing_feature_fraction`、`prediction_status`(`Supported`/`Extrapolation`/`Unsupported`)も
+  持ちます。`expected_elo`/`probability_positive` は status に関わらず計算・返却されます —
+  `missing_features` と同じ「拒否せず表示する」という規約です — `Extrapolation`/`Unsupported` に
+  対してどう振る舞うかは呼び出し側が自分で決めます。分類はまず `missing_feature_fraction` を無条件で
+  チェックします(`GateModelConfig::ood_missing_fraction_threshold`、デフォルト `0.5`): 全特徴量が
+  欠けているクエリは学習時の特徴量平均に補完され、これは最も低い leverage になります — これを放置する
+  と、実際には情報がゼロなのに最大限サポートされているように見えてしまいます。それ以外の場合、
+  `leverage` がモデル自身の平均 leverage(`df / n_eff`。OLS のハット行列が一様に持つ `p/n` のリッジ版
+  であり、`lambda > 0` では成り立たない古典的な `2p/n`/`3p/n` の経験則ではありません)の
+  `ood_leverage_ratio_threshold` 倍(デフォルト `3.0`)を超える場合、または `nearest_group_distance`
+  が学習 group の重心同士の最大最近傍距離(恣意的な定数のない、自己校正的な基準スケール)を超える場合に
+  `Extrapolation` になります。
+- **`recommend_for_gate`: 見積もりを偽らない、yes/no の gating 判断。** 中身は
+  `prediction_status == Supported` そのもので、それ以外の意味は一切持ちません — bool だけ欲しい
+  呼び出し側は `prediction_status` を自分でマッチさせる代わりにこちらを読めます。
+  `expected_elo`/`interval_low`/`interval_high`/`probability_positive` は `recommend_for_gate` が
+  `false` のときも常にモデルの本当の予測のままです — 分布外のクエリはフラグが立つだけで、黙って
+  ゼロに置き換えられたりはしません。
 - **これは、より大きな設計の最初の・最小のスライスです**(不確実性を最優先した予測 → gate
   acquisition function → 単調制約、という順)。何を意図的に後回しにしたか・その理由は
   `tasks/todo.md` を参照してください。CLI サブコマンドはまだありません。

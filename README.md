@@ -450,7 +450,9 @@ let output = GateModel::fit(&observations, &GateModelConfig::default())?;
 // check this before trusting predictions from output.model.
 
 let prediction = output.model.predict(&GateQuery { features });
-// prediction.expected_elo, .interval_low/.interval_high, .probability_positive
+// prediction.expected_elo, .interval_low/.interval_high, .probability_positive,
+// .leverage, .support_distance, .nearest_group_distance, .missing_feature_fraction,
+// .prediction_status, .recommend_for_gate
 ```
 
 - **Named features, not a fixed schema.** `GateObservation.features`/`GateQuery.features` are a
@@ -477,7 +479,9 @@ let prediction = output.model.predict(&GateQuery { features });
   // (e.g. ~0.95 at the default interval_z), stated once here rather than repeated per row.
   for row in &validated.oof_predictions {
       // row.candidate_id, .group_id, .actual_elo, .predicted_elo, .residual, .prediction_stddev,
-      // .interval_low/.interval_high, .probability_positive, .outer_fold, .inner_selected_lambda
+      // .interval_low/.interval_high, .probability_positive, .outer_fold, .inner_selected_lambda,
+      // .leverage, .support_distance, .nearest_group_distance, .missing_feature_fraction,
+      // .prediction_status, .recommend_for_gate
   }
   ```
 
@@ -528,6 +532,33 @@ let prediction = output.model.predict(&GateQuery { features });
   are well-calibrated against how far predictions actually land from real outcomes; `>> 1` means
   real noise exceeds what's being reported *or* the linear model is missing structure (the two
   aren't separable by this statistic alone); `<< 1` means stated stddevs are overstated.
+- **Out-of-distribution abstention: reported, not enforced.** In `GateOofPrediction`, every OOD
+  quantity below is computed from a support model (standardizer, group centroids, mean leverage)
+  fit on *only that outer fold's training rows* -- the same rows the fold's coefficients came from,
+  never the held-out row itself or any other fold's rows. The final deployed `GateModel` (after all
+  CV) fits its own support model on the complete training set, same as its coefficients. Every
+  `GatePrediction`/`GateOofPrediction` also carries `leverage` (the ridge-analogue hat/leverage term, growing
+  without bound the further a query sits from the training feature mean), `support_distance`
+  (`leverage.sqrt()`), `nearest_group_distance` (standardized-space distance to the nearest
+  training group's centroid), `missing_feature_fraction`, and `prediction_status`
+  (`Supported`/`Extrapolation`/`Unsupported`). `expected_elo`/`probability_positive` are still
+  computed and returned regardless of status -- same "report, don't refuse" convention as
+  `missing_features` -- a caller decides for itself whether to act on `Extrapolation`/`Unsupported`.
+  Classification checks `missing_feature_fraction` first and unconditionally
+  (`GateModelConfig::ood_missing_fraction_threshold`, default `0.5`): an all-missing query imputes
+  to the training feature mean, the *lowest* possible leverage, which would otherwise look like
+  maximum support while carrying zero real information. Otherwise `Extrapolation` fires when
+  `leverage` exceeds `ood_leverage_ratio_threshold` (default `3.0`) times the model's own mean
+  leverage (`df / n_eff`, the ridge-correct analogue of the OLS hat matrix's uniform `p/n` -- not
+  the classical `2p/n`/`3p/n` rule of thumb, which assumes uniform OLS leverage and doesn't hold
+  once `lambda > 0`), or when `nearest_group_distance` exceeds the largest nearest-neighbor
+  distance among the training groups' own centroids (a self-calibrating reference scale, no
+  arbitrary constant).
+- **`recommend_for_gate`: the yes/no gating decision, without faking the estimate.** Exactly
+  `prediction_status == Supported`, nothing else -- a caller that only wants a boolean reads this
+  instead of matching on `prediction_status` itself. `expected_elo`/`interval_low`/`interval_high`/
+  `probability_positive` are always the model's real prediction, even when `recommend_for_gate` is
+  `false`: an out-of-distribution query is flagged, never silently zeroed or replaced.
 - **This is the first, smallest slice of a larger design** (uncertainty-first prediction, then a
   gate acquisition function, then monotonic constraints) -- see `tasks/todo.md` for what's
   deliberately deferred and why. No CLI subcommand yet.
