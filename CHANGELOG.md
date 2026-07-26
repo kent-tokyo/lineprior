@@ -14,7 +14,7 @@ caller using an exhaustive struct literal).
 Not every version below has been published to crates.io -- publishing is a separate explicit step
 in this project, not automatic on every version bump. See each entry for its publish status.
 
-## [0.9.0] - 2026-07-26 (not yet published to crates.io)
+## [0.9.0] - 2026-07-26
 
 Gate outcome prediction (`gate.rs`, library-only, no CLI surface): Elo observation uncertainty
 weighting and out-of-distribution abstention. Pre-real-data-validation, per this project's
@@ -69,10 +69,12 @@ acquisition function remain deferred, blocked on the `veridict` project's stoppi
   are **not** re-exported from the crate root (`gate` is a private module, and `lib.rs`'s
   `pub use gate::{...}` omits both) -- external code cannot currently name or match on either type
   at all. Flagged here as a known gap in this release's own API surface, not fixed in this release.
-- Practical impact today: the `gate` module's public API has never appeared in a published
-  crates.io release (publishing stopped at v0.4.0; `gate.rs` was added afterward and every gate
-  round since, including this one, has stayed unpublished) -- so there are no real external
-  consumers to break yet.
+- This is the first time the `gate` module's public API has appeared in a published crates.io
+  release: publishing had stopped at v0.4.0, and `gate.rs` (added afterward, in v0.7.0) stayed
+  unpublished through every gate round until this one. There were no external consumers of the
+  pre-existing `gate` API to break by this jump, but from this release on, the source-compatibility
+  notes above are a real constraint on any future change to these types, not just a documentation
+  exercise.
 
 ## [0.7.1] - 2026-07-20 (not published to crates.io)
 
