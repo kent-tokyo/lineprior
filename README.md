@@ -559,9 +559,10 @@ let prediction = output.model.predict(&GateQuery { features });
   instead of matching on `prediction_status` itself. `expected_elo`/`interval_low`/`interval_high`/
   `probability_positive` are always the model's real prediction, even when `recommend_for_gate` is
   `false`: an out-of-distribution query is flagged, never silently zeroed or replaced.
-- **This is the first, smallest slice of a larger design** (uncertainty-first prediction, then a
-  gate acquisition function, then monotonic constraints) -- see `tasks/todo.md` for what's
-  deliberately deferred and why. No CLI subcommand yet.
+- **This is the first, smallest slice of a larger design** (uncertainty-first prediction and
+  out-of-distribution abstention, done; then a gate-verdict probability layer, then a gate
+  acquisition function, then monotonic constraints) -- see `tasks/todo.md` for what's deliberately
+  deferred and why. No CLI subcommand yet.
 
 ## Academic positioning
 

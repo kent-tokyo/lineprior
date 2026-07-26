@@ -560,9 +560,9 @@ let prediction = output.model.predict(&GateQuery { features });
   `expected_elo`/`interval_low`/`interval_high`/`probability_positive` は `recommend_for_gate` が
   `false` のときも常にモデルの本当の予測のままです — 分布外のクエリはフラグが立つだけで、黙って
   ゼロに置き換えられたりはしません。
-- **これは、より大きな設計の最初の・最小のスライスです**(不確実性を最優先した予測 → gate
-  acquisition function → 単調制約、という順)。何を意図的に後回しにしたか・その理由は
-  `tasks/todo.md` を参照してください。CLI サブコマンドはまだありません。
+- **これは、より大きな設計の最初の・最小のスライスです**(不確実性を最優先した予測と OOD 時の棄権は
+  完了 → gate 判定確率レイヤー → gate acquisition function → 単調制約、という順)。何を意図的に後回し
+  にしたか・その理由は `tasks/todo.md` を参照してください。CLI サブコマンドはまだありません。
 
 ## 学術的な位置づけ
 
