@@ -26,7 +26,8 @@ pub use eval::{
 };
 pub use gate::{
     GateCalibrationBin, GateFitOutput, GateFitReport, GateModel, GateModelConfig, GateObservation,
-    GateOofPrediction, GatePrediction, GateQuery, GateValidationOutput, default_gate_lambda_grid,
+    GateOofPrediction, GatePrediction, GateQuery, GateStatus, GateValidationOutput,
+    PredictionStatus, default_gate_lambda_grid,
 };
 pub use input::{BuildOutput, ParseOutcome, build_prior_book_from_reader, parse_jsonl};
 pub use model::{
