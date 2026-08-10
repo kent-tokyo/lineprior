@@ -5,9 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 readme.workspace = true
-description = "CLI for building, evaluating, tuning, and querying lineprior prior books."
-keywords = ["cli", "prior", "decision-making", "heuristic", "opening-book"]
-categories = ["command-line-utilities", "algorithms"]
+description = "CLI for building, evaluating, tuning, and querying explainable action-ranking prior books."
+keywords = ["cli", "action-ranking", "action-selection", "decision-making", "opening-book"]
+categories = ["command-line-utilities", "algorithms", "artificial-intelligence"]
 
 [[bin]]
 name = "lineprior"

@@ -7,11 +7,22 @@
 
 [日本語](./README_ja.md) / English
 
-`lineprior` is a Rust library and CLI for building domain-agnostic **action priors** from historical action sequences. Given a state, it answers:
+`lineprior` is a Rust library and CLI for **explainable action ranking**: given historical `(state, action, outcome)` sequences, it builds a reproducible **action prior** for action selection — a ranked, confidence-scored list of candidate actions per state, learned offline from historical evidence, not online exploration. Given a state, it answers:
 
 > What actions have historically worked well from here?
 
-It is not a shogi opening book library, a chess-specific book format, a planner, a solver, or a game engine. It is a small, reusable component that turns a log of past `(state, action, outcome)` steps into a ranked list of candidate actions per state — useful for games, search, automation, agents, optimization, and any other domain where past successful sequences can guide future decisions.
+It's built for search, planning, agents, games, and optimization — move/candidate ordering, opening-book-like historical guidance, or ranking which expensive experiment to try first. It's confidence-aware and abstention-friendly: sparse or unseen states return no candidates rather than a guess (see "Confidence modes" below for the selective-prediction machinery behind that). It is **not** a shogi opening book library, a chess-specific book format, a planner, a solver, a game engine, or a contextual-bandit/reinforcement-learning/online-learning library — no policy learning, no exploration, no online updates. See "lineprior vs. contextual bandit" below if that's the gap you're checking.
+
+## When to use lineprior
+
+Use `lineprior` when you have historical `(state, action, outcome)` sequences and want an explainable, reproducible prior for ranking candidate actions before search, planning, simulation, or verification:
+
+- **Search move ordering** — rank candidate moves/actions to explore first.
+- **Planner candidate ordering** — prioritize which candidate step to expand first.
+- **Agent action priors** — give an agent a starting ranking over its candidate actions.
+- **Optimization branch ordering** — use past successful paths to order which branch to try first.
+- **Opening-book-like historical guidance** — reuse patterns from past games/runs; `lineprior` itself has no game- or domain-specific knowledge built in.
+- **Expensive experiment/gate candidate prioritization** — rank which candidate is worth an expensive run or verification first.
 
 ## What it is not
 
@@ -22,6 +33,16 @@ It is not a shogi opening book library, a chess-specific book format, a planner,
 - When data is sparse or a state is unseen, it returns no candidates rather than inventing one.
 
 If historical data is biased, the prior will be biased too. `lineprior` can improve candidate ordering when historical sequences are relevant and representative — it does not guarantee better decisions.
+
+## lineprior vs. contextual bandit
+
+If you landed here searching for a contextual bandit, here's the actual difference:
+
+- A **contextual bandit** (e.g. LinUCB, Thompson Sampling) learns a policy online: it explores, updates from feedback, and balances exploration vs. exploitation as it runs.
+- `lineprior` builds a prior **offline**, once, from a static historical log. It implements no bandit or reinforcement-learning algorithm, does no online exploration, and does no online policy updates.
+- `lineprior` is not a policy or a solver on its own — it's a ranking/confidence component meant to sit *before* a search, planner, bandit, or solver, the same way a chess opening book informs (without replacing) a search engine.
+
+They're complementary, not competing: candidates ranked by `lineprior` could seed a bandit's initial arm set or a planner's move ordering, but `lineprior` itself never explores or learns online.
 
 ## Building a prior book
 

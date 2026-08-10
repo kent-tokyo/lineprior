@@ -5,8 +5,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 readme.workspace = true
-description = "Domain-agnostic action priors built from historical action sequences."
-keywords = ["prior", "decision-making", "heuristic", "action-selection", "opening-book"]
+description = "Explainable action ranking from historical sequences, with confidence, context backoff, evaluation, and tuning."
+keywords = ["decision-making", "action-selection", "action-ranking", "selective-prediction", "opening-book"]
 categories = ["algorithms", "artificial-intelligence"]
 
 [dependencies]
