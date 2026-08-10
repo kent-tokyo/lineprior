@@ -1,0 +1,113 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Git tag to publish from (e.g. v0.9.0)"
+        required: true
+        default: "v0.9.0"
+      crate:
+        description: "Crate to publish"
+        required: true
+        default: "lineprior"
+        type: choice
+        options:
+          - lineprior
+          - lineprior-cli
+      dry_run:
+        description: "Dry run only (no actual publish)"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: crates-io
+    steps:
+      - name: Validate release_tag format
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release_tag '$RELEASE_TAG' is not of the form vX.Y.Z"
+            exit 1
+          fi
+
+      - name: Validate crate allowlist
+        env:
+          CRATE: ${{ inputs.crate }}
+        run: |
+          case "$CRATE" in
+            lineprior|lineprior-cli) ;;
+            *)
+              echo "::error::crate '$CRATE' is not in the allowlist (lineprior, lineprior-cli)"
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout exact tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
+          persist-credentials: false
+
+      - name: Verify checkout landed on the tag (not a moved ref)
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          expected="$(git rev-parse "$RELEASE_TAG")"
+          actual="$(git rev-parse HEAD)"
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::checked-out HEAD ($actual) does not match tag $RELEASE_TAG ($expected)"
+            exit 1
+          fi
+
+      - name: Working tree clean
+        run: |
+          if [ -n "$(git status --short)" ]; then
+            echo "::error::working tree is not clean"
+            git status --short
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: package.version matches tag
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          CRATE: ${{ inputs.crate }}
+        run: |
+          expected_version="${RELEASE_TAG#v}"
+          actual_version="$(cargo pkgid -p "$CRATE" | sed -E 's/.*[#:]//')"
+          if [ "$actual_version" != "$expected_version" ]; then
+            echo "::error::$CRATE version ($actual_version) does not match tag $RELEASE_TAG ($expected_version)"
+            exit 1
+          fi
+
+      - name: cargo package
+        env:
+          CRATE: ${{ inputs.crate }}
+        run: cargo package -p "$CRATE"
+
+      - name: cargo publish --dry-run
+        env:
+          CRATE: ${{ inputs.crate }}
+        run: cargo publish -p "$CRATE" --dry-run
+
+      - name: cargo publish
+        if: inputs.dry_run == 'false'
+        env:
+          CRATE: ${{ inputs.crate }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p "$CRATE"
