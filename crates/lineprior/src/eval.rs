@@ -877,7 +877,7 @@ pub struct EvalReport {
     pub score_lift: Option<f64>,
     /// `top1_hit_rate`, but each evaluated observation is weighted by its
     /// outcome credit (win=1.0, draw=`BuildConfig::draw_value`, loss/unknown=0)
-    /// instead of counted equally -- see [`crate::model::outcome_credit`]. A
+    /// instead of counted equally -- see `outcome_credit`. A
     /// failed or unrecorded-outcome observation contributes to neither the
     /// numerator nor the denominator, so this reads as "agreement rate,
     /// restricted to trials that actually succeeded (or partially, drew)."
@@ -1341,7 +1341,7 @@ impl<'a> EvalAccumulator<'a> {
 /// [`crate::build_prior_book_from_reader`]'s memory profile:
 ///
 /// 1. Read `train_reader`; observations whose `sequence_id` hashes into the
-///    train bucket (see [`is_train`]) fold into a [`PriorAccumulator`].
+///    train bucket (see `is_train`) fold into a `PriorAccumulator`.
 /// 2. Read `test_reader`; observations whose `sequence_id` hashes into the
 ///    test bucket are ranked against the now-finished prior book.
 ///

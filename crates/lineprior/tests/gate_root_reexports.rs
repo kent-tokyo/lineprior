@@ -3,8 +3,12 @@
 //! struct field's type. An in-`src/` unit test wouldn't catch a missing
 //! `pub use` (it can reach `gate::GateStatus` directly regardless), so this
 //! lives as an integration test that only ever spells `lineprior::`.
+//!
+//! Also covers `ContextQueryResult`, found via the same failure mode while
+//! fixing broken rustdoc intra-doc links: `PriorBook::query_with_context`
+//! returns it, but it wasn't re-exported either.
 
-use lineprior::{GateStatus, PredictionStatus};
+use lineprior::{ContextQueryResult, GateStatus, PredictionStatus, PriorBook};
 
 #[test]
 fn gate_status_is_nameable_and_matchable_from_the_crate_root() {
@@ -26,4 +30,12 @@ fn prediction_status_is_nameable_and_matchable_from_the_crate_root() {
         PredictionStatus::Unsupported => "unsupported",
     };
     assert_eq!(label, "supported");
+}
+
+#[test]
+fn context_query_result_is_nameable_from_the_crate_root() {
+    let book = PriorBook::default();
+    let result: ContextQueryResult = book.query_with_context("state", &[], None);
+    assert_eq!(result.matched_order, 0);
+    assert!(result.candidates.is_empty());
 }

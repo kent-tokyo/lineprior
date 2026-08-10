@@ -215,8 +215,8 @@ pub fn covered_fraction(report: &EvalReport) -> f64 {
 /// config, but its book covers nothing to measure -- e.g. `min_confidence`
 /// filtered every candidate away) scores `0.0` here rather than being
 /// treated as an error; only a config `evaluate()` itself rejects (an
-/// `Err`) is excluded before this is ever called (see [`crate::tune`]'s
-/// module doc).
+/// `Err`) is excluded before this is ever called -- the CLI's grid loop
+/// filters those out before `objective_value` sees them.
 pub fn objective_value(objective: TuneObjective, report: &EvalReport) -> f64 {
     match objective {
         TuneObjective::Mrr => report.mean_reciprocal_rank.unwrap_or(0.0),

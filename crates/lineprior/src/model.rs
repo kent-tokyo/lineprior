@@ -82,8 +82,8 @@ pub enum MissingTimestampPolicy {
     Drop,
 }
 
-/// How [`PriorAction::confidence`] is computed. See [`crate::score::confidence`]
-/// and [`crate::score::wilson_lower_bound`] for the underlying formulas.
+/// How [`PriorAction::confidence`] is computed. See `score::confidence`
+/// and `score::wilson_lower_bound` for the underlying formulas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfidenceMode {
@@ -391,7 +391,7 @@ impl PriorBook {
 
     /// Context-aware candidates for `state`, given `recent_actions` (a
     /// sequence's own recent-action window, oldest first -- see
-    /// [`crate::build::SequenceContextTracker`]). Tries the longest
+    /// `build::SequenceContextTracker`). Tries the longest
     /// available suffix of `recent_actions` against `context_entries` first
     /// ("stupid backoff"), shrinking by one action on each miss, down to
     /// [`Self::query`] (order-0) as the final rung -- which is literally
@@ -437,7 +437,7 @@ impl PriorBook {
     ///
     /// The context fed to each step is exactly the actions from prior
     /// steps in THIS candidate path (oldest first, current step's own
-    /// action excluded), mirroring [`crate::build::SequenceContextTracker`]'s
+    /// action excluded), mirroring `build::SequenceContextTracker`'s
     /// build-time windowing -- so lookups match what `context_entries`
     /// actually stored. Step 0 always queries with an empty context.
     ///

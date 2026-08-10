@@ -79,7 +79,7 @@ pub struct GateObservation {
     pub actual_elo_stddev: Option<f64>,
     /// A confidence-interval alternative to `actual_elo_stddev`: when both
     /// are present and `actual_elo_stddev` is absent, an implied stddev is
-    /// derived from this interval's width (see [`implied_elo_stddev`]).
+    /// derived from this interval's width (see `implied_elo_stddev`).
     /// Audit-only when `actual_elo_stddev` is also present.
     pub elo_ci_low: Option<f64>,
     pub elo_ci_high: Option<f64>,
@@ -128,7 +128,7 @@ pub struct GatePrediction {
     /// the model's *latent-mean* uncertainty -- how much to trust
     /// `expected_elo` as an estimate of this candidate's true strength, not
     /// the added noise of any one future gate run (see the module doc and
-    /// [`predictive_variance`]).
+    /// `predictive_variance`).
     pub interval_low: f64,
     pub interval_high: f64,
     /// `P(true Elo delta > 0)` under the model's Gaussian posterior.
@@ -146,7 +146,7 @@ pub struct GatePrediction {
     /// here rather than silently dropped.
     pub unknown_features: Vec<String>,
     /// The ridge-analogue leverage/hat term at this query (see
-    /// [`leverage`]) -- how far the query sits from the training data in
+    /// `leverage`) -- how far the query sits from the training data in
     /// the fitted ridge metric. Grows without bound moving away from the
     /// training feature mean; `0.0` exactly at the mean (including an
     /// all-missing query -- see `missing_feature_fraction` for why leverage
@@ -198,7 +198,7 @@ pub struct GateModelConfig {
     pub interval_z: f64,
     /// z-score assumed for decoding a `GateObservation`'s
     /// `elo_ci_low`/`elo_ci_high` width into an implied stddev (see
-    /// [`implied_elo_stddev`]) -- deliberately a *separate* knob from
+    /// `implied_elo_stddev`) -- deliberately a *separate* knob from
     /// `interval_z`: that one controls how wide this model's *own output*
     /// intervals should be, while this one describes the confidence level
     /// the *caller's* CI was already computed at (e.g. veridict's). The two
@@ -224,7 +224,7 @@ pub struct GateModelConfig {
     /// Bounds how much any single observation's reliability weight can
     /// dominate the fit: after normalizing weights to mean `1.0`, each is
     /// clamped to `[1 / max_weight_ratio, max_weight_ratio]` before a second
-    /// mean-`1.0` renormalization (see [`fit_weighted_ridge`]'s doc
+    /// mean-`1.0` renormalization (see `fit_weighted_ridge`'s doc
     /// comment). A near-zero stated `actual_elo_stddev` (a data-entry slip,
     /// or a genuinely near-noiseless measurement) would otherwise produce an
     /// inverse-variance weight thousands of times any other row's. Must be
@@ -280,10 +280,10 @@ pub struct GateFitReport {
     pub selected_lambda: f64,
     /// Number of outer folds the nested cross-validation pass actually
     /// evaluated (non-empty on both the training and validation side) --
-    /// measured from [`nested_cross_validate`]'s own fold loop, not assumed
+    /// measured from `nested_cross_validate`'s own fold loop, not assumed
     /// from the requested `min(GateModelConfig::cv_folds, num_groups)`. The
     /// two agree whenever `num_groups >= cv_folds`, since balanced
-    /// GroupKFold (see [`assign_folds`]) guarantees every requested fold is
+    /// GroupKFold (see `assign_folds`) guarantees every requested fold is
     /// non-empty in that case.
     pub cv_folds_used: usize,
     pub num_observations: usize,
@@ -297,7 +297,7 @@ pub struct GateFitReport {
     pub weighted_rmse: f64,
     pub calibration: Vec<GateCalibrationBin>,
     /// Out-of-fold reduced chi-square over the caller's stated Elo stddevs
-    /// (see [`implied_elo_stddev`]): `sum((actual_elo - predicted_elo)^2 /
+    /// (see `implied_elo_stddev`): `sum((actual_elo - predicted_elo)^2 /
     /// stddev^2) / n`, from the same nested-CV predictions `weighted_rmse`/
     /// `calibration` are built from. `Some` only when *every* observation
     /// supplied a usable `actual_elo_stddev`/CI -- the statistic isn't
@@ -311,7 +311,7 @@ pub struct GateFitReport {
     pub dispersion_factor: Option<f64>,
     /// The deployed model's own final refit weight distribution, *after*
     /// [`GateModelConfig::max_weight_ratio`] clamping and renormalization
-    /// (see [`fit_weighted_ridge`]'s doc comment) -- how unevenly this fit
+    /// (see `fit_weighted_ridge`'s doc comment) -- how unevenly this fit
     /// actually weighted its rows, not just an assumption that clamping
     /// happened reasonably.
     pub min_observation_weight: f64,
@@ -367,7 +367,7 @@ pub struct GateOofPrediction {
     /// the leave-one-group-out fallback, share the identical `group_id` too.
     pub outer_fold: usize,
     /// The lambda that fold's own inner CV selected (or
-    /// [`most_conservative_lambda`], when that fold's training rows had too
+    /// `most_conservative_lambda`, when that fold's training rows had too
     /// few distinct groups to run one) -- not necessarily
     /// `GateFitReport::selected_lambda`, which is chosen separately over the
     /// whole dataset for the deployed model.
@@ -470,9 +470,9 @@ impl GateModel {
     /// sharing predictions:
     ///
     /// 1. **Deployed-model lambda** (`report.selected_lambda`): a plain,
-    ///    single-level group CV over the *entire* dataset ([`select_lambda`]).
+    ///    single-level group CV over the *entire* dataset (`select_lambda`).
     /// 2. **`report.weighted_rmse`/`report.calibration`/`oof_predictions`**:
-    ///    a *nested* group CV ([`nested_cross_validate`]) -- for each outer
+    ///    a *nested* group CV (`nested_cross_validate`) -- for each outer
     ///    fold, lambda is chosen by an inner CV scoped to that fold's own
     ///    training rows only, then that fold's held-out rows are scored by
     ///    a model fit at the inner-selected lambda. Reusing (1)'s held-out
@@ -491,9 +491,9 @@ impl GateModel {
     /// observation, so no axis of relatedness the caller encoded into
     /// `group_id` can leak between train and validation (same rationale as
     /// `eval.rs`'s `sequence_id`-based split). Uses deterministic balanced
-    /// GroupKFold ([`assign_folds`]): `min(cv_folds, num_groups)` folds,
+    /// GroupKFold (`assign_folds`): `min(cv_folds, num_groups)` folds,
     /// each group placed on whichever fold currently holds the least total
-    /// reliability weight ([`effective_gate_weight`]) -- every fold is
+    /// reliability weight (`effective_gate_weight`) -- every fold is
     /// guaranteed non-empty whenever
     /// `num_groups >= cv_folds` (see `assign_folds`'s doc comment for the
     /// guarantee and its deterministic tie-breaking). Feature

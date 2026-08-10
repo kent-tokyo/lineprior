@@ -25,7 +25,7 @@ pub struct EvalArgs {
     #[arg(long, value_delimiter = ',', default_value = "1,3,5")]
     top_k: Vec<usize>,
 
-    /// Number of equal-width confidence bins in [0,1] for `confidence_calibration`.
+    /// Number of equal-width confidence bins in `[0,1]` for `confidence_calibration`.
     /// Omit to skip calibration reporting.
     #[arg(long)]
     calibration_bins: Option<usize>,
