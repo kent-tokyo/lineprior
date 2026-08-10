@@ -637,3 +637,70 @@ fn build_command_rejects_unsorted_input_when_context_order_is_set() {
 
     let _ = std::fs::remove_file(&input);
 }
+
+#[test]
+fn build_command_score_weight_flags_change_ranking() {
+    let input = temp_path("score_weight_input.jsonl");
+    let out = temp_path("score_weight_out.jsonl");
+    // "a": 1 observation, high score -- small count term, large score term.
+    // "b": 10 observations, zero score -- large count term, zero score term.
+    let mut lines = String::from(
+        "{\"sequence_id\":\"s0\",\"step\":0,\"state\":\"s\",\"action\":\"a\",\
+         \"outcome\":\"success\",\"score\":1.0}\n",
+    );
+    for i in 0..10 {
+        lines.push_str(&format!(
+            "{{\"sequence_id\":\"s{}\",\"step\":0,\"state\":\"s\",\"action\":\"b\",\
+             \"outcome\":\"success\",\"score\":0.0}}\n",
+            i + 1
+        ));
+    }
+    std::fs::write(&input, lines).unwrap();
+
+    // Default weights (count=success=score=1): "b"'s large count term wins, ranks first.
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--smoothing-alpha",
+            "0",
+        ])
+        .assert()
+        .success();
+    let default_ranked = std::fs::read_to_string(&out).unwrap();
+    assert!(
+        default_ranked.find("\"action\":\"b\"") < default_ranked.find("\"action\":\"a\""),
+        "expected b (higher count) to rank first under default weights: {default_ranked}"
+    );
+
+    // Zeroing count/success weight and keeping only score_weight flips the ranking to "a".
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--smoothing-alpha",
+            "0",
+            "--count-weight",
+            "0",
+            "--success-weight",
+            "0",
+            "--score-weight",
+            "1",
+        ])
+        .assert()
+        .success();
+    let score_only_ranked = std::fs::read_to_string(&out).unwrap();
+    assert!(
+        score_only_ranked.find("\"action\":\"a\"") < score_only_ranked.find("\"action\":\"b\""),
+        "expected a (higher score) to rank first under score_weight-only: {score_only_ranked}"
+    );
+
+    let _ = std::fs::remove_file(&input);
+    let _ = std::fs::remove_file(&out);
+}

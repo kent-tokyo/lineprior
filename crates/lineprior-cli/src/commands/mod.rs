@@ -191,6 +191,22 @@ pub struct BuildConfigArgs {
     /// by (sequence_id, step) within each sequence when nonzero.
     #[arg(long, default_value_t = 0)]
     pub context_order: usize,
+
+    /// Weight on ln(1 + weighted_count) in the raw prior score
+    /// (score = count_weight * ln(1 + weighted_count) + success_weight *
+    /// success_rate + score_weight * mean_score).
+    #[arg(long, default_value_t = 1.0)]
+    pub count_weight: f64,
+
+    /// Weight on the smoothed success rate in the raw prior score. See
+    /// --count-weight for the full formula.
+    #[arg(long, default_value_t = 1.0)]
+    pub success_weight: f64,
+
+    /// Weight on the smoothed mean score in the raw prior score. See
+    /// --count-weight for the full formula.
+    #[arg(long, default_value_t = 1.0)]
+    pub score_weight: f64,
 }
 
 /// Resolves the effective `BuildConfig` for `build`/`eval`: either loaded
@@ -247,6 +263,9 @@ impl BuildConfigArgs {
             && self.source_weights.is_empty()
             && self.default_source_weight == lineprior::DEFAULT_SOURCE_WEIGHT
             && self.context_order == 0
+            && self.count_weight == 1.0
+            && self.success_weight == 1.0
+            && self.score_weight == 1.0
     }
 
     pub fn into_build_config(self) -> BuildConfig {
@@ -272,7 +291,9 @@ impl BuildConfigArgs {
             source_weights: self.source_weights.into_iter().collect(),
             default_source_weight: self.default_source_weight,
             context_order: self.context_order,
-            ..BuildConfig::default()
+            count_weight: self.count_weight,
+            success_weight: self.success_weight,
+            score_weight: self.score_weight,
         }
     }
 }
