@@ -14,7 +14,7 @@ caller using an exhaustive struct literal).
 Not every version below has been published to crates.io -- publishing is a separate explicit step
 in this project, not automatic on every version bump. See each entry for its publish status.
 
-## [0.10.0] - 2026-08-11 (not yet published to crates.io)
+## [0.10.0] - 2026-08-11
 
 Minor version, not a patch: `TuneParam` (public, non-`#[non_exhaustive]`) gains three new
 variants, which is source-breaking for external exhaustive matches -- see the source-compatibility
