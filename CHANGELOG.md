@@ -14,10 +14,11 @@ caller using an exhaustive struct literal).
 Not every version below has been published to crates.io -- publishing is a separate explicit step
 in this project, not automatic on every version bump. See each entry for its publish status.
 
-## [Unreleased]
+## [0.10.0] - 2026-08-11
 
-Not yet assigned a version number or published; tracked here as it lands on `main` per this
-project's own "commit what's done, decide the release separately" convention.
+Minor version, not a patch: `TuneParam` (public, non-`#[non_exhaustive]`) gains three new
+variants, which is source-breaking for external exhaustive matches -- see the source-compatibility
+note below, and this file's own intro on why a `0.x` minor bump can include that.
 
 ### Added
 
