@@ -704,3 +704,73 @@ fn build_command_score_weight_flags_change_ranking() {
     let _ = std::fs::remove_file(&input);
     let _ = std::fs::remove_file(&out);
 }
+
+#[test]
+fn tune_sweeps_the_three_scoring_weights_and_the_saved_config_round_trips_through_build_and_eval() {
+    let input = temp_path("tune_weight_sweep_input.jsonl");
+    let best_config = temp_path("tune_weight_sweep_best_config.json");
+    let build_out = temp_path("tune_weight_sweep_build_out.jsonl");
+    write_eval_fixture(&input);
+
+    let tune_output = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "tune",
+            input.to_str().unwrap(),
+            "--param",
+            "count-weight=0.0,1.0",
+            "--param",
+            "success-weight=0.5,1.0",
+            "--param",
+            "score-weight=1.0",
+            "--save-best-config",
+            best_config.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(tune_output.status.success());
+    let report: serde_json::Value =
+        serde_json::from_slice(&tune_output.stdout).expect("valid JSON report");
+    // 2 (count-weight) x 2 (success-weight) x 1 (score-weight) = 4 candidates.
+    assert_eq!(report["evaluated_config_count"].as_u64(), Some(4));
+    assert!(best_config.exists());
+
+    let saved_config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&best_config).unwrap()).unwrap();
+    assert_eq!(saved_config["score_weight"], 1.0);
+    assert!(
+        saved_config["count_weight"] == 0.0 || saved_config["count_weight"] == 1.0,
+        "count_weight should be one of the swept values, got {saved_config}"
+    );
+
+    // Round-trip through build.
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            fixture("simple_success.jsonl").to_str().unwrap(),
+            "--out",
+            build_out.to_str().unwrap(),
+            "--config",
+            best_config.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    assert!(build_out.exists());
+
+    // Round-trip through eval.
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "eval",
+            input.to_str().unwrap(),
+            "--config",
+            best_config.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let _ = std::fs::remove_file(&input);
+    let _ = std::fs::remove_file(&best_config);
+    let _ = std::fs::remove_file(&build_out);
+}

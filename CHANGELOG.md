@@ -14,6 +14,32 @@ caller using an exhaustive struct literal).
 Not every version below has been published to crates.io -- publishing is a separate explicit step
 in this project, not automatic on every version bump. See each entry for its publish status.
 
+## [Unreleased]
+
+Not yet assigned a version number or published; tracked here as it lands on `main` per this
+project's own "commit what's done, decide the release separately" convention.
+
+### Added
+
+- `GateStatus`/`PredictionStatus` (added in 0.9.0, never reachable externally) are now
+  re-exported from the crate root.
+- `--count-weight` / `--success-weight` / `--score-weight` CLI flags on `build`/`eval`
+  (`BuildConfig` fields that already existed in the library, newly wired to the CLI).
+- The same three as `lineprior tune --param` keys (`count-weight`, `success-weight`,
+  `score-weight`), so they can be swept and saved like every other tunable `BuildConfig` field.
+- `cargo audit` CI job.
+
+### Changed
+
+- **Rust source compatibility**: `TuneParam` is a public, non-`#[non_exhaustive]` enum; this
+  release adds three new variants (`CountWeight`, `SuccessWeight`, `ScoreWeight`). Additive for
+  construction, but source-breaking for any external code that `match`es on `TuneParam`
+  exhaustively without a wildcard arm -- the same pattern already documented for `GateObservation`/
+  `GatePrediction`/`Error` in the 0.9.0 entry below. `#[non_exhaustive]` was deliberately not added
+  to `TuneParam` in this change (a separate, larger decision, not folded into a 3-variant addition).
+- Fixed a real dependency-tree security advisory, RUSTSEC-2026-0204 (`crossbeam-epoch`, transitive
+  via the `criterion` dev-dependency used only by benches -- never reached a published build).
+
 ## [0.9.0] - 2026-07-26
 
 Gate outcome prediction (`gate.rs`, library-only, no CLI surface): Elo observation uncertainty

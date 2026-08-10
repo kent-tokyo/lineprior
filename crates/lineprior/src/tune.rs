@@ -19,6 +19,9 @@ pub enum TuneParam {
     DrawValue(Vec<f64>),
     TimeDecayHalfLifeDays(Vec<Option<f64>>),
     DefaultSourceWeight(Vec<f64>),
+    CountWeight(Vec<f64>),
+    SuccessWeight(Vec<f64>),
+    ScoreWeight(Vec<f64>),
 }
 
 fn expand_one(configs: &[BuildConfig], param: &TuneParam) -> Vec<BuildConfig> {
@@ -109,6 +112,33 @@ fn expand_one(configs: &[BuildConfig], param: &TuneParam) -> Vec<BuildConfig> {
             .flat_map(|c| {
                 values.iter().map(move |v| BuildConfig {
                     default_source_weight: *v,
+                    ..c.clone()
+                })
+            })
+            .collect(),
+        TuneParam::CountWeight(values) => configs
+            .iter()
+            .flat_map(|c| {
+                values.iter().map(move |v| BuildConfig {
+                    count_weight: *v,
+                    ..c.clone()
+                })
+            })
+            .collect(),
+        TuneParam::SuccessWeight(values) => configs
+            .iter()
+            .flat_map(|c| {
+                values.iter().map(move |v| BuildConfig {
+                    success_weight: *v,
+                    ..c.clone()
+                })
+            })
+            .collect(),
+        TuneParam::ScoreWeight(values) => configs
+            .iter()
+            .flat_map(|c| {
+                values.iter().map(move |v| BuildConfig {
+                    score_weight: *v,
                     ..c.clone()
                 })
             })
@@ -491,6 +521,34 @@ mod tests {
         assert_eq!(grid[0].1.confidence_mode, ConfidenceMode::Hybrid);
         assert_eq!(grid[0].1.time_decay_half_life_days, None);
         assert_eq!(grid[1].1.time_decay_half_life_days, Some(30.0));
+    }
+
+    #[test]
+    fn expand_grid_applies_the_three_scoring_weights_in_deterministic_generation_order() {
+        let params = vec![
+            TuneParam::CountWeight(vec![0.0, 2.0]),
+            TuneParam::SuccessWeight(vec![1.0, 3.0]),
+            TuneParam::ScoreWeight(vec![5.0]),
+        ];
+        let grid = expand_grid(&BuildConfig::default(), &params);
+        assert_eq!(grid.len(), 4);
+        let ids: Vec<&str> = grid.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, vec!["cfg_001", "cfg_002", "cfg_003", "cfg_004"]);
+        // count_weight varies slower than success_weight; score_weight is
+        // fixed (single value) on every candidate.
+        let combos: Vec<(f64, f64, f64)> = grid
+            .iter()
+            .map(|(_, c)| (c.count_weight, c.success_weight, c.score_weight))
+            .collect();
+        assert_eq!(
+            combos,
+            vec![
+                (0.0, 1.0, 5.0),
+                (0.0, 3.0, 5.0),
+                (2.0, 1.0, 5.0),
+                (2.0, 3.0, 5.0),
+            ]
+        );
     }
 
     #[test]

@@ -27,8 +27,9 @@ pub struct TuneArgs {
     /// (one `--param` per key). Supported keys: confidence-mode,
     /// min-confidence, smoothing-alpha, confidence-k, confidence-z,
     /// min-count, min-weighted-count, draw-value, time-decay-half-life-days
-    /// (accepts `none`), default-source-weight. A key not swept stays at
-    /// its `BuildConfig::default()` value for every candidate.
+    /// (accepts `none`), default-source-weight, count-weight,
+    /// success-weight, score-weight. A key not swept stays at its
+    /// `BuildConfig::default()` value for every candidate.
     #[arg(long = "param")]
     params: Vec<String>,
 
@@ -115,10 +116,14 @@ fn parse_param(raw: &str) -> Result<TuneParam> {
             Ok(TuneParam::TimeDecayHalfLifeDays(values))
         }
         "default-source-weight" => Ok(TuneParam::DefaultSourceWeight(parse_floats(&raw_values)?)),
+        "count-weight" => Ok(TuneParam::CountWeight(parse_floats(&raw_values)?)),
+        "success-weight" => Ok(TuneParam::SuccessWeight(parse_floats(&raw_values)?)),
+        "score-weight" => Ok(TuneParam::ScoreWeight(parse_floats(&raw_values)?)),
         other => anyhow::bail!(
             "unknown --param key {other:?}; supported: confidence-mode, min-confidence, \
              smoothing-alpha, confidence-k, confidence-z, min-count, min-weighted-count, \
-             draw-value, time-decay-half-life-days, default-source-weight"
+             draw-value, time-decay-half-life-days, default-source-weight, count-weight, \
+             success-weight, score-weight"
         ),
     }
 }
@@ -310,6 +315,22 @@ mod tests {
         ));
         // "none" isn't a valid f64 for any other key.
         assert!(parse_param("min-confidence=none").is_err());
+    }
+
+    #[test]
+    fn parses_the_three_scoring_weight_params() {
+        assert!(matches!(
+            parse_param("count-weight=0.0,2.0").unwrap(),
+            TuneParam::CountWeight(values) if values == vec![0.0, 2.0]
+        ));
+        assert!(matches!(
+            parse_param("success-weight=1.0,3.0").unwrap(),
+            TuneParam::SuccessWeight(values) if values == vec![1.0, 3.0]
+        ));
+        assert!(matches!(
+            parse_param("score-weight=0.5").unwrap(),
+            TuneParam::ScoreWeight(values) if values == vec![0.5]
+        ));
     }
 
     #[test]

@@ -32,7 +32,7 @@ lineprior build observations.jsonl \
   --smoothing-alpha 5.0
 ```
 
-主なフラグ: `--max-step`(指定した step を超える観測を除外)、`--max-actions-per-state`(状態ごとに上位 N 件のみ保持)、`--tags`(指定したタグのいずれかを持つ観測のみを対象、カンマ区切り)、`--confidence-k`(サンプル数に対する confidence の伸び方を調整)、`--confidence-mode`(`heuristic`(デフォルト)、`wilson-lower-bound`、`hybrid` — 詳細は下記「Confidence モード」)、`--confidence-z`(Wilson lower bound の z 値、デフォルト `1.96`。`heuristic` では無視される)、`--min-weighted-count` / `--min-confidence`(生の `--min-count` の代わりに、weighted count や confidence 自体でフィルタリング)、`--draw-value`(`draw` outcome に与える成功クレジット — デフォルト `0.5`。draw は敗北ではなく、対戦ゲームにおける正当な部分的結果であるため)、`--time-decay-half-life-days` / `--time-decay-reference-unix-seconds` / `--missing-timestamp-policy`(経過時間に基づく重みの減衰 — 詳細は下記「Time decay と source reliability」)、`--source-weights` / `--default-source-weight`(source ごとの信頼度倍率、同セクション)、`--count-weight` / `--success-weight` / `--score-weight`(raw prior score 内の各項の重み — `count_weight * ln(1 + weighted_count) + success_weight * success_rate + score_weight * mean_score`。いずれもデフォルト `1.0`。上記の他の `BuildConfig` フラグと異なり、まだ `tune --param` には対応していない)、`--config <path.json>`(個々のフラグの代わりに `BuildConfig` 全体をファイルから読み込む。例えば `lineprior tune --save-best-config` が保存したファイル — 詳細は下記「Tuning」。上記のいずれかのフラグと組み合わせるとエラーになる)、`--strict`(不正なレコードを警告付きでスキップせず、最初の1件で失敗させる)。
+主なフラグ: `--max-step`(指定した step を超える観測を除外)、`--max-actions-per-state`(状態ごとに上位 N 件のみ保持)、`--tags`(指定したタグのいずれかを持つ観測のみを対象、カンマ区切り)、`--confidence-k`(サンプル数に対する confidence の伸び方を調整)、`--confidence-mode`(`heuristic`(デフォルト)、`wilson-lower-bound`、`hybrid` — 詳細は下記「Confidence モード」)、`--confidence-z`(Wilson lower bound の z 値、デフォルト `1.96`。`heuristic` では無視される)、`--min-weighted-count` / `--min-confidence`(生の `--min-count` の代わりに、weighted count や confidence 自体でフィルタリング)、`--draw-value`(`draw` outcome に与える成功クレジット — デフォルト `0.5`。draw は敗北ではなく、対戦ゲームにおける正当な部分的結果であるため)、`--time-decay-half-life-days` / `--time-decay-reference-unix-seconds` / `--missing-timestamp-policy`(経過時間に基づく重みの減衰 — 詳細は下記「Time decay と source reliability」)、`--source-weights` / `--default-source-weight`(source ごとの信頼度倍率、同セクション)、`--count-weight` / `--success-weight` / `--score-weight`(raw prior score 内の各項の重み — `count_weight * ln(1 + weighted_count) + success_weight * success_rate + score_weight * mean_score`。いずれもデフォルト `1.0`。`tune --param` のキーとしても指定可能 — 詳細は下記「Tuning」)、`--config <path.json>`(個々のフラグの代わりに `BuildConfig` 全体をファイルから読み込む。例えば `lineprior tune --save-best-config` が保存したファイル — 詳細は下記「Tuning」。上記のいずれかのフラグと組み合わせるとエラーになる)、`--strict`(不正なレコードを警告付きでスキップせず、最初の1件で失敗させる)。
 
 `--min-confidence` の意味は `--confidence-mode` に依存します: `heuristic` では出典(outcome)を見ないサンプルサイズだけの下限ですが、`wilson-lower-bound`/`hybrid` では成功率を反映するようになるため、これまで閾値を通過していた「件数は多いがほとんど失敗している」行動が弾かれるようになることがあります — `--confidence-mode` の切り替えは、既存の `--min-confidence` 閾値に対して単なる追加ではなく実際の挙動変化です。
 
@@ -395,7 +395,8 @@ lineprior tune observations.jsonl \
 は `--param` を繰り返してください)。`--param` で指定されなかったフィールドは、すべての候補で
 `BuildConfig::default()` のままです。対応するキー: `confidence-mode`、`min-confidence`、
 `smoothing-alpha`、`confidence-k`、`confidence-z`、`min-count`、`min-weighted-count`、
-`draw-value`、`time-decay-half-life-days`(`none` を受け付けます)、`default-source-weight`。
+`draw-value`、`time-decay-half-life-days`(`none` を受け付けます)、`default-source-weight`、
+`count-weight`、`success-weight`、`score-weight`。
 `--time-decay-reference-unix-seconds` はすべての候補に適用される単一の値です(掃引対象にはできませ
 ん)— 掃引した `time-decay-half-life-days` の値のいずれかが `none` でない場合は必須です。これは
 `build`/`eval` と同じ再現性のルールです。
