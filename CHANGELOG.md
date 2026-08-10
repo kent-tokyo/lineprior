@@ -69,14 +69,12 @@ acquisition function remain deferred, blocked on the `veridict` project's stoppi
   are **not** re-exported from the crate root (`gate` is a private module, and `lib.rs`'s
   `pub use gate::{...}` omits both) -- external code cannot currently name or match on either type
   at all. Flagged here as a known gap in this release's own API surface, not fixed in this release.
-- This is the first time the `gate` module's public API has appeared in a published crates.io
-  release: publishing had stopped at v0.4.0, and `gate.rs` (added afterward, in v0.7.0) stayed
-  unpublished through every gate round until this one. There were no external consumers of the
-  pre-existing `gate` API to break by this jump, but from this release on, the source-compatibility
-  notes above are a real constraint on any future change to these types, not just a documentation
-  exercise.
+- The `gate` module's public API has been part of a published crates.io release since v0.7.0
+  (published 2026-07-19) and v0.7.1 (published 2026-07-20) -- not first here, correcting this
+  entry's earlier claim to the contrary. The source-compatibility notes above are a real
+  constraint against that already-published v0.7.1 API surface, not just a forward-looking one.
 
-## [0.7.1] - 2026-07-20 (not published to crates.io)
+## [0.7.1] - 2026-07-20
 
 Statistical-correctness patch to `gate.rs`'s Round A, found before moving on to real gate-history
 validation or an acquisition function.
@@ -91,7 +89,7 @@ validation or an acquisition function.
   one group; a hash collision could silently leave a fold empty or several folds overloaded.
   Replaced with deterministic balanced GroupKFold assignment.
 
-## [0.7.0] - 2026-07-19 (not published to crates.io)
+## [0.7.0] - 2026-07-19
 
 Adds `gate.rs`: a small, regularized surrogate (`GateModel`) predicting a training candidate's
 real-gate Elo delta -- and how much to trust that prediction -- from cheap validation-time
