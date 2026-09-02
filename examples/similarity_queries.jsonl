@@ -1,0 +1,2 @@
+{"query_id":"unseen-cart","state":"screen-cart-unseen","expected_action":"click:add-to-cart","neighbors":[{"state":"screen-cart","distance":0.05,"provenance":"fixture-v1"},{"state":"screen-checkout","distance":1.35,"provenance":"fixture-v1"}]}
+{"query_id":"known-cart","state":"screen-cart","expected_action":"click:add-to-cart","neighbors":[{"state":"screen-cart","distance":0.0,"provenance":"fixture-v1"}]}

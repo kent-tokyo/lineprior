@@ -352,6 +352,9 @@ The real-log handoff is documented in
 [`docs/measurements/offpolicy-real-data.md`](./docs/measurements/offpolicy-real-data.md). It
 defines the propensity/overlap preflight, paired on/off arms, and bootstrap evidence required
 before interpreting downstream improvement.
+For paired observed-reward deltas and propensity preflight, use the dependency-free
+`scripts/compare_offpolicy_arms.py`; run the Rust `lineprior offpolicy` command separately on
+each arm for IPS/DR estimates and bootstrap intervals.
 
 ## Variable-order context
 
@@ -443,6 +446,9 @@ does not establish real-data quality or justify enabling similarity by default.
 The real-data comparison handoff, including exact/similarity/no-prior arms, calibration,
 abstention, latency, and memory reporting, is in
 [`docs/measurements/similarity-real-data.md`](./docs/measurements/similarity-real-data.md).
+The dependency-free runner `scripts/measure_similarity.py` consumes a prior and a held-out query
+JSONL (including caller-supplied neighbors) and emits these arm metrics; the checked-in
+`examples/similarity_queries.jsonl` is a contract fixture, not a real-data result.
 
 ## Sequence-level priors
 

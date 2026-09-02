@@ -409,6 +409,8 @@ action だけを返すため、未知の action を生成しません。`Similar
 実データでの比較手順（exact-match / similarity / no-prior、coverage、MRR、top-1、calibration、
 abstention、速度、メモリ）は [`docs/measurements/similarity-real-data.md`](docs/measurements/similarity-real-data.md)
 に記載しています。
+依存なしの `scripts/measure_similarity.py` で、呼び出し側が用意した近傍を含むquery JSONLから
+3つのarmを比較できます。`examples/similarity_queries.jsonl` は契約fixtureであり、実データ結果ではありません。
 
 ## シーケンス単位の prior
 
@@ -724,6 +726,8 @@ context entry、magic/version、割り当て上限を保持し、余分な末尾
 実際の `veridict` 実行結果がないため、現時点では recipe-only です。
 IPS / DR のpropensity・overlap事前確認、bootstrap不確実性、lineprior on/offのdownstream比較手順は
 [`docs/measurements/offpolicy-real-data.md`](docs/measurements/offpolicy-real-data.md)に分離しています。
+paired reward差分とpropensity事前確認には依存なしの
+`scripts/compare_offpolicy_arms.py`を使い、IPS / DRの推定値は各armに対してRust CLIを個別に実行します。
 ## macro-actions と multi-source merge
 
 `build_macro_actions` は順序付き履歴から連続した action window を抽出します。window を保持する必要があるため

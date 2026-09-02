@@ -1,0 +1,2 @@
+{"row_id":"r1","state":"s1","action":"a","reward":1.0,"logging_propensity":0.5,"evaluation_probability":0.5,"reward_model_policy_value":0.8,"reward_model_logged_action":0.7}
+{"row_id":"r2","state":"s2","action":"b","reward":0.0,"logging_propensity":0.5,"evaluation_probability":0.5,"reward_model_policy_value":0.4,"reward_model_logged_action":0.2}
