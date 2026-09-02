@@ -375,6 +375,8 @@ is compatibility evidence for the CLI examples, not a promise of formal Python/n
 The WASM build smoke likewise records its `wasm32-unknown-unknown` target, Rust toolchain, commit,
 and fixed project version in a separately validated CI artifact; this remains compile evidence,
 not npm publication or browser-quality evidence.
+The exact current matrix and its open compatibility claims are documented in
+[`docs/measurements/ecosystem-compatibility.md`](docs/measurements/ecosystem-compatibility.md).
 
 ## Variable-order context
 

@@ -748,6 +748,9 @@ CIのexamples jobは現在Python 3.12/3.13とNode 22/24の4セルmatrixで実行
 正式なPython/npm bindingの保証ではありません。
 WASM build smokeも `wasm32-unknown-unknown` target、Rust toolchain、commit、固定版を別artifactとして記録・検証します。
 これはcompileの証拠であり、npm公開やブラウザ品質の証拠ではありません。
+現在のmatrix、検証できる範囲、未完了の互換性主張は
+[`docs/measurements/ecosystem-compatibility.md`](docs/measurements/ecosystem-compatibility.md)に固定しています。
+
 ## macro-actions と multi-source merge
 
 `build_macro_actions` は順序付き履歴から連続した action window を抽出します。window を保持する必要があるため

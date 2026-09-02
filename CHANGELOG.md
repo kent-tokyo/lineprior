@@ -89,6 +89,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   upload, preserving its boundary from browser and npm publication evidence.
 - The WASM smoke also covers rejection of a mismatched compilation target in the runtime artifact
   contract.
+- Added an ecosystem compatibility evidence document that defines the current four-cell CLI matrix,
+  the separate WASM compile boundary, and the runtime/package claims that remain open.
 
 ### Fixed
 
