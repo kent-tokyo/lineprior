@@ -71,6 +71,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   before replaying the maintained CLI, OPE, and measurement checks.
 - Similarity measurement artifacts now retain the prior's BuildConfig fingerprint for comparison
   lineage and reject conflicting fingerprint headers.
+- Similarity and paired OPE artifacts now include SHA-256 hashes of their input JSONL files for
+  immutable dataset lineage.
 
 ### Fixed
 

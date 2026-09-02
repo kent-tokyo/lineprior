@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Run Rust IPS/DR evaluation for paired arms and combine the audit artifact."""
-import argparse, json, pathlib, subprocess, tempfile
+import argparse, hashlib, json, pathlib, subprocess, tempfile
+
+
+def sha256_file(path):
+    return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
 
 def main():
     ap = argparse.ArgumentParser()
@@ -32,7 +36,9 @@ def main():
                         "--confidence-level", str(args.confidence_level)], check=True)
         report = {"protocol": "offpolicy-integrated-arms-v1",
                   "measurement": {"dataset_id": args.dataset_id, "split": args.split,
-                                  "lineprior_version": args.policy_version or "0.11.1"},
+                                  "lineprior_version": args.policy_version or "0.11.1",
+                                  "input_sha256": {"off": sha256_file(args.off),
+                                                   "on": sha256_file(args.on)}},
                   "arms": arm_reports, "paired": json.loads(paired_path.read_text())}
         pathlib.Path(args.out).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 

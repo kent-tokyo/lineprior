@@ -6,7 +6,11 @@ documented distance weighting to already supplied neighbors and never invents
 an action. It is intentionally dependency-free so the same artifact can run
 in a CI or data-analysis environment.
 """
-import argparse, json, math, pathlib, time
+import argparse, hashlib, json, math, pathlib, time
+
+
+def sha256_file(path):
+    return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
 
 def load_book(path):
     book = {}
@@ -92,6 +96,8 @@ def main():
               "measurement": {"dataset_id": args.dataset_id, "split": args.split,
                                "feature_version": args.feature_version,
                                "lineprior_version": args.lineprior_version,
+                               "input_sha256": {"prior": sha256_file(args.prior),
+                                                "queries": sha256_file(args.queries)},
                                "prior_config_fingerprint": prior_config_fingerprint}, "arms": {}}
     for name, rows in arms.items():
         evaluated = [r for r in rows if r["rank"] is not None]

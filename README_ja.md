@@ -737,6 +737,7 @@ paired reward差分とpropensity事前確認には依存なしの
 artifact契約を確認できます。これは形式検証であり、downstream改善の証拠やgate通過ではありません。
 similarity reportには元priorの `build_config_fingerprint` も引き継がれるため、異なるBuildConfigの結果を
 黙って比較することを防げます。
+reportには入力JSONLのSHA-256も含まれるため、dataset IDが同じまま入力が差し替えられた場合も検出できます。
 再現可能なローカル引き渡しには `scripts/run_ecosystem_matrix_smoke.sh` を使えます。Rust・Python・Nodeの
 実行時バージョンを記録してCLI・OPE・measurement smokeを再生しますが、全対応バージョンの証明や実データ品質の
 証拠ではありません。

@@ -23,7 +23,7 @@ def require(mapping, keys, label):
 def validate_lineage(report, label):
     require(report, ("protocol", "measurement"), label)
     measurement = report["measurement"]
-    required = ["dataset_id", "split", "lineprior_version"]
+    required = ["dataset_id", "split", "lineprior_version", "input_sha256"]
     if label == "similarity":
         required.append("prior_config_fingerprint")
     require(measurement, required, f"{label}.measurement")

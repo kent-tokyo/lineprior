@@ -6,7 +6,11 @@ and bootstrap estimates. This helper checks the pairing contract and reports
 the observed paired reward delta plus deterministic uncertainty over that
 paired delta; it never fabricates counterfactual rewards.
 """
-import argparse, json, math, pathlib
+import argparse, hashlib, json, math, pathlib
+
+
+def sha256_file(path):
+    return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
 
 def load(path):
     rows = {}
@@ -61,7 +65,8 @@ def main():
     alpha = (1 - args.confidence_level) / 2
     report = {"protocol": "offpolicy-paired-arms-v1", "paired_rows": len(ids),
       "measurement": {"dataset_id": args.dataset_id, "split": args.split,
-                       "lineprior_version": args.lineprior_version},
+                       "lineprior_version": args.lineprior_version,
+                       "input_sha256": {"off": sha256_file(args.off), "on": sha256_file(args.on)}},
       "off": propensity_audit(off), "on": propensity_audit(on),
       "observed_reward_mean": {"off": sum(float(off[k]["reward"]) for k in ids) / len(ids) if ids else None,
                                 "on": sum(float(on[k]["reward"]) for k in ids) / len(ids) if ids else None},
