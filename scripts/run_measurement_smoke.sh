@@ -55,4 +55,13 @@ if python3 "$root/scripts/validate_measurement_artifact.py" offpolicy "$bad_line
 bad_metric="$directory/similarity-bad-metric.json"
 python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); r["arms"]["exact"]["coverage"] = 1.5; pathlib.Path(sys.argv[2]).write_text(json.dumps(r))' "$similarity_first" "$bad_metric"
 if python3 "$root/scripts/validate_measurement_artifact.py" similarity "$bad_metric" >/dev/null 2>&1; then exit 1; fi
+bad_hash="$directory/similarity-bad-hash.json"
+python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); r["measurement"]["input_sha256"]["prior"]="g" * 64; pathlib.Path(sys.argv[2]).write_text(json.dumps(r))' "$similarity_first" "$bad_hash"
+if python3 "$root/scripts/validate_measurement_artifact.py" similarity "$bad_hash" >/dev/null 2>&1; then exit 1; fi
+bad_count="$directory/similarity-bad-count.json"
+python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); r["num_queries"]=-1; pathlib.Path(sys.argv[2]).write_text(json.dumps(r))' "$similarity_first" "$bad_count"
+if python3 "$root/scripts/validate_measurement_artifact.py" similarity "$bad_count" >/dev/null 2>&1; then exit 1; fi
+bad_protocol="$directory/similarity-bad-protocol.json"
+python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); r["protocol"]="unknown-v0"; pathlib.Path(sys.argv[2]).write_text(json.dumps(r))' "$similarity_first" "$bad_protocol"
+if python3 "$root/scripts/validate_measurement_artifact.py" similarity "$bad_protocol" >/dev/null 2>&1; then exit 1; fi
 echo "measurement smoke: ok (similarity arms + paired OPE audit)"
