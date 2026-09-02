@@ -15,7 +15,7 @@ import tempfile
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-INPUT = ROOT / "ui_automation.jsonl"
+INPUT = ROOT / "examples" / "ui_automation.jsonl"
 STATE = "cart-empty"
 
 

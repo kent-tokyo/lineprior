@@ -48,6 +48,11 @@ in this project, not automatic on every version bump. See each entry for its pub
 
 ### Added
 
+### Fixed
+
+- Fixed the Python CLI round-trip example to resolve the checked-in UI-automation fixture from
+  `examples/ui_automation.jsonl` when executed from the repository root.
+
 - Opt-in `PriorBook::query_with_similarity` for caller-supplied similar states with deterministic
   distance weighting, provenance-preserving evidence, and no invented actions.
 - `lineprior-similarity`, a dependency-free Euclidean feature-vector nearest-neighbor adapter with
