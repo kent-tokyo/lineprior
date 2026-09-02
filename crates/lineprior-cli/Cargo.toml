@@ -12,6 +12,7 @@ categories = ["command-line-utilities", "algorithms", "artificial-intelligence"]
 [[bin]]
 name = "lineprior"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 lineprior = { path = "../lineprior", version = "0.11.1" }

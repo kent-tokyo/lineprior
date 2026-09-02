@@ -116,6 +116,8 @@ in this project, not automatic on every version bump. See each entry for its pub
 - Strengthened the dependency-free schema checker to pin canonical IDs, root/measurement required
   fields, and definition sets without introducing a new runtime dependency.
 - The schema checker now also pins digest syntax, bounded unit metrics, and the required arm fields.
+- Excluded the `lineprior` CLI binary target from generated Rust API docs to remove the known
+  bin/lib output collision; CLI behavior remains covered by clippy, tests, and smoke checks.
 
 ### Fixed
 
