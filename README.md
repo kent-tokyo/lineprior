@@ -366,6 +366,8 @@ in-place input replacement.
 For a reproducible local handoff, `scripts/run_ecosystem_matrix_smoke.sh` records the active Rust,
 Python, and Node versions before replaying the CLI, OPE, and measurement smoke suite. It does not
 cover every supported runtime version or establish real-data quality.
+Pass `--out runtime-report.json` to retain the runtime inventory, commit, fixed project version, and
+checks as a machine-readable artifact; CI uploads this report from the examples smoke job.
 
 ## Variable-order context
 

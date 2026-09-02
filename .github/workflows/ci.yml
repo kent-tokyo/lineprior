@@ -39,7 +39,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: sh scripts/run_ecosystem_matrix_smoke.sh
+      - run: sh scripts/run_ecosystem_matrix_smoke.sh --out ecosystem-runtime.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ecosystem-runtime-${{ github.run_id }}
+          path: ecosystem-runtime.json
+          if-no-files-found: error
 
   wasm-build-smoke:
     runs-on: ubuntu-latest

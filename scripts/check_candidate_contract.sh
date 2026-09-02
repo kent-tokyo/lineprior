@@ -44,5 +44,6 @@ node -e 'const p=require("./examples/wasm/package.json"); if (p.devDependencies.
 python3 -c 'import ast; ast.parse(open("examples/python/roundtrip.py").read())'
 python3 -c 'import ast; [ast.parse(open(path).read()) for path in ("scripts/measure_similarity.py", "scripts/compare_offpolicy_arms.py", "scripts/measure_offpolicy_arms.py", "scripts/validate_measurement_artifact.py")]'
 test -x scripts/run_ecosystem_matrix_smoke.sh
+sh -n scripts/run_ecosystem_matrix_smoke.sh
 git diff --check
 echo "candidate contract: ok (version fixed at 0.11.1)"

@@ -741,6 +741,8 @@ reportには入力JSONLのSHA-256も含まれるため、dataset IDが同じま�
 再現可能なローカル引き渡しには `scripts/run_ecosystem_matrix_smoke.sh` を使えます。Rust・Python・Nodeの
 実行時バージョンを記録してCLI・OPE・measurement smokeを再生しますが、全対応バージョンの証明や実データ品質の
 証拠ではありません。
+`--out runtime-report.json` を渡すと、実行時バージョン、commit、固定プロジェクトバージョン、実行したcheckをJSON
+artifactとして保存できます。CIでもexamples smokeのartifactとしてアップロードします。
 ## macro-actions と multi-source merge
 
 `build_macro_actions` は順序付き履歴から連続した action window を抽出します。window を保持する必要があるため

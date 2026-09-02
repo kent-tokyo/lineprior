@@ -75,6 +75,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   immutable dataset lineage.
 - Artifact validation now checks SHA-256 syntax and rejects integrated OPE reports whose paired
   audit hashes differ from the top-level inputs.
+- The ecosystem matrix smoke can now emit a versioned JSON runtime artifact, and CI uploads it for
+  later reproduction instead of leaving the inventory only in logs.
 
 ### Fixed
 
