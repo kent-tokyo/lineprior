@@ -91,6 +91,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   contract.
 - Added an ecosystem compatibility evidence document that defines the current four-cell CLI matrix,
   the separate WASM compile boundary, and the runtime/package claims that remain open.
+- Ecosystem matrix artifacts now carry their requested Python and Node.js cell inside the JSON envelope,
+  allowing CI to detect artifact/cell mismatches independently of the uploaded filename.
 
 ### Fixed
 

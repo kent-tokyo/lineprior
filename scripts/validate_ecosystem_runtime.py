@@ -21,6 +21,14 @@ def main():
         raise ValueError("runtime inventory must contain rustc, cargo, python, and node")
     if any(not isinstance(value, str) or not value.strip() for value in runtimes.values()):
         raise ValueError("runtime inventory values must be non-empty strings")
+    matrix = report.get("matrix")
+    if matrix is not None:
+        if not isinstance(matrix, dict) or set(matrix) != {"python", "node"}:
+            raise ValueError("matrix must contain python and node when present")
+        if not re.fullmatch(r"\d+\.\d+", matrix["python"]):
+            raise ValueError("matrix python must be a major.minor version")
+        if not re.fullmatch(r"\d+", matrix["node"]):
+            raise ValueError("matrix node must be a major version")
     expected_checks = ["cli-roundtrip", "node-example", "python-example", "offpolicy", "measurement"]
     if report.get("checks") != expected_checks:
         raise ValueError("ecosystem check list changed unexpectedly")

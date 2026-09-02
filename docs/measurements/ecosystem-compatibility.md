@@ -16,7 +16,8 @@ The `examples-smoke` job runs the CLI integration examples in four cells:
 | 3.13 | 24 | CLI round-trip, examples, OPE, measurement smoke |
 
 Each cell records the active Rust, Cargo, Python, and Node.js versions in a
-validated `ecosystem-matrix-smoke-v1` JSON artifact. The artifact also records
+validated `ecosystem-matrix-smoke-v1` JSON artifact, including the requested
+`matrix.python` and `matrix.node` cell labels. The artifact also records
 the commit, fixed project version, and checks that ran. The matrix catches
 CLI/example integration drift; it is not evidence of formal Python or npm
 bindings.
@@ -46,4 +47,3 @@ The following are deliberately not claimed by this matrix:
 The broader runtime install/build/round-trip/error-shape/deterministic-output
 measurement gate remains open until a declared support matrix and its measured
 artifacts are available.
-

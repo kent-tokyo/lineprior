@@ -51,6 +51,9 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - run: sh scripts/run_ecosystem_matrix_smoke.sh --out ecosystem-runtime.json
+        env:
+          LINEPRIOR_MATRIX_PYTHON: ${{ matrix.python }}
+          LINEPRIOR_MATRIX_NODE: ${{ matrix.node }}
       - run: python3 scripts/validate_ecosystem_runtime.py ecosystem-runtime.json
       - uses: actions/upload-artifact@v4
         with:
