@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Git tag to publish from (e.g. v0.11.0)"
+        description: "Git tag to publish from (e.g. v0.11.1)"
         required: true
         default: "v0.11.1"
       crate:
@@ -29,16 +29,9 @@ on:
 
 permissions:
   contents: read
-  # Lets rust-lang/crates-io-auth-action request a short-lived OIDC token
-  # from GitHub's identity provider (Trusted Publishing) -- no long-lived
-  # CARGO_REGISTRY_TOKEN secret exists in this repo. The token only becomes
-  # a real crates.io credential via each crate's own Trusted Publisher
-  # config (repo/workflow/environment) on crates.io; granting this
-  # permission here does not by itself expose anything. GitHub Actions
-  # permissions are workflow/job scoped, not step scoped -- the "Publish"
-  # job below is the only job, so this applies to the whole run, but only
-  # the real-publish path (guarded by dry_run == 'false') ever calls the
-  # auth action or receives a token.
+  # OIDC is the normal path. CARGO_REGISTRY_TOKEN is an explicitly configured
+  # secret fallback for one-time creation of new crates, which Trusted
+  # Publishing cannot do. The secret is masked by GitHub and is never printed.
   id-token: write
 
 env:
@@ -128,5 +121,5 @@ jobs:
         if: inputs.dry_run == 'false'
         env:
           CRATE: ${{ inputs.crate }}
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
         run: cargo publish -p "$CRATE"
