@@ -359,6 +359,8 @@ each arm for IPS/DR estimates and bootstrap intervals.
 lineage-tagged artifact.
 Use `scripts/validate_measurement_artifact.py` to check the artifact envelope before archiving it;
 this is schema/lineage validation, not evidence of downstream improvement.
+Similarity reports also retain the source prior's `build_config_fingerprint`, preventing results
+from different build configurations from being silently compared.
 For a reproducible local handoff, `scripts/run_ecosystem_matrix_smoke.sh` records the active Rust,
 Python, and Node versions before replaying the CLI, OPE, and measurement smoke suite. It does not
 cover every supported runtime version or establish real-data quality.

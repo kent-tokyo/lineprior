@@ -69,6 +69,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   backoff depth.
 - Added an ecosystem matrix smoke harness that records Rust, Python, and Node runtime versions
   before replaying the maintained CLI, OPE, and measurement checks.
+- Similarity measurement artifacts now retain the prior's BuildConfig fingerprint for comparison
+  lineage and reject conflicting fingerprint headers.
 
 ### Fixed
 

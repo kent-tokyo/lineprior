@@ -10,12 +10,18 @@ import argparse, json, math, pathlib, time
 
 def load_book(path):
     book = {}
+    fingerprint = "unspecified"
     for line_no, line in enumerate(pathlib.Path(path).read_text().splitlines(), 1):
         if not line.strip(): continue
         row = json.loads(line)
-        if "build_config_fingerprint" in row: continue
+        if "build_config_fingerprint" in row:
+            candidate = row["build_config_fingerprint"]
+            if fingerprint != "unspecified" and fingerprint != candidate:
+                raise ValueError("prior contains conflicting build_config_fingerprint headers")
+            fingerprint = candidate
+            continue
         book[row["state"]] = row.get("actions", [])
-    return book
+    return book, fingerprint
 
 def load_queries(path):
     rows = []
@@ -72,7 +78,8 @@ def main():
     ap.add_argument("--feature-version", default="unspecified"); ap.add_argument("--lineprior-version", default="0.11.1")
     args = ap.parse_args()
     if not math.isfinite(args.distance_scale) or args.distance_scale <= 0: raise SystemExit("distance-scale must be finite and > 0")
-    book, queries = load_book(args.prior), load_queries(args.queries)
+    book, prior_config_fingerprint = load_book(args.prior)
+    queries = load_queries(args.queries)
     arms = {"exact": [], "similarity": [], "no_prior": []}
     for arm in arms:
         for row in queries:
@@ -84,7 +91,8 @@ def main():
     report = {"protocol": "similarity-real-data-v1", "num_queries": len(queries),
               "measurement": {"dataset_id": args.dataset_id, "split": args.split,
                                "feature_version": args.feature_version,
-                               "lineprior_version": args.lineprior_version}, "arms": {}}
+                               "lineprior_version": args.lineprior_version,
+                               "prior_config_fingerprint": prior_config_fingerprint}, "arms": {}}
     for name, rows in arms.items():
         evaluated = [r for r in rows if r["rank"] is not None]
         hits = sum(r["hit"] for r in rows)
