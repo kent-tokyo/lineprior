@@ -37,6 +37,7 @@ test -s examples/adapters.md
 
 node --check examples/node/roundtrip.mjs
 node --check examples/wasm/browser-smoke.mjs
+node -e 'const p=require("./examples/wasm/package.json"); if (p.devDependencies.playwright !== "1.55.0") process.exit(1)'
 python3 -c 'import ast; ast.parse(open("examples/python/roundtrip.py").read())'
 git diff --check
 echo "candidate contract: ok (version fixed at 0.11.0)"
