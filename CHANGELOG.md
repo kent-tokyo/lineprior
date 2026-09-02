@@ -77,6 +77,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   audit hashes differ from the top-level inputs.
 - The measurement smoke now covers hash-mismatch rejection in addition to missing-field and version
   drift rejection.
+- Measurement artifact validation now rejects non-finite or out-of-range bounded metrics such as
+  coverage, abstention, top-1, MRR, and Brier score.
 - The ecosystem matrix smoke can now emit a versioned JSON runtime artifact, and CI uploads it for
   later reproduction instead of leaving the inventory only in logs.
 - CI now validates the runtime artifact envelope before upload, including fixed version, commit

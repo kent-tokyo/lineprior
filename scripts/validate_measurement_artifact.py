@@ -29,6 +29,13 @@ def validate_hashes(measurement, expected_keys, label):
             raise ValueError(f"{label}.input_sha256.{key} must be a lowercase SHA-256 hex digest")
 
 
+def validate_unit_interval(value, label, allow_none=True):
+    if value is None and allow_none:
+        return
+    if not isinstance(value, (int, float)) or not math.isfinite(float(value)) or not 0.0 <= float(value) <= 1.0:
+        raise ValueError(f"{label} must be finite and in [0, 1]")
+
+
 def validate_lineage(report, label):
     require(report, ("protocol", "measurement"), label)
     measurement = report["measurement"]
@@ -55,6 +62,9 @@ def validate_similarity(report):
             ("coverage", "abstention_rate", "top1_hit_rate", "mrr", "calibration_brier"),
             f"similarity.arms.{name}",
         )
+        arm = arms[name]
+        for metric in ("coverage", "abstention_rate", "top1_hit_rate", "mrr", "calibration_brier"):
+            validate_unit_interval(arm[metric], f"similarity.arms.{name}.{metric}")
 
 
 def validate_offpolicy(report):
@@ -66,6 +76,9 @@ def validate_offpolicy(report):
         arm = report["arms"].get(name)
         require(arm, ("ips", "doubly_robust", "bootstrap"), f"offpolicy.arms.{name}")
         require(arm["ips"], ("ips", "self_normalized_ips"), f"offpolicy.arms.{name}.ips")
+        validate_unit_interval(arm["ips"].get("support_fraction"), f"offpolicy.arms.{name}.ips.support_fraction")
+        if arm["ips"].get("effective_sample_size") is not None and float(arm["ips"]["effective_sample_size"]) < 0:
+            raise ValueError(f"offpolicy.arms.{name}.ips.effective_sample_size must be non-negative")
         for estimate_name in ("ips", "doubly_robust"):
             estimate = arm[estimate_name]
             value_key = "estimate" if estimate_name == "doubly_robust" else "ips"

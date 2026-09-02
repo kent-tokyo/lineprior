@@ -40,4 +40,7 @@ if python3 "$root/scripts/validate_measurement_artifact.py" offpolicy "$bad_sche
 bad_lineage="$directory/offpolicy-bad-lineage.json"
 python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); r["paired"]["measurement"]["input_sha256"]["on"] = "0" * 64; pathlib.Path(sys.argv[2]).write_text(json.dumps(r))' "$integrated" "$bad_lineage"
 if python3 "$root/scripts/validate_measurement_artifact.py" offpolicy "$bad_lineage" >/dev/null 2>&1; then exit 1; fi
+bad_metric="$directory/similarity-bad-metric.json"
+python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); r["arms"]["exact"]["coverage"] = 1.5; pathlib.Path(sys.argv[2]).write_text(json.dumps(r))' "$similarity_first" "$bad_metric"
+if python3 "$root/scripts/validate_measurement_artifact.py" similarity "$bad_metric" >/dev/null 2>&1; then exit 1; fi
 echo "measurement smoke: ok (similarity arms + paired OPE audit)"
