@@ -459,6 +459,7 @@ mod tests {
             .expect("order-1 entries should exist");
         assert_eq!(order1.top1_hit_rate, Some(1.0));
         assert_eq!(order1.num_evaluated, test_ids.len() as u64);
+        assert!(order1.calibration_brier.unwrap() >= 0.0);
         // The s0 observations have no order-1 prefix and therefore exercise
         // the explicit order-0 fallback bucket.
         assert_eq!(report.context_coverage, Some(0.5));
@@ -952,6 +953,9 @@ pub struct MatchedOrderHitRate {
     pub order: usize,
     pub num_evaluated: u64,
     pub top1_hit_rate: Option<f64>,
+    /// Brier score for the top1 confidence among observations answered at
+    /// exactly this context depth.
+    pub calibration_brier: Option<f64>,
 }
 
 /// Result of [`evaluate`]: the report plus warnings from the train pass.
@@ -1003,6 +1007,7 @@ struct ThresholdAcc {
 struct MatchedOrderAcc {
     num_evaluated: u64,
     hit_count: u64,
+    calibration_squared_error_sum: f64,
 }
 
 /// Pass-2 bookkeeping: ranks each test observation's actual action against
@@ -1213,6 +1218,8 @@ impl<'a> EvalAccumulator<'a> {
                 .entry(context_result.matched_order)
                 .or_default();
             order_acc.num_evaluated += 1;
+            order_acc.calibration_squared_error_sum +=
+                (context_top1.confidence - if context_is_hit { 1.0 } else { 0.0 }).powi(2);
             if context_is_hit {
                 order_acc.hit_count += 1;
             }
@@ -1331,6 +1338,10 @@ impl<'a> EvalAccumulator<'a> {
                         order,
                         num_evaluated: acc.num_evaluated,
                         top1_hit_rate: ratio(acc.hit_count as f64, acc.num_evaluated as f64),
+                        calibration_brier: ratio(
+                            acc.calibration_squared_error_sum,
+                            acc.num_evaluated as f64,
+                        ),
                     }
                 })
                 .collect();

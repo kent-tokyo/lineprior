@@ -376,7 +376,8 @@ order-0 のフィールドに加えて、同じ実行の中で同じテスト観
 `top1_hit_rate`/`mean_reciprocal_rank` のコンテキストを考慮した版で、こちらは order-0 のままで
 す)。その差がコンテキストによるリフト(またはコスト)です — ヘッドラインのフィールドが実行ごとに
 密かに異なる意味を持つ2回の別実行を比較するのではなく、単一実行内でのapples-to-apples比較です。
-`hit_rate_by_matched_order` は、バックオフが実際に到達した深さ(到達した頻度ではなく)ごとの精度を
+`hit_rate_by_matched_order` は、バックオフが実際に到達した深さ(到達した頻度ではなく)ごとの精度と
+`calibration_brier` を
 分解して示し、「より深いコンテキストは利用可能なときに実際に精度が上がるのか、それとも単に稀なだ
 けなのか」に答えます。`context_calibration_brier` は、multi-stepのコンテキスト経路における #1 confidence と
 hit/miss の Brier score を報告します。`--context-order 0` ではこれらの指標が空/`None` です。`lineprior tune` も

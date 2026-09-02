@@ -411,7 +411,7 @@ the same run: `context_top1_hit_rate` / `context_mean_reciprocal_rank` (the cont
 counterparts of `top1_hit_rate`/`mean_reciprocal_rank`, which themselves stay order-0). The
 difference is the lift (or cost) context provides — a single-run, apples-to-apples comparison
 rather than two separate runs whose headline field would otherwise silently mean different
-things. `hit_rate_by_matched_order` breaks accuracy down *by* the depth backoff actually reached
+things. `hit_rate_by_matched_order` breaks accuracy and `calibration_brier` down *by* the depth backoff actually reached
 (not just how often each depth was reached), answering "is deeper context more accurate when
 available, or just rarer." `context_coverage`, `context_fallback_rate`, and
 `mean_matched_order` additionally report how often an evaluated query used order >= 1, fell back

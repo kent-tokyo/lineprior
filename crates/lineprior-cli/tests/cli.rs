@@ -704,6 +704,7 @@ fn eval_command_with_context_order_reports_context_aware_fields() {
             .unwrap()
             .is_empty()
     );
+    assert!(report["hit_rate_by_matched_order"][0]["calibration_brier"].is_number());
 
     let _ = std::fs::remove_file(&input);
 }
