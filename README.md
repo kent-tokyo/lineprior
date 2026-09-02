@@ -357,6 +357,8 @@ For paired observed-reward deltas and propensity preflight, use the dependency-f
 each arm for IPS/DR estimates and bootstrap intervals.
 `scripts/measure_offpolicy_arms.py` combines those two CLI reports with the paired audit into one
 lineage-tagged artifact.
+Use `scripts/validate_measurement_artifact.py` to check the artifact envelope before archiving it;
+this is schema/lineage validation, not evidence of downstream improvement.
 
 ## Variable-order context
 

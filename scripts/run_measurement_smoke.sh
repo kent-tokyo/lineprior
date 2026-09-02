@@ -22,6 +22,7 @@ integrated="$directory/integrated.json"
 python3 "$root/scripts/measure_similarity.py" "$prior" "$root/examples/similarity_queries.jsonl" --out "$similarity_first"
 python3 "$root/scripts/measure_similarity.py" "$prior" "$root/examples/similarity_queries.jsonl" --out "$similarity_second"
 python3 -c 'import json, pathlib, sys; a=json.loads(pathlib.Path(sys.argv[1]).read_text()); b=json.loads(pathlib.Path(sys.argv[2]).read_text()); [x.pop(k, None) for x in (a["arms"].values()) for k in ("latency_us_p50", "latency_us_p95", "peak_rss_kb")]; [x.pop(k, None) for x in (b["arms"].values()) for k in ("latency_us_p50", "latency_us_p95", "peak_rss_kb")]; assert a == b; r=a; assert r["arms"]["exact"]["coverage"] == 0.5; assert r["arms"]["similarity"]["coverage"] == 1.0; assert r["arms"]["no_prior"]["abstention_rate"] == 1.0' "$similarity_first" "$similarity_second"
+python3 "$root/scripts/validate_measurement_artifact.py" similarity "$similarity_first"
 
 python3 "$root/scripts/compare_offpolicy_arms.py" "$root/examples/offpolicy_off.jsonl" "$root/examples/offpolicy_on.jsonl" --out "$paired_first" --bootstrap-resamples 64 --bootstrap-seed 42
 python3 "$root/scripts/compare_offpolicy_arms.py" "$root/examples/offpolicy_off.jsonl" "$root/examples/offpolicy_on.jsonl" --out "$paired_second" --bootstrap-resamples 64 --bootstrap-seed 42
@@ -29,4 +30,5 @@ cmp -s "$paired_first" "$paired_second"
 python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); assert r["paired_rows"] == 2; assert r["paired_reward_delta_on_minus_off"] == 0.5; assert r["off"]["overlap_failures"] == 0' "$paired_first"
 python3 "$root/scripts/measure_offpolicy_arms.py" "$root/examples/offpolicy_off.jsonl" "$root/examples/offpolicy_on.jsonl" --lineprior-bin "$binary" --out "$integrated" --dataset-id fixture-v1 --split heldout --policy-version 0.11.1 --bootstrap-resamples 64 --bootstrap-seed 42
 python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); assert r["protocol"] == "offpolicy-integrated-arms-v1"; assert r["arms"]["off"]["doubly_robust"]["estimate"] is not None; assert r["paired"]["paired_reward_delta_on_minus_off"] == 0.5' "$integrated"
+python3 "$root/scripts/validate_measurement_artifact.py" offpolicy "$integrated"
 echo "measurement smoke: ok (similarity arms + paired OPE audit)"

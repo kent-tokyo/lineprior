@@ -61,6 +61,8 @@ in this project, not automatic on every version bump. See each entry for its pub
 - Measurement reports now carry explicit dataset/split and version metadata for artifact lineage.
 - Added an integrated paired OPE runner that combines per-arm Rust IPS/DR reports with the
   observed-reward pairing audit.
+- Added a measurement-artifact contract checker for protocol, lineage, required metrics, and the
+  fixed `0.11.1` version envelope; it validates shape only and does not pass a quality gate.
 
 ### Fixed
 

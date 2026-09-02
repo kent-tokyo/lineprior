@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Validate the stable envelope of a lineprior measurement artifact.
+
+This checks report shape and lineage only. It does not turn fixture output into
+real-data evidence or decide whether a quality gate should pass.
+"""
+import argparse
+import json
+import math
+import pathlib
+
+EXPECTED_VERSION = "0.11.1"
+
+
+def require(mapping, keys, label):
+    if not isinstance(mapping, dict):
+        raise ValueError(f"{label} must be an object")
+    missing = [key for key in keys if key not in mapping]
+    if missing:
+        raise ValueError(f"{label}: missing {', '.join(missing)}")
+
+
+def validate_lineage(report, label):
+    require(report, ("protocol", "measurement"), label)
+    measurement = report["measurement"]
+    require(measurement, ("dataset_id", "split", "lineprior_version"), f"{label}.measurement")
+    if measurement["lineprior_version"] != EXPECTED_VERSION:
+        raise ValueError(
+            f"{label}.measurement.lineprior_version must be {EXPECTED_VERSION}"
+        )
+
+
+def validate_similarity(report):
+    validate_lineage(report, "similarity")
+    if report["protocol"] != "similarity-real-data-v1":
+        raise ValueError("unexpected similarity protocol")
+    require(report, ("num_queries", "arms"), "similarity")
+    arms = report["arms"]
+    for name in ("exact", "similarity", "no_prior"):
+        require(
+            arms.get(name),
+            ("coverage", "abstention_rate", "top1_hit_rate", "mrr", "calibration_brier"),
+            f"similarity.arms.{name}",
+        )
+
+
+def validate_offpolicy(report):
+    validate_lineage(report, "offpolicy")
+    if report["protocol"] != "offpolicy-integrated-arms-v1":
+        raise ValueError("unexpected integrated off-policy protocol")
+    require(report, ("arms", "paired"), "offpolicy")
+    for name in ("off", "on"):
+        arm = report["arms"].get(name)
+        require(arm, ("ips", "doubly_robust", "bootstrap"), f"offpolicy.arms.{name}")
+        require(arm["ips"], ("ips", "self_normalized_ips"), f"offpolicy.arms.{name}.ips")
+        for estimate_name in ("ips", "doubly_robust"):
+            estimate = arm[estimate_name]
+            value_key = "estimate" if estimate_name == "doubly_robust" else "ips"
+            require(estimate, (value_key,), f"offpolicy.arms.{name}.{estimate_name}")
+            if estimate[value_key] is not None and not math.isfinite(float(estimate[value_key])):
+                raise ValueError(f"offpolicy.arms.{name}.{estimate_name}.{value_key} must be finite")
+    paired = report["paired"]
+    require(paired, ("protocol", "measurement", "paired_rows", "off", "on"), "offpolicy.paired")
+    if paired["protocol"] != "offpolicy-paired-arms-v1":
+        raise ValueError("unexpected paired off-policy protocol")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("kind", choices=("similarity", "offpolicy"))
+    parser.add_argument("artifact")
+    args = parser.parse_args()
+    report = json.loads(pathlib.Path(args.artifact).read_text())
+    if args.kind == "similarity":
+        validate_similarity(report)
+    else:
+        validate_offpolicy(report)
+    print(f"measurement artifact contract: ok ({args.kind})")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        raise SystemExit(f"measurement artifact error: {error}")
