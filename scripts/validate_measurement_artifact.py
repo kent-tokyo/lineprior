@@ -76,6 +76,7 @@ def validate_similarity(report, require_explicit):
     require(report, ("num_queries", "arms"), "similarity")
     validate_nonnegative_integer(report["num_queries"], "similarity.num_queries")
     arms = report["arms"]
+    require(arms, (), "similarity.arms")
     for name in ("exact", "similarity", "no_prior"):
         require(
             arms.get(name),
@@ -92,6 +93,7 @@ def validate_offpolicy(report, require_explicit):
     if report["protocol"] != "offpolicy-integrated-arms-v1":
         raise ValueError("unexpected integrated off-policy protocol")
     require(report, ("arms", "paired"), "offpolicy")
+    require(report["arms"], (), "offpolicy.arms")
     for name in ("off", "on"):
         arm = report["arms"].get(name)
         require(arm, ("ips", "doubly_robust", "bootstrap"), f"offpolicy.arms.{name}")

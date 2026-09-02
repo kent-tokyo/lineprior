@@ -64,4 +64,13 @@ if python3 "$root/scripts/validate_measurement_artifact.py" similarity "$bad_cou
 bad_protocol="$directory/similarity-bad-protocol.json"
 python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); r["protocol"]="unknown-v0"; pathlib.Path(sys.argv[2]).write_text(json.dumps(r))' "$similarity_first" "$bad_protocol"
 if python3 "$root/scripts/validate_measurement_artifact.py" similarity "$bad_protocol" >/dev/null 2>&1; then exit 1; fi
+bad_arms="$directory/similarity-bad-arms.json"
+python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); r["arms"]=[]; pathlib.Path(sys.argv[2]).write_text(json.dumps(r))' "$similarity_first" "$bad_arms"
+if python3 "$root/scripts/validate_measurement_artifact.py" similarity "$bad_arms" >/dev/null 2>&1; then exit 1; fi
+bad_json="$directory/similarity-malformed.json"
+printf '%s\n' '{' > "$bad_json"
+if python3 "$root/scripts/validate_measurement_artifact.py" similarity "$bad_json" >/dev/null 2>&1; then exit 1; fi
+bad_offpolicy_arms="$directory/offpolicy-bad-arms.json"
+python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); r["arms"]=[]; pathlib.Path(sys.argv[2]).write_text(json.dumps(r))' "$integrated" "$bad_offpolicy_arms"
+if python3 "$root/scripts/validate_measurement_artifact.py" offpolicy "$bad_offpolicy_arms" >/dev/null 2>&1; then exit 1; fi
 echo "measurement smoke: ok (similarity arms + paired OPE audit)"

@@ -107,6 +107,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   against the top-level report, preventing mismatched paired sub-artifacts.
 - Measurement smoke now covers malformed digest, negative count, and unexpected protocol rejection
   paths in addition to the existing schema, lineage, version, and metric checks.
+- Artifact validation now reports typed contract errors for non-object arm collections and malformed
+  JSON instead of leaking an implementation traceback.
 
 ### Fixed
 
