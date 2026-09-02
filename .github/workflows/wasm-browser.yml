@@ -27,7 +27,7 @@ jobs:
         run: |
           cargo install wasm-pack --locked
           npm install --prefix examples/wasm --ignore-scripts=false
-          npx playwright install --with-deps chromium
+          npx --prefix examples/wasm playwright install --with-deps chromium
       - name: Build web package
         run: wasm-pack build crates/lineprior-wasm --target web --out-dir target/wasm-web --release
       - name: Run browser round trip
