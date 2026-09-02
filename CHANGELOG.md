@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.11.0] - 2026-09-02 (not yet published)
+## [0.11.0] - 2026-09-02
 
 - Added pluggable Bayesian, UCB, and Softmax scoring strategies with the legacy weighted-sum
   behavior retained as the default.
@@ -14,6 +14,12 @@
 All notable changes to the workspace crates are documented here. They share one workspace version
 (`version.workspace = true`), so this file covers the library, CLI, adapters, similarity, and WASM
 crates.
+
+`lineprior` and `lineprior-cli` v0.11.0 were published to crates.io through the tagged GitHub
+Actions workflow. The newly introduced `lineprior-adapters`, `lineprior-similarity`, and
+`lineprior-wasm` packages passed package/dry-run/authentication, but crates.io rejected their first
+publication because Trusted Publishing cannot create a new crate; each requires one manual first
+publication before the workflow can publish subsequent versions.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning follows
 [Semantic Versioning](https://semver.org/), with the pre-1.0 caveat SemVer itself states: while the
@@ -66,8 +72,8 @@ in this project, not automatic on every version bump. See each entry for its pub
 - Initial `lineprior-wasm` JSON-in/JSON-out build and query boundary; npm/wasm-pack packaging is
   intentionally not included yet.
 
-The workspace version is `0.11.0`; this release includes public Rust API additions and is not yet
-published to crates.io.
+The workspace version is `0.11.0`; this release includes public Rust API additions. The two
+established crates are published; the three new crates remain pending their manual first publish.
 
 ## [0.10.0] - 2026-08-11
 
