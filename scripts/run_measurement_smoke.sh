@@ -26,6 +26,9 @@ python3 "$root/scripts/validate_measurement_artifact.py" similarity "$similarity
 bad_lineage="$directory/similarity-bad-lineage.json"
 python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); r["measurement"]["dataset_id"]="unspecified"; pathlib.Path(sys.argv[2]).write_text(json.dumps(r))' "$similarity_first" "$bad_lineage"
 if python3 "$root/scripts/validate_measurement_artifact.py" similarity "$bad_lineage" --require-explicit-lineage >/dev/null 2>&1; then exit 1; fi
+bad_feature="$directory/similarity-bad-feature-version.json"
+python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); r["measurement"]["feature_version"]="unspecified"; pathlib.Path(sys.argv[2]).write_text(json.dumps(r))' "$similarity_first" "$bad_feature"
+if python3 "$root/scripts/validate_measurement_artifact.py" similarity "$bad_feature" --require-explicit-lineage >/dev/null 2>&1; then exit 1; fi
 bad_queries="$directory/similarity-bad-queries.jsonl"
 python3 -c 'import pathlib, sys; row=pathlib.Path(sys.argv[1]).read_text().splitlines()[0].replace("\"expected_action\":\"click:add-to-cart\",", "\"expected_action\":\"\","); pathlib.Path(sys.argv[2]).write_text(row+"\n")' "$root/examples/similarity_queries.jsonl" "$bad_queries"
 if python3 "$root/scripts/measure_similarity.py" "$prior" "$bad_queries" --out "$directory/similarity-bad-queries.json" >/dev/null 2>&1; then exit 1; fi
@@ -40,6 +43,9 @@ python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).re
 python3 "$root/scripts/measure_offpolicy_arms.py" "$root/examples/offpolicy_off.jsonl" "$root/examples/offpolicy_on.jsonl" --lineprior-bin "$binary" --out "$integrated" --dataset-id fixture-v1 --split heldout --policy-version 0.11.1 --bootstrap-resamples 64 --bootstrap-seed 42
 python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); assert r["protocol"] == "offpolicy-integrated-arms-v1"; assert r["arms"]["off"]["doubly_robust"]["estimate"] is not None; assert r["measurement"]["input_sha256"] == r["paired"]["measurement"]["input_sha256"]; assert r["paired"]["paired_reward_delta_on_minus_off"] == 0.5' "$integrated"
 python3 "$root/scripts/validate_measurement_artifact.py" offpolicy "$integrated" --require-explicit-lineage
+bad_policy="$directory/offpolicy-bad-policy-version.json"
+python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); r["measurement"]["policy_version"]="unspecified"; pathlib.Path(sys.argv[2]).write_text(json.dumps(r))' "$integrated" "$bad_policy"
+if python3 "$root/scripts/validate_measurement_artifact.py" offpolicy "$bad_policy" --require-explicit-lineage >/dev/null 2>&1; then exit 1; fi
 bad_schema="$directory/offpolicy-missing-field.json"
 python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); del r["paired"]["paired_rows"]; pathlib.Path(sys.argv[2]).write_text(json.dumps(r))' "$integrated" "$bad_schema"
 if python3 "$root/scripts/validate_measurement_artifact.py" offpolicy "$bad_schema" >/dev/null 2>&1; then exit 1; fi

@@ -102,6 +102,7 @@ in this project, not automatic on every version bump. See each entry for its pub
   dataset/split/feature-or-policy metadata, fixed version, fingerprints, and input hashes before
   a real-data artifact is archived; fixture validation remains available without the flag.
 - The measurement smoke covers rejection of placeholder dataset lineage under the strict validator.
+- Strict measurement smoke coverage now also rejects placeholder feature and policy version metadata.
 
 ### Fixed
 
