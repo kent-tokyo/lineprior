@@ -103,6 +103,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   a real-data artifact is archived; fixture validation remains available without the flag.
 - The measurement smoke covers rejection of placeholder dataset lineage under the strict validator.
 - Strict measurement smoke coverage now also rejects placeholder feature and policy version metadata.
+- Integrated off-policy validation now checks paired row counts and dataset/split/version lineage
+  against the top-level report, preventing mismatched paired sub-artifacts.
 
 ### Fixed
 

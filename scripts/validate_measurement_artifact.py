@@ -36,6 +36,11 @@ def validate_unit_interval(value, label, allow_none=True):
         raise ValueError(f"{label} must be finite and in [0, 1]")
 
 
+def validate_nonnegative_integer(value, label):
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{label} must be a non-negative integer")
+
+
 def validate_lineage(report, label, require_explicit):
     require(report, ("protocol", "measurement"), label)
     measurement = report["measurement"]
@@ -69,6 +74,7 @@ def validate_similarity(report, require_explicit):
     if report["protocol"] != "similarity-real-data-v1":
         raise ValueError("unexpected similarity protocol")
     require(report, ("num_queries", "arms"), "similarity")
+    validate_nonnegative_integer(report["num_queries"], "similarity.num_queries")
     arms = report["arms"]
     for name in ("exact", "similarity", "no_prior"):
         require(
@@ -103,6 +109,18 @@ def validate_offpolicy(report, require_explicit):
     require(paired, ("protocol", "measurement", "paired_rows", "off", "on"), "offpolicy.paired")
     if paired["protocol"] != "offpolicy-paired-arms-v1":
         raise ValueError("unexpected paired off-policy protocol")
+    validate_nonnegative_integer(paired["paired_rows"], "offpolicy.paired.paired_rows")
+    paired_measurement = paired["measurement"]
+    require(paired_measurement, ("dataset_id", "split", "lineprior_version", "input_sha256"), "offpolicy.paired.measurement")
+    validate_hashes(paired_measurement, ("off", "on"), "offpolicy.paired")
+    for key in ("dataset_id", "split", "lineprior_version"):
+        if paired_measurement[key] != report["measurement"][key]:
+            raise ValueError(f"offpolicy paired {key} does not match the integrated report")
+    if require_explicit:
+        for key in ("dataset_id", "split"):
+            value = paired_measurement[key]
+            if not isinstance(value, str) or not value.strip() or value == "unspecified":
+                raise ValueError(f"offpolicy.paired.measurement.{key} must be explicit when required")
     if paired["measurement"]["input_sha256"] != report["measurement"]["input_sha256"]:
         raise ValueError("offpolicy paired input hashes do not match the integrated report")
 

@@ -31,6 +31,8 @@ def main():
             arm_reports[name] = json.loads(target.read_text())
         paired_path = directory / "paired.json"
         subprocess.run(["python3", str(compare), args.off, args.on, "--out", str(paired_path),
+                        "--dataset-id", args.dataset_id, "--split", args.split,
+                        "--lineprior-version", args.policy_version or "0.11.1",
                         "--bootstrap-resamples", str(args.bootstrap_resamples),
                         "--bootstrap-seed", str(args.bootstrap_seed),
                         "--confidence-level", str(args.confidence_level)], check=True)
