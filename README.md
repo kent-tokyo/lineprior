@@ -449,6 +449,10 @@ abstention, latency, and memory reporting, is in
 The dependency-free runner `scripts/measure_similarity.py` consumes a prior and a held-out query
 JSONL (including caller-supplied neighbors) and emits these arm metrics; the checked-in
 `examples/similarity_queries.jsonl` is a contract fixture, not a real-data result.
+CI replays this fixture and the paired OPE fixture twice via
+`scripts/run_measurement_smoke.sh`; it compares deterministic arm metrics while treating
+latency/RSS as environment-dependent measurements. This checks tooling and boundary assumptions,
+not downstream improvement.
 
 ## Sequence-level priors
 

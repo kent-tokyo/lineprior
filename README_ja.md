@@ -411,6 +411,8 @@ abstention、速度、メモリ）は [`docs/measurements/similarity-real-data.m
 に記載しています。
 依存なしの `scripts/measure_similarity.py` で、呼び出し側が用意した近傍を含むquery JSONLから
 3つのarmを比較できます。`examples/similarity_queries.jsonl` は契約fixtureであり、実データ結果ではありません。
+CIは `scripts/run_measurement_smoke.sh` で両fixtureを2回再生し、決定的なarm指標と境界条件を確認します。
+速度/RSSは環境依存の測定値として扱い、downstream改善の証拠とはしません。
 
 ## シーケンス単位の prior
 

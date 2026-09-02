@@ -57,6 +57,7 @@ in this project, not automatic on every version bump. See each entry for its pub
 - Added real-data measurement handoff documents for similarity arms and IPS/DR paired on/off
   evaluation; no result is claimed without supplied real logs.
 - Extended the fixed-version candidate contract to validate measurement fixtures and runner syntax.
+- Added a CI measurement smoke for deterministic similarity-arm and paired on/off runner replay.
 
 ### Fixed
 

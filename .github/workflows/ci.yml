@@ -42,6 +42,7 @@ jobs:
       - run: cargo build -p lineprior-cli --locked
       - run: sh scripts/run_examples_smoke.sh
       - run: sh scripts/run_offpolicy_smoke.sh
+      - run: sh scripts/run_measurement_smoke.sh
 
   wasm-build-smoke:
     runs-on: ubuntu-latest
