@@ -459,6 +459,11 @@ mod tests {
             .expect("order-1 entries should exist");
         assert_eq!(order1.top1_hit_rate, Some(1.0));
         assert_eq!(order1.num_evaluated, test_ids.len() as u64);
+        // The s0 observations have no order-1 prefix and therefore exercise
+        // the explicit order-0 fallback bucket.
+        assert_eq!(report.context_coverage, Some(0.5));
+        assert_eq!(report.context_fallback_rate, Some(0.5));
+        assert_eq!(report.mean_matched_order, Some(0.5));
     }
 
     #[test]
@@ -503,6 +508,9 @@ mod tests {
         assert_eq!(output.report.context_top1_hit_rate, None);
         assert_eq!(output.report.context_mean_reciprocal_rank, None);
         assert!(output.report.hit_rate_by_matched_order.is_empty());
+        assert_eq!(output.report.context_coverage, None);
+        assert_eq!(output.report.context_fallback_rate, None);
+        assert_eq!(output.report.mean_matched_order, None);
     }
 
     #[test]
@@ -909,6 +917,15 @@ pub struct EvalReport {
     /// accurate when available, or just rarer." Empty when
     /// `BuildConfig::context_order == 0`.
     pub hit_rate_by_matched_order: Vec<MatchedOrderHitRate>,
+    /// Fraction of evaluated test observations answered by a context entry
+    /// at order >= 1. This is conditional on order-0 coverage: state
+    /// abstentions remain represented by the ordinary `fallback_rate`.
+    pub context_coverage: Option<f64>,
+    /// Fraction of evaluated context queries that fell back to order 0.
+    pub context_fallback_rate: Option<f64>,
+    /// Mean matched context order over evaluated context queries. This is a
+    /// depth diagnostic, not a measure of predictive quality.
+    pub mean_matched_order: Option<f64>,
     /// Ranking quality bucketed by the #1 candidate's confidence. Empty
     /// unless [`EvalConfig::calibration_bins`] was set.
     pub confidence_calibration: Vec<CalibrationBin>,
@@ -992,6 +1009,9 @@ struct EvalAccumulator<'a> {
     context_tracker: SequenceContextTracker,
     context_top1_hit_count: u64,
     context_reciprocal_rank_sum: f64,
+    context_match_count: u64,
+    context_fallback_count: u64,
+    context_order_sum: u64,
     /// Keyed by matched order (`0` = order-0 rung). Small -- bounded by
     /// `context_order`, never by observation count.
     matched_order_counts: HashMap<usize, MatchedOrderAcc>,
@@ -1044,6 +1064,9 @@ impl<'a> EvalAccumulator<'a> {
             context_tracker: SequenceContextTracker::new(context_order),
             context_top1_hit_count: 0,
             context_reciprocal_rank_sum: 0.0,
+            context_match_count: 0,
+            context_fallback_count: 0,
+            context_order_sum: 0,
             matched_order_counts: HashMap::new(),
             num_test_observations: 0,
             test_states_seen: HashSet::new(),
@@ -1150,6 +1173,12 @@ impl<'a> EvalAccumulator<'a> {
             // `book.query(state, top_k)` -- can never come back empty
             // either.
             let context_result = book.query_with_context(&obs.state, &window, None);
+            if context_result.matched_order == 0 {
+                self.context_fallback_count += 1;
+            } else {
+                self.context_match_count += 1;
+            }
+            self.context_order_sum += context_result.matched_order as u64;
             let context_top1 = &context_result.candidates[0];
             let context_is_hit = context_top1.action == obs.action;
             if context_is_hit {
@@ -1266,29 +1295,38 @@ impl<'a> EvalAccumulator<'a> {
         // always resolves immediately to the order-0 rung in that case, so
         // these would just duplicate top1_hit_rate/mean_reciprocal_rank
         // rather than carry any new information.
-        let (context_top1_hit_rate, context_mean_reciprocal_rank, hit_rate_by_matched_order) =
-            if self.context_order > 0 {
-                let mut orders: Vec<usize> = self.matched_order_counts.keys().copied().collect();
-                orders.sort_unstable();
-                let by_order = orders
-                    .into_iter()
-                    .map(|order| {
-                        let acc = self.matched_order_counts[&order];
-                        MatchedOrderHitRate {
-                            order,
-                            num_evaluated: acc.num_evaluated,
-                            top1_hit_rate: ratio(acc.hit_count as f64, acc.num_evaluated as f64),
-                        }
-                    })
-                    .collect();
-                (
-                    ratio(self.context_top1_hit_count as f64, evaluated),
-                    ratio(self.context_reciprocal_rank_sum, evaluated),
-                    by_order,
-                )
-            } else {
-                (None, None, Vec::new())
-            };
+        let (
+            context_top1_hit_rate,
+            context_mean_reciprocal_rank,
+            hit_rate_by_matched_order,
+            context_coverage,
+            context_fallback_rate,
+            mean_matched_order,
+        ) = if self.context_order > 0 {
+            let mut orders: Vec<usize> = self.matched_order_counts.keys().copied().collect();
+            orders.sort_unstable();
+            let by_order = orders
+                .into_iter()
+                .map(|order| {
+                    let acc = self.matched_order_counts[&order];
+                    MatchedOrderHitRate {
+                        order,
+                        num_evaluated: acc.num_evaluated,
+                        top1_hit_rate: ratio(acc.hit_count as f64, acc.num_evaluated as f64),
+                    }
+                })
+                .collect();
+            (
+                ratio(self.context_top1_hit_count as f64, evaluated),
+                ratio(self.context_reciprocal_rank_sum, evaluated),
+                by_order,
+                ratio(self.context_match_count as f64, evaluated),
+                ratio(self.context_fallback_count as f64, evaluated),
+                ratio(self.context_order_sum as f64, evaluated),
+            )
+        } else {
+            (None, None, Vec::new(), None, None, None)
+        };
 
         EvalReport {
             num_train_observations,
@@ -1327,6 +1365,9 @@ impl<'a> EvalAccumulator<'a> {
             context_top1_hit_rate,
             context_mean_reciprocal_rank,
             hit_rate_by_matched_order,
+            context_coverage,
+            context_fallback_rate,
+            mean_matched_order,
             confidence_calibration,
             threshold_sweep,
         }

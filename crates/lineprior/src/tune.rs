@@ -450,6 +450,9 @@ mod tests {
             context_top1_hit_rate: None,
             context_mean_reciprocal_rank: None,
             hit_rate_by_matched_order: Vec::new(),
+            context_coverage: None,
+            context_fallback_rate: None,
+            mean_matched_order: None,
             confidence_calibration: Vec::new(),
             threshold_sweep: Vec::new(),
         }

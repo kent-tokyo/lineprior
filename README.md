@@ -401,7 +401,11 @@ difference is the lift (or cost) context provides — a single-run, apples-to-ap
 rather than two separate runs whose headline field would otherwise silently mean different
 things. `hit_rate_by_matched_order` breaks accuracy down *by* the depth backoff actually reached
 (not just how often each depth was reached), answering "is deeper context more accurate when
-available, or just rarer." All three are empty/`None` at `--context-order 0`. `lineprior tune`
+available, or just rarer." `context_coverage`, `context_fallback_rate`, and
+`mean_matched_order` additionally report how often an evaluated query used order >= 1, fell back
+to order 0, and the average depth reached. These are conditional on order-0 candidates existing;
+ordinary state abstentions remain in `fallback_rate`. All six context diagnostics are
+empty/`None` at `--context-order 0`. `lineprior tune`
 surfaces the same two fields per candidate in `all_results`, so `--param
 context-order=0,1,2,3` sweeps show the lift directly — no new `--objective` needed, since the
 existing objectives already read the order-0 fields those sweeps vary.

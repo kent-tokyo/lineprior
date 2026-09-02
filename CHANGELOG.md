@@ -50,6 +50,8 @@ in this project, not automatic on every version bump. See each entry for its pub
 
 - Added context prefix-support diagnostics to `summary`/`SummaryReport`, exposing distinct
   prefixes, `(prefix, state)` entries, action entries, and raw count by context order.
+- Added context coverage, fallback rate, and mean matched order to `EvalReport` so context support
+  can be separated from context ranking quality.
 
 ### Fixed
 
