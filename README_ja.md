@@ -744,6 +744,8 @@ reportには入力JSONLのSHA-256も含まれるため、dataset IDが同じま�
 `--out runtime-report.json` を渡すと、実行時バージョン、commit、固定プロジェクトバージョン、実行したcheckをJSON
 artifactとして保存できます。CIでもexamples smokeのartifactとしてアップロードします。
 CIはupload前に固定版、commit形式、runtime inventory、実行check一覧のartifact契約も検証します。
+CIのexamples jobは現在Python 3.12/3.13とNode 22/24の4セルmatrixで実行します。これはCLI exampleの互換性確認であり、
+正式なPython/npm bindingの保証ではありません。
 WASM build smokeも `wasm32-unknown-unknown` target、Rust toolchain、commit、固定版を別artifactとして記録・検証します。
 これはcompileの証拠であり、npm公開やブラウザ品質の証拠ではありません。
 ## macro-actions と multi-source merge

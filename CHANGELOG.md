@@ -83,6 +83,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   later reproduction instead of leaving the inventory only in logs.
 - CI now validates the runtime artifact envelope before upload, including fixed version, commit
   shape, runtime inventory, and the executed-check list.
+- The CLI ecosystem smoke now runs in a four-cell Python 3.12/3.13 × Node 22/24 CI matrix, with
+  one runtime artifact per cell.
 - The WASM build smoke now emits and validates a separate target/toolchain JSON artifact before CI
   upload, preserving its boundary from browser and npm publication evidence.
 - The WASM smoke also covers rejection of a mismatched compilation target in the runtime artifact

@@ -36,14 +36,25 @@ jobs:
 
   examples-smoke:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12', '3.13']
+        node: ['22', '24']
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
       - run: sh scripts/run_ecosystem_matrix_smoke.sh --out ecosystem-runtime.json
       - run: python3 scripts/validate_ecosystem_runtime.py ecosystem-runtime.json
       - uses: actions/upload-artifact@v4
         with:
-          name: ecosystem-runtime-${{ github.run_id }}
+          name: ecosystem-runtime-py${{ matrix.python }}-node${{ matrix.node }}-${{ github.run_id }}
           path: ecosystem-runtime.json
           if-no-files-found: error
 
