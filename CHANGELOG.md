@@ -118,6 +118,8 @@ in this project, not automatic on every version bump. See each entry for its pub
 - The schema checker now also pins digest syntax, bounded unit metrics, and the required arm fields.
 - Excluded the `lineprior` CLI binary target from generated Rust API docs to remove the known
   bin/lib output collision; CLI behavior remains covered by clippy, tests, and smoke checks.
+- Candidate validation now pins the CLI executable name and doc-target setting so the Cargo doc
+  collision fix cannot regress silently.
 
 ### Fixed
 

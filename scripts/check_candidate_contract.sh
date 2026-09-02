@@ -28,6 +28,7 @@ if packages != expected:
     raise SystemExit(f"unexpected lineprior package versions: {packages!r}")
 print("workspace contract: ok")
 '
+python3 -c 'import pathlib, tomllib; manifest=tomllib.loads(pathlib.Path("crates/lineprior-cli/Cargo.toml").read_text()); assert manifest["bin"] == [{"name": "lineprior", "path": "src/main.rs", "doc": False}]'
 
 python3 -c 'import json, pathlib, sys; rows=[json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line.strip()]; assert all(isinstance(row, dict) for row in rows)' examples/offpolicy.jsonl
 python3 -c 'import json, pathlib, sys; rows=[json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line.strip()]; assert all(isinstance(row, dict) for row in rows)' examples/offpolicy_off.jsonl
