@@ -1,7 +1,19 @@
 # Changelog
 
-All notable changes to `lineprior` and `lineprior-cli` are documented here. The two crates share
-one workspace version (`version.workspace = true`), so this file covers both.
+## [0.11.0] - 2026-09-02 (not yet published)
+
+- Added pluggable Bayesian, UCB, and Softmax scoring strategies with the legacy weighted-sum
+  behavior retained as the default.
+- Added deterministic LPB v1 compact binary persistence and CLI `pack`/`unpack` commands.
+- Added a veridict prior on/off comparison recipe and manifest; no downstream result is claimed.
+- Added bounded macro-action extraction, deterministic weighted multi-source book merge, and the
+  official `lineprior-adapters` crate for four domain-neutral integration boundaries.
+- Added opt-in terminal-outcome credit propagation and deterministic `PriorTrie` materialization;
+  both remain conservative opt-ins with real-data/performance measurement gates open.
+
+All notable changes to the workspace crates are documented here. They share one workspace version
+(`version.workspace = true`), so this file covers the library, CLI, adapters, similarity, and WASM
+crates.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning follows
 [Semantic Versioning](https://semver.org/), with the pre-1.0 caveat SemVer itself states: while the
@@ -13,6 +25,49 @@ caller using an exhaustive struct literal).
 
 Not every version below has been published to crates.io -- publishing is a separate explicit step
 in this project, not automatic on every version bump. See each entry for its publish status.
+
+## [Unreleased] - next version candidate (not yet versioned or published)
+
+### Added
+
+- Opt-in `PriorBook::query_with_similarity` for caller-supplied similar states with deterministic
+  distance weighting, provenance-preserving evidence, and no invented actions.
+- `lineprior-similarity`, a dependency-free Euclidean feature-vector nearest-neighbor adapter with
+  finite-value/dimension validation and deterministic tie-breaking.
+- A checked-in unseen-state similarity measurement fixture that keeps exact-match/no-prior
+  abstention separate from opt-in neighbor recovery; it is not real-data quality evidence.
+- Separate self-normalized IPS evaluation with explicit propensity inputs, overlap diagnostics,
+  importance-weight caps, and effective sample size reporting.
+- Doubly robust evaluation using caller-supplied reward-model predictions; no reward model is
+  trained or inferred by the library.
+- Deterministic percentile-bootstrap intervals for IPS and self-normalized IPS.
+- `lineprior offpolicy` CLI command for JSONL logs, with optional DR and bootstrap output.
+- A small valid OPE JSONL boundary fixture, public IPS/DR replay test, and documented deterministic
+  CLI invocation.
+- A repeatable candidate-contract script and CI job for version, fixture, syntax, formatting, and
+  diff checks; it does not replace runtime or real-data release gates.
+- A maintained CLI example smoke workflow that runs the Node.js and Python round trips against one
+  built Rust binary and checks deterministic output plus the expected query result.
+- The CLI smoke helper now accepts either an executable path or a PATH-resolved `LINEPRIOR_BIN`.
+- A locked `wasm32-unknown-unknown` compilation smoke workflow for `lineprior-wasm`; packaging and
+  browser execution remain separate, intentionally open gates.
+- A replayable OPE CLI smoke workflow that compares two complete IPS/DR/bootstrap reports from the
+  checked-in fixture; it is not causal-improvement evidence.
+- CI candidate checks now use Cargo's `--locked` mode for clippy, tests, and the CLI smoke build.
+- Candidate contract validation now covers all checked-in OPE, UI-automation, and similarity JSONL
+  fixtures.
+- CI now includes a locked workspace rustdoc check with warnings denied for public API documentation.
+- Public boundary tests for non-strict WASM warning propagation and same-seed bootstrap replayability.
+- Experimental GateModel layers: PASS/FAIL/INCONCLUSIVE posterior probabilities, expected
+  improvement per expected gate cost, opt-in monotonic coefficient constraints, and a strict JSONL
+  `lineprior gate` CLI. These remain diagnostic and are not real-data scheduling evidence.
+- UI-automation JSONL fixture plus Python and Node.js CLI round-trip examples.
+- `cargo-deny` license policy and CI check for the current dependency graph.
+- Initial `lineprior-wasm` JSON-in/JSON-out build and query boundary; npm/wasm-pack packaging is
+  intentionally not included yet.
+
+The workspace version is `0.11.0`; this release includes public Rust API additions and is not yet
+published to crates.io.
 
 ## [0.10.0] - 2026-08-11
 

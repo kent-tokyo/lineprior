@@ -1,0 +1,10 @@
+{
+  "status": "recipe_only",
+  "downstream": "veridict",
+  "lineprior_version": "0.11.0",
+  "arms": ["off", "on"],
+  "pairing": "same_seed_and_candidate_set",
+  "primary_metric": "paired_downstream_success_rate",
+  "required_metrics": ["coverage", "fallback_rate", "wall_time_seconds", "evaluations", "abstentions"],
+  "gate_rule": "held_out_downstream_improvement_with_overlap_and_uncertainty"
+}

@@ -379,8 +379,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
+name = "lineprior-adapters"
+version = "0.11.0"
+dependencies = [
+ "lineprior",
+]
+
+[[package]]
+name = "lineprior-similarity"
+version = "0.11.0"
+dependencies = [
+ "lineprior",
+]
+
+[[package]]
 name = "lineprior"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "criterion",
  "serde",
@@ -389,13 +403,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "lineprior-wasm"
+version = "0.11.0"
+dependencies = [
+ "lineprior",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "lineprior-cli"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
  "lineprior",
+ "serde",
  "serde_json",
 ]
 

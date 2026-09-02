@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Git tag to publish from (e.g. v0.10.0)"
+        description: "Git tag to publish from (e.g. v0.11.0)"
         required: true
-        default: "v0.10.0"
+        default: "v0.11.0"
       crate:
         description: "Crate to publish"
         required: true
@@ -15,6 +15,9 @@ on:
         options:
           - lineprior
           - lineprior-cli
+          - lineprior-adapters
+          - lineprior-similarity
+          - lineprior-wasm
       dry_run:
         description: "Dry run only (no actual publish)"
         required: true
@@ -60,9 +63,9 @@ jobs:
           CRATE: ${{ inputs.crate }}
         run: |
           case "$CRATE" in
-            lineprior|lineprior-cli) ;;
+            lineprior|lineprior-cli|lineprior-adapters|lineprior-similarity|lineprior-wasm) ;;
             *)
-              echo "::error::crate '$CRATE' is not in the allowlist (lineprior, lineprior-cli)"
+              echo "::error::crate '$CRATE' is not in the allowlist"
               exit 1
               ;;
           esac

@@ -102,6 +102,21 @@ pub enum ConfidenceMode {
     Hybrid,
 }
 
+/// Strategy used to turn per-action evidence into a prior ranking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScoringStrategy {
+    /// The original weighted count/success/score formula.
+    #[default]
+    WeightedSum,
+    /// Uses a Beta posterior mean for the success signal.
+    Bayesian,
+    /// Adds an upper-confidence exploration bonus to the success signal.
+    Ucb,
+    /// Converts the weighted utility into a temperature-controlled softmax.
+    Softmax,
+}
+
 /// Tuning knobs for [`crate::build::build_prior_book`].
 ///
 /// `#[serde(default)]`: a config file missing fields (from an older or
@@ -180,6 +195,17 @@ pub struct BuildConfig {
     /// within each group whenever this is nonzero (see
     /// [`crate::Error::SequenceNotSorted`]).
     pub context_order: usize,
+    /// Extra terminal-outcome credit applied to every kept step in a sequence.
+    /// `0.0` preserves the historical per-step outcome behavior.
+    pub terminal_credit_weight: f64,
+    /// Pluggable action scoring strategy. Defaults to the historical formula.
+    pub scoring_strategy: ScoringStrategy,
+    /// Prior strength for [`ScoringStrategy::Bayesian`].
+    pub bayesian_prior_strength: f64,
+    /// Exploration coefficient for [`ScoringStrategy::Ucb`].
+    pub ucb_exploration: f64,
+    /// Positive temperature for [`ScoringStrategy::Softmax`].
+    pub softmax_temperature: f64,
 }
 
 impl Default for BuildConfig {
@@ -205,6 +231,11 @@ impl Default for BuildConfig {
             source_weights: std::collections::BTreeMap::new(),
             default_source_weight: DEFAULT_SOURCE_WEIGHT,
             context_order: 0,
+            terminal_credit_weight: 0.0,
+            scoring_strategy: ScoringStrategy::WeightedSum,
+            bayesian_prior_strength: 5.0,
+            ucb_exploration: 1.0,
+            softmax_temperature: 1.0,
         }
     }
 }

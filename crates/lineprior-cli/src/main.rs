@@ -3,7 +3,7 @@
 mod commands;
 
 use clap::{Parser, Subcommand};
-use commands::{build, eval, query, summary, tune, validate};
+use commands::{binary, build, eval, gate, offpolicy, query, summary, tune, validate};
 use std::process::ExitCode;
 
 #[derive(Parser)]
@@ -23,6 +23,14 @@ enum Commands {
     Build(build::BuildArgs),
     /// Evaluate prior quality on held-out data.
     Eval(eval::EvalArgs),
+    /// Fit the experimental GateModel and optionally predict a verdict/acquisition score.
+    Gate(gate::GateArgs),
+    /// Evaluate a logged policy with IPS, DR, and optional bootstrap intervals.
+    Offpolicy(offpolicy::OffPolicyArgs),
+    /// Pack a JSONL prior book into compact LPB binary.
+    Pack(binary::PackArgs),
+    /// Unpack an LPB binary prior book into JSONL.
+    Unpack(binary::UnpackArgs),
     /// Query a prior book for candidate actions from a state.
     Query(query::QueryArgs),
     /// Summarize a prior book's coverage and confidence.
@@ -39,6 +47,10 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Commands::Build(args) => build::run(args),
         Commands::Eval(args) => eval::run(args),
+        Commands::Gate(args) => gate::run(args),
+        Commands::Offpolicy(args) => offpolicy::run(args),
+        Commands::Pack(args) => binary::pack(args),
+        Commands::Unpack(args) => binary::unpack(args),
         Commands::Query(args) => query::run(args),
         Commands::Summary(args) => summary::run(args),
         Commands::Tune(args) => tune::run(args),

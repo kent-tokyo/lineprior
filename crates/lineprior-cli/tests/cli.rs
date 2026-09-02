@@ -8,6 +8,109 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+#[test]
+fn offpolicy_command_writes_ips_dr_and_bootstrap_report() {
+    let input = temp_path("offpolicy_input.jsonl");
+    let output = temp_path("offpolicy_report.json");
+    std::fs::write(
+        &input,
+        concat!(
+            "{\"state\":\"s\",\"action\":\"a\",\"reward\":1.0,\"logging_propensity\":0.5,\"evaluation_probability\":0.5,\"reward_model_policy_value\":0.4,\"reward_model_logged_action\":0.4}\n",
+            "{\"state\":\"s\",\"action\":\"b\",\"reward\":0.0,\"logging_propensity\":0.5,\"evaluation_probability\":0.5,\"reward_model_policy_value\":0.4,\"reward_model_logged_action\":0.4}\n",
+        ),
+    )
+    .unwrap();
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "offpolicy",
+            input.to_str().unwrap(),
+            "--out",
+            output.to_str().unwrap(),
+            "--policy-name",
+            "candidate",
+            "--doubly-robust",
+            "--bootstrap-resamples",
+            "16",
+            "--bootstrap-seed",
+            "9",
+        ])
+        .assert()
+        .success();
+
+    let report: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&output).unwrap()).unwrap();
+    assert_eq!(report["ips"]["policy_name"], "candidate");
+    assert!(report["doubly_robust"]["estimate"].is_number());
+    assert_eq!(report["bootstrap"]["seed"], 9);
+
+    let _ = std::fs::remove_file(&input);
+    let _ = std::fs::remove_file(&output);
+}
+
+#[test]
+fn offpolicy_command_rejects_malformed_json_with_input_exit_code() {
+    let input = temp_path("offpolicy_invalid.jsonl");
+    let output = temp_path("offpolicy_invalid_report.json");
+    std::fs::write(&input, "not-json\n").unwrap();
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "offpolicy",
+            input.to_str().unwrap(),
+            "--out",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .code(3);
+    let _ = std::fs::remove_file(&input);
+    let _ = std::fs::remove_file(&output);
+}
+
+#[test]
+fn gate_command_writes_verdict_and_acquisition_report() {
+    let input = temp_path("gate_input.jsonl");
+    let output = temp_path("gate_report.json");
+    let rows = (0..6)
+        .map(|index| {
+            format!(
+                "{{\"candidate_id\":\"c-{index}\",\"group_id\":\"g-{}\",\"features\":{{\"signal\":{index}}},\"gate_elo_delta\":{},\"gate_games_played\":100}}",
+                if index < 3 { "a" } else { "b" },
+                index * 2 - 3
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&input, rows + "\n").unwrap();
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "gate",
+            input.to_str().unwrap(),
+            "--feature",
+            "signal=4",
+            "--monotonic",
+            "signal=increasing",
+            "--expected-gate-cost",
+            "10",
+            "--out",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let report: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&output).unwrap()).unwrap();
+    assert!(report["prediction"]["expected_elo"].is_number());
+    assert!(report["verdict"]["pass_probability"].is_number());
+    assert!(report["acquisition"]["acquisition_score"].is_number());
+
+    let _ = std::fs::remove_file(&input);
+    let _ = std::fs::remove_file(&output);
+}
+
 fn temp_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("lineprior_cli_test_{name}"))
 }

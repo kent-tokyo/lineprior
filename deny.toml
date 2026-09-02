@@ -1,0 +1,20 @@
+# cargo-deny policy for the lineprior workspace.
+#
+# Keep this list tied to the licenses actually used by the current dependency
+# graph.  In particular, do not replace it with a broad "allow everything"
+# rule: this check is meant to make a newly introduced license an explicit
+# review item.
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+]
+
+[licenses.private]
+ignore = true

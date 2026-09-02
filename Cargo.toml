@@ -1,9 +1,15 @@
 [workspace]
 resolver = "2"
-members = ["crates/lineprior", "crates/lineprior-cli"]
+members = [
+    "crates/lineprior",
+    "crates/lineprior-cli",
+    "crates/lineprior-similarity",
+    "crates/lineprior-wasm",
+    "crates/lineprior-adapters",
+]
 
 [workspace.package]
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/kent-tokyo/lineprior"

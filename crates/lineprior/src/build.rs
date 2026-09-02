@@ -4,7 +4,7 @@ use crate::model::{
     PriorBook, outcome_credit,
 };
 use crate::score::{
-    confidence, effective_sample_size, normalize, ratio, raw_score, shrink_toward,
+    confidence, effective_sample_size, normalize_for_strategy, ratio, raw_score, shrink_toward,
     time_decay_multiplier, wilson_lower_bound,
 };
 use serde::Serialize;
@@ -131,10 +131,40 @@ fn action_confidence(stat: &ActionStats, config: &BuildConfig) -> f64 {
     }
 }
 
+fn base_score(stat: &ActionStats, global_mean_score: Option<f64>, config: &BuildConfig) -> f64 {
+    global_mean_score
+        .map(|global| {
+            config.score_weight
+                * shrink_toward(
+                    stat.weighted_score_sum,
+                    stat.weighted_score_count,
+                    config.smoothing_alpha,
+                    global,
+                )
+        })
+        .unwrap_or(0.0)
+}
+
 /// Rejects a `BuildConfig` that can't be applied consistently, before any
 /// observation is folded in. Checked once per build/eval run, not per
 /// observation.
 fn validate_config(config: &BuildConfig) -> Result<()> {
+    if !config.terminal_credit_weight.is_finite()
+        || !(0.0..=1.0).contains(&config.terminal_credit_weight)
+    {
+        return Err(Error::InvalidConfig {
+            message: "terminal_credit_weight must be finite and between 0 and 1".into(),
+        });
+    }
+    if !config.bayesian_prior_strength.is_finite()
+        || config.bayesian_prior_strength < 0.0
+        || !config.ucb_exploration.is_finite()
+        || config.ucb_exploration < 0.0
+        || !config.softmax_temperature.is_finite()
+        || config.softmax_temperature <= 0.0
+    {
+        return Err(Error::InvalidConfig { message: "scoring strategy parameters must be finite; Bayesian/UCB >= 0 and softmax temperature > 0".into() });
+    }
     if let Some(half_life) = config.time_decay_half_life_days {
         if !(half_life.is_finite() && half_life > 0.0) {
             return Err(Error::InvalidConfig {
@@ -283,6 +313,8 @@ pub(crate) struct PriorAccumulator<'a> {
     observations_dropped_by_step_or_tag_filter: u64,
     observations_dropped_by_missing_timestamp: u64,
     config: &'a BuildConfig,
+    terminal_sequence_id: Option<String>,
+    terminal_pending: Vec<(String, String, f64, Option<f64>)>,
 }
 
 impl<'a> PriorAccumulator<'a> {
@@ -300,10 +332,43 @@ impl<'a> PriorAccumulator<'a> {
             observations_dropped_by_step_or_tag_filter: 0,
             observations_dropped_by_missing_timestamp: 0,
             config,
+            terminal_sequence_id: None,
+            terminal_pending: Vec::new(),
         })
     }
 
+    fn flush_terminal_credit(&mut self) {
+        if self.config.terminal_credit_weight == 0.0 || self.terminal_pending.is_empty() {
+            self.terminal_pending.clear();
+            return;
+        }
+        let terminal_outcome = self.terminal_pending.last().and_then(|item| item.3);
+        let Some(terminal_outcome) = terminal_outcome else {
+            self.terminal_pending.clear();
+            return;
+        };
+        for (state, action, weight, _) in self.terminal_pending.drain(..) {
+            let credit_weight = weight * self.config.terminal_credit_weight;
+            let stat = self
+                .stats
+                .entry(state)
+                .or_default()
+                .entry(action)
+                .or_default();
+            stat.weighted_trials += credit_weight;
+            stat.weighted_successes += terminal_outcome * credit_weight;
+            self.global_weighted_trials += credit_weight;
+            self.global_weighted_successes += terminal_outcome * credit_weight;
+        }
+    }
+
     pub(crate) fn observe(&mut self, obs: &Observation) -> Result<()> {
+        if self.config.terminal_credit_weight > 0.0
+            && self.terminal_sequence_id.as_deref() != Some(obs.sequence_id.as_str())
+        {
+            self.flush_terminal_credit();
+            self.terminal_sequence_id = Some(obs.sequence_id.clone());
+        }
         // Validated (and the window advanced) unconditionally, ahead of any
         // filter below: sortedness is a structural property of the whole
         // input, and the window must reflect every action actually taken in
@@ -327,6 +392,15 @@ impl<'a> PriorAccumulator<'a> {
             return Ok(());
         };
         self.observations_kept += 1;
+        if self.config.terminal_credit_weight > 0.0 {
+            let terminal_credit = outcome_credit(obs.outcome, self.config.draw_value);
+            self.terminal_pending.push((
+                obs.state.clone(),
+                obs.action.clone(),
+                effective_weight,
+                (!matches!(obs.outcome, Outcome::Unknown)).then_some(terminal_credit),
+            ));
+        }
 
         let entry = self
             .stats
@@ -407,7 +481,8 @@ impl<'a> PriorAccumulator<'a> {
 
     /// Like [`Self::finish`], but also reports what got dropped and why
     /// (see [`BuildStats`]).
-    pub(crate) fn finish_with_stats(self) -> (PriorBook, BuildStats) {
+    pub(crate) fn finish_with_stats(mut self) -> (PriorBook, BuildStats) {
+        self.flush_terminal_credit();
         // `None` here means "this dataset has no outcome/score data at
         // all", which drops that scoring term for every action rather
         // than treating a single action's missing data as a bad (zero)
@@ -537,6 +612,7 @@ fn finalize_actions(
         return None;
     }
 
+    let total_weighted_count: f64 = kept.iter().map(|(_, s)| s.weighted_count).sum();
     let raw_scores: Vec<f64> = kept
         .iter()
         .map(|(_, stat)| {
@@ -556,16 +632,47 @@ fn finalize_actions(
                     global,
                 )
             });
-            raw_score(
+            let base = raw_score(
                 stat.weighted_count,
                 smoothed_success,
                 smoothed_score,
                 config,
-            )
+            );
+            match config.scoring_strategy {
+                crate::model::ScoringStrategy::WeightedSum
+                | crate::model::ScoringStrategy::Softmax => base,
+                crate::model::ScoringStrategy::Bayesian => {
+                    let global = global_success_rate.unwrap_or(0.5);
+                    let posterior = (stat.weighted_successes
+                        + config.bayesian_prior_strength * global)
+                        / (stat.weighted_trials + config.bayesian_prior_strength);
+                    config.count_weight * (1.0 + stat.weighted_count).ln()
+                        + config.success_weight * posterior
+                        + base_score(stat, global_mean_score, config)
+                }
+                crate::model::ScoringStrategy::Ucb => {
+                    let mean = smoothed_success.unwrap_or_else(|| {
+                        if total_weighted_count > 0.0 {
+                            stat.weighted_count / total_weighted_count
+                        } else {
+                            0.0
+                        }
+                    });
+                    let bonus = config.ucb_exploration
+                        * ((1.0 + total_weighted_count).ln() / (1.0 + stat.weighted_count)).sqrt();
+                    config.count_weight * (1.0 + stat.weighted_count).ln()
+                        + config.success_weight * (mean + bonus)
+                        + base_score(stat, global_mean_score, config)
+                }
+            }
         })
         .collect();
 
-    let priors = normalize(&raw_scores);
+    let priors = normalize_for_strategy(
+        &raw_scores,
+        config.scoring_strategy,
+        config.softmax_temperature,
+    );
 
     let mut actions_out: Vec<PriorAction> = kept
         .into_iter()
@@ -1982,5 +2089,24 @@ mod tests {
         };
         let err = build_prior_book(&observations, &config).unwrap_err();
         assert!(matches!(err, Error::SequenceNotSorted { .. }));
+    }
+
+    #[test]
+    fn terminal_credit_propagates_final_failure_to_an_earlier_success() {
+        let observations = vec![
+            obs("g1", 0, "early", "a", Outcome::Success, None, 1.0, vec![]),
+            obs("g1", 1, "late", "b", Outcome::Failure, None, 1.0, vec![]),
+        ];
+        let without = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+        let with = build_prior_book(
+            &observations,
+            &BuildConfig {
+                terminal_credit_weight: 1.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(without.entries["early"][0].success_rate, Some(1.0));
+        assert_eq!(with.entries["early"][0].success_rate, Some(0.5));
     }
 }

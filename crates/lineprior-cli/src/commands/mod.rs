@@ -1,5 +1,8 @@
+pub mod binary;
 pub mod build;
 pub mod eval;
+pub mod gate;
+pub mod offpolicy;
 pub mod query;
 pub mod summary;
 pub mod tune;
@@ -111,6 +114,21 @@ fn parse_source_weight_entry(s: &str) -> Result<(String, f64), String> {
 /// `#[command(flatten)]` rather than duplicated.
 #[derive(Args)]
 pub struct BuildConfigArgs {
+    /// Action scoring strategy: weighted-sum, bayesian, ucb, or softmax.
+    #[arg(long, value_enum, default_value = "weighted-sum")]
+    pub scoring_strategy: ScoringStrategyArg,
+    /// Beta prior strength for the Bayesian strategy.
+    #[arg(long, default_value_t = 5.0)]
+    pub bayesian_prior_strength: f64,
+    /// Exploration coefficient for UCB.
+    #[arg(long, default_value_t = 1.0)]
+    pub ucb_exploration: f64,
+    /// Temperature for softmax scoring.
+    #[arg(long, default_value_t = 1.0)]
+    pub softmax_temperature: f64,
+    /// Blend terminal outcome credit into every step of a sequence (0..=1).
+    #[arg(long, default_value_t = 0.0)]
+    pub terminal_credit_weight: f64,
     /// Minimum observation count for an action to appear in the output.
     #[arg(long, default_value_t = 1)]
     pub min_count: u64,
@@ -209,6 +227,25 @@ pub struct BuildConfigArgs {
     pub score_weight: f64,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+pub enum ScoringStrategyArg {
+    WeightedSum,
+    Bayesian,
+    Ucb,
+    Softmax,
+}
+
+impl From<ScoringStrategyArg> for lineprior::ScoringStrategy {
+    fn from(value: ScoringStrategyArg) -> Self {
+        match value {
+            ScoringStrategyArg::WeightedSum => Self::WeightedSum,
+            ScoringStrategyArg::Bayesian => Self::Bayesian,
+            ScoringStrategyArg::Ucb => Self::Ucb,
+            ScoringStrategyArg::Softmax => Self::Softmax,
+        }
+    }
+}
+
 /// Resolves the effective `BuildConfig` for `build`/`eval`: either loaded
 /// whole from `--config <path>` (as saved by `tune --save-best-config`), or
 /// built from the individual `BuildConfigArgs` flags -- never a merge of
@@ -243,7 +280,12 @@ impl BuildConfigArgs {
     /// boundary, since that's simpler and doesn't depend on how clap names
     /// flattened arg ids internally.
     pub fn is_all_default(&self) -> bool {
-        self.min_count == 1
+        matches!(self.scoring_strategy, ScoringStrategyArg::WeightedSum)
+            && self.bayesian_prior_strength == 5.0
+            && self.ucb_exploration == 1.0
+            && self.softmax_temperature == 1.0
+            && self.terminal_credit_weight == 0.0
+            && self.min_count == 1
             && self.min_weighted_count == 0.0
             && self.min_confidence == 0.0
             && self.max_step.is_none()
@@ -270,6 +312,11 @@ impl BuildConfigArgs {
 
     pub fn into_build_config(self) -> BuildConfig {
         BuildConfig {
+            scoring_strategy: self.scoring_strategy.into(),
+            bayesian_prior_strength: self.bayesian_prior_strength,
+            ucb_exploration: self.ucb_exploration,
+            softmax_temperature: self.softmax_temperature,
+            terminal_credit_weight: self.terminal_credit_weight,
             min_count: self.min_count,
             min_weighted_count: self.min_weighted_count,
             min_confidence: self.min_confidence,

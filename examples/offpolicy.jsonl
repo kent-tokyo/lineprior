@@ -1,0 +1,2 @@
+{"state":"screen-cart","action":"click:add-to-cart","reward":1.0,"logging_propensity":0.5,"evaluation_probability":0.5,"reward_model_policy_value":0.8,"reward_model_logged_action":0.7,"metadata":{"split":"train","source":"ui-fixture"}}
+{"state":"screen-cart","action":"wait","reward":0.0,"logging_propensity":0.5,"evaluation_probability":0.5,"reward_model_policy_value":0.8,"reward_model_logged_action":0.2,"metadata":{"split":"train","source":"ui-fixture"}}

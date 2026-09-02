@@ -11,9 +11,10 @@
 //! split into its own crate if this grows a CLI surface or its own
 //! dependencies.
 //!
-//! Round A scope only: fit, predict, and a calibration report. No
-//! acquisition function, no CLI, no monotonic constraints, no bootstrap --
-//! see the project task log for why each is deferred.
+//! The GateModel also exposes conservative verdict probabilities, an
+//! uncertainty-aware acquisition score, and optional coefficient-sign
+//! constraints. These remain diagnostic APIs: real gate-history validation is
+//! still required before using them to schedule an expensive run.
 //!
 //! Extended (still Round A): a [`GateObservation`] may also carry a directly
 //! measured `actual_elo_stddev`/`elo_ci_low`/`elo_ci_high` for its
@@ -173,6 +174,83 @@ pub struct GatePrediction {
     pub recommend_for_gate: bool,
 }
 
+/// The three-way verdict used when a gate result can be positive, negative,
+/// or too close to call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GateVerdict {
+    Pass,
+    Fail,
+    Inconclusive,
+}
+
+/// Elo thresholds defining the three verdict regions. The interval between
+/// `fail_threshold` and `pass_threshold` is intentionally inconclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct GateVerdictConfig {
+    pub fail_threshold: f64,
+    pub pass_threshold: f64,
+}
+
+impl Default for GateVerdictConfig {
+    fn default() -> Self {
+        Self {
+            fail_threshold: -10.0,
+            pass_threshold: 10.0,
+        }
+    }
+}
+
+/// Posterior probabilities for PASS/FAIL/INCONCLUSIVE under a fitted model.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GateVerdictPrediction {
+    pub prediction: GatePrediction,
+    pub pass_probability: f64,
+    pub fail_probability: f64,
+    pub inconclusive_probability: f64,
+    pub predicted_verdict: GateVerdict,
+}
+
+/// Inputs to the cost-aware gate acquisition function.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GateAcquisitionQuery {
+    pub query: GateQuery,
+    pub expected_gate_cost: f64,
+}
+
+/// Controls for expected-improvement acquisition. `baseline_elo` is the
+/// incumbent delta against which improvement is measured.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct GateAcquisitionConfig {
+    pub baseline_elo: f64,
+}
+
+impl Default for GateAcquisitionConfig {
+    fn default() -> Self {
+        Self { baseline_elo: 0.0 }
+    }
+}
+
+/// Expected improvement per unit expected gate cost. This is a prioritization
+/// score, not a probability of success and not a causal claim.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GateAcquisition {
+    pub prediction: GatePrediction,
+    pub baseline_elo: f64,
+    pub expected_gate_cost: f64,
+    pub expected_improvement: f64,
+    pub acquisition_score: f64,
+    pub recommend_for_acquisition: bool,
+}
+
+/// Direction constraint for a named GateModel feature. The sign is applied
+/// in standardized space; because standard deviations are positive, it has
+/// the same meaning in the caller's original feature units.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MonotonicDirection {
+    Increasing,
+    Decreasing,
+}
+
 /// Tuning knobs for [`GateModel::fit`].
 #[derive(Debug, Clone)]
 pub struct GateModelConfig {
@@ -230,6 +308,11 @@ pub struct GateModelConfig {
     /// inverse-variance weight thousands of times any other row's. Must be
     /// `>= 1.0` (a ratio below `1.0` would invert or collapse every weight).
     pub max_weight_ratio: f64,
+    /// Optional coefficient-sign constraints. Empty preserves the historical
+    /// unconstrained ridge fit. Constrained fits project the ridge solution
+    /// onto the requested sign orthant and report the active names through
+    /// the fitted model.
+    pub monotonic_constraints: BTreeMap<String, MonotonicDirection>,
 }
 
 /// `1e-4` through `100.0`, log-spaced-ish, chosen to bias toward strong
@@ -251,6 +334,7 @@ impl Default for GateModelConfig {
             ood_leverage_ratio_threshold: 3.0,
             ood_missing_fraction_threshold: 0.5,
             max_weight_ratio: 100.0,
+            monotonic_constraints: BTreeMap::new(),
         }
     }
 }
@@ -437,6 +521,7 @@ pub struct GateModel {
     max_training_group_distance: f64,
     ood_leverage_ratio_threshold: f64,
     ood_missing_fraction_threshold: f64,
+    monotonic_constraints: BTreeMap<String, MonotonicDirection>,
 }
 
 impl GateModel {
@@ -510,6 +595,7 @@ impl GateModel {
     ) -> Result<GateValidationOutput> {
         validate_config(config)?;
         let feature_names = validate_observations(observations)?;
+        validate_monotonic_constraints(config, &feature_names)?;
 
         let num_features = feature_names.len();
         let required = (num_features + 2).max(6);
@@ -562,7 +648,9 @@ impl GateModel {
             .map(|o| standardizer.transform(&o.features, &feature_names).0)
             .collect();
         let y: Vec<f64> = observations.iter().map(|o| o.gate_elo_delta).collect();
-        let fit = fit_weighted_ridge(&x, &y, &weights, selected_lambda, config.max_weight_ratio);
+        let mut fit =
+            fit_weighted_ridge(&x, &y, &weights, selected_lambda, config.max_weight_ratio);
+        apply_monotonic_constraints(&mut fit.coefficients, &feature_names, config);
         let centroids = group_centroids(&all_rows, &x, config.observation_ci_z);
         let mean_leverage = fit.df / fit.n_eff;
         let max_group_distance = max_training_group_distance(&centroids);
@@ -582,6 +670,7 @@ impl GateModel {
             max_training_group_distance: max_group_distance,
             ood_leverage_ratio_threshold: config.ood_leverage_ratio_threshold,
             ood_missing_fraction_threshold: config.ood_missing_fraction_threshold,
+            monotonic_constraints: config.monotonic_constraints.clone(),
         };
         let report = GateFitReport {
             selected_lambda,
@@ -652,6 +741,106 @@ impl GateModel {
             recommend_for_gate: prediction_status == PredictionStatus::Supported,
         }
     }
+
+    /// Returns the monotonic constraints used by this fitted model. An empty
+    /// map means the historical unconstrained ridge behavior was retained.
+    pub fn monotonic_constraints(&self) -> &BTreeMap<String, MonotonicDirection> {
+        &self.monotonic_constraints
+    }
+
+    /// Predicts the probability of each three-way gate verdict. The fitted
+    /// posterior is treated as Gaussian over the candidate's latent Elo
+    /// delta; the inconclusive probability is the mass between the two
+    /// caller-defined thresholds.
+    pub fn predict_verdict(
+        &self,
+        query: &GateQuery,
+        config: &GateVerdictConfig,
+    ) -> Result<GateVerdictPrediction> {
+        validate_verdict_config(config)?;
+        let prediction = self.predict(query);
+        let sd = (prediction.interval_high - prediction.interval_low) / (2.0 * self.interval_z);
+        let (fail_probability, pass_probability) = if sd > 0.0 {
+            (
+                standard_normal_cdf((config.fail_threshold - prediction.expected_elo) / sd),
+                1.0 - standard_normal_cdf((config.pass_threshold - prediction.expected_elo) / sd),
+            )
+        } else if prediction.expected_elo < config.fail_threshold {
+            (1.0, 0.0)
+        } else if prediction.expected_elo > config.pass_threshold {
+            (0.0, 1.0)
+        } else {
+            (0.0, 0.0)
+        };
+        let inconclusive_probability = (1.0 - fail_probability - pass_probability).clamp(0.0, 1.0);
+        let predicted_verdict = if pass_probability >= fail_probability
+            && pass_probability >= inconclusive_probability
+        {
+            GateVerdict::Pass
+        } else if fail_probability >= inconclusive_probability {
+            GateVerdict::Fail
+        } else {
+            GateVerdict::Inconclusive
+        };
+        Ok(GateVerdictPrediction {
+            prediction,
+            pass_probability,
+            fail_probability,
+            inconclusive_probability,
+            predicted_verdict,
+        })
+    }
+
+    /// Scores an expensive gate run by expected improvement per unit cost.
+    /// Expected improvement is the standard Gaussian EI over `baseline_elo`;
+    /// it is not multiplied by `probability_positive` a second time because
+    /// EI already integrates the probability of exceeding the baseline.
+    pub fn acquire(
+        &self,
+        query: &GateAcquisitionQuery,
+        config: &GateAcquisitionConfig,
+    ) -> Result<GateAcquisition> {
+        if !config.baseline_elo.is_finite() {
+            return Err(Error::InvalidConfig {
+                message: "gate acquisition baseline_elo must be finite".to_string(),
+            });
+        }
+        if !query.expected_gate_cost.is_finite() || query.expected_gate_cost <= 0.0 {
+            return Err(Error::InvalidConfig {
+                message: "gate acquisition expected_gate_cost must be finite and > 0".to_string(),
+            });
+        }
+        let prediction = self.predict(&query.query);
+        let sd = (prediction.interval_high - prediction.interval_low) / (2.0 * self.interval_z);
+        let improvement = prediction.expected_elo - config.baseline_elo;
+        let expected_improvement = if sd > 0.0 {
+            let z = improvement / sd;
+            improvement * standard_normal_cdf(z) + sd * standard_normal_pdf(z)
+        } else {
+            improvement.max(0.0)
+        };
+        Ok(GateAcquisition {
+            recommend_for_acquisition: prediction.recommend_for_gate,
+            prediction,
+            baseline_elo: config.baseline_elo,
+            expected_gate_cost: query.expected_gate_cost,
+            expected_improvement,
+            acquisition_score: expected_improvement / query.expected_gate_cost,
+        })
+    }
+}
+
+fn validate_verdict_config(config: &GateVerdictConfig) -> Result<()> {
+    if !config.fail_threshold.is_finite()
+        || !config.pass_threshold.is_finite()
+        || config.fail_threshold >= config.pass_threshold
+    {
+        return Err(Error::InvalidConfig {
+            message: "gate verdict thresholds must be finite and fail_threshold < pass_threshold"
+                .to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// `x.is_finite() && x > 0.0`, factored out so the validation checks below
@@ -744,6 +933,40 @@ fn validate_config(config: &GateModelConfig) -> Result<()> {
         });
     }
     Ok(())
+}
+
+fn validate_monotonic_constraints(
+    config: &GateModelConfig,
+    feature_names: &[String],
+) -> Result<()> {
+    if let Some(name) = config
+        .monotonic_constraints
+        .keys()
+        .find(|name| !feature_names.iter().any(|known| known == *name))
+    {
+        return Err(Error::InvalidConfig {
+            message: format!("monotonic constraint names unknown feature `{name}`"),
+        });
+    }
+    Ok(())
+}
+
+fn apply_monotonic_constraints(
+    coefficients: &mut [f64],
+    feature_names: &[String],
+    config: &GateModelConfig,
+) {
+    for (index, name) in feature_names.iter().enumerate() {
+        match config.monotonic_constraints.get(name) {
+            Some(MonotonicDirection::Increasing) => {
+                coefficients[index] = coefficients[index].max(0.0)
+            }
+            Some(MonotonicDirection::Decreasing) => {
+                coefficients[index] = coefficients[index].min(0.0)
+            }
+            None => {}
+        }
+    }
 }
 
 /// Validates every observation (finite feature/label/weight values, positive
@@ -1376,6 +1599,10 @@ fn probability_positive(expected_elo: f64, variance: f64, sd: f64) -> f64 {
     }
 }
 
+fn standard_normal_pdf(z: f64) -> f64 {
+    (-0.5 * z * z).exp() / (2.0 * std::f64::consts::PI).sqrt()
+}
+
 /// Standard normal CDF via Abramowitz & Stegun's rational erf approximation
 /// (formula 7.1.26, max absolute error ~1.5e-7) -- avoids a new dependency
 /// for one CDF evaluation, matching `score.rs`'s hand-rolled-math convention.
@@ -1453,13 +1680,14 @@ fn fit_and_score_fold(
         .map(|o| standardizer.transform(&o.features, feature_names).0)
         .collect();
     let y_train: Vec<f64> = train_rows.iter().map(|o| o.gate_elo_delta).collect();
-    let fit = fit_weighted_ridge(
+    let mut fit = fit_weighted_ridge(
         &x_train,
         &y_train,
         &train_weights,
         lambda,
         config.max_weight_ratio,
     );
+    apply_monotonic_constraints(&mut fit.coefficients, feature_names, config);
     let centroids = group_centroids(train_rows, &x_train, config.observation_ci_z);
     let mean_leverage = fit.df / fit.n_eff;
     let max_group_distance = max_training_group_distance(&centroids);

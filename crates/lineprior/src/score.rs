@@ -1,4 +1,4 @@
-use crate::model::BuildConfig;
+use crate::model::{BuildConfig, ScoringStrategy};
 
 /// `numerator / denominator`, or `None` when nothing was observed.
 /// Used for the raw (unsmoothed) `success_rate` / `mean_score` fields
@@ -54,6 +54,34 @@ pub fn normalize(raw_scores: &[f64]) -> Vec<f64> {
         Vec::new()
     } else {
         vec![1.0 / raw_scores.len() as f64; raw_scores.len()]
+    }
+}
+
+/// Stable softmax; subtracting the largest utility prevents overflow while
+/// preserving the exact ranking and making low-temperature output useful.
+pub fn softmax(raw_scores: &[f64], temperature: f64) -> Vec<f64> {
+    if raw_scores.is_empty() {
+        return Vec::new();
+    }
+    let max = raw_scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let values: Vec<f64> = raw_scores
+        .iter()
+        .map(|s| ((s - max) / temperature).exp())
+        .collect();
+    normalize(&values)
+}
+
+/// Selects the final normalization for a strategy. The build module owns
+/// action statistics; this helper keeps strategy-independent distribution
+/// mechanics public and testable.
+pub fn normalize_for_strategy(
+    raw_scores: &[f64],
+    strategy: ScoringStrategy,
+    temperature: f64,
+) -> Vec<f64> {
+    match strategy {
+        ScoringStrategy::Softmax => softmax(raw_scores, temperature),
+        _ => normalize(raw_scores),
     }
 }
 
@@ -152,6 +180,14 @@ mod tests {
     fn normalize_falls_back_to_uniform_when_all_zero() {
         let priors = normalize(&[0.0, 0.0, 0.0]);
         assert_eq!(priors, vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]);
+    }
+
+    #[test]
+    fn softmax_is_normalized_and_temperature_sensitive() {
+        let sharp = softmax(&[1.0, 2.0], 0.1);
+        let flat = softmax(&[1.0, 2.0], 10.0);
+        assert!((sharp.iter().sum::<f64>() - 1.0).abs() < 1e-9);
+        assert!(sharp[1] > flat[1]);
     }
 
     #[test]

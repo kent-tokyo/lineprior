@@ -1,0 +1,18 @@
+[package]
+name = "lineprior-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Minimal JSON-in/JSON-out WebAssembly bindings for lineprior."
+keywords = ["wasm", "webassembly", "action-ranking", "jsonl"]
+categories = ["wasm", "algorithms", "artificial-intelligence"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lineprior = { path = "../lineprior", version = "0.11.0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wasm-bindgen = "0.2"

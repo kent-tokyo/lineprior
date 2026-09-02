@@ -186,6 +186,16 @@ match load_prior_book_with_config(reader, &config) {
 
 実際のドメイン例として: [`examples/shogi_opening.jsonl`](./examples/shogi_opening.jsonl) は `state` = SFEN文字列、`action` = USIの指し手というマッピングを使用しています。これは AGENTS.md の Sekirei 統合に関する記述と同じマッピングです。生成された prior([`examples/shogi_prior.jsonl`](./examples/shogi_prior.jsonl))では、`2g2f` の方が生の観測レートが高い(100% 対 83%)にもかかわらず、`7g7f` が上位にランクされています — `7g7f` の方が裏付けとなる観測が1件多く、平滑化によって、`2g2f` の少数サンプルによる完璧な記録だけで上位に来ることを正しく防いでいます。
 
+非ゲーム分野の [`examples/ui_automation.jsonl`](./examples/ui_automation.jsonl) では、`cart-empty` のような画面状態を `click:add-to-cart` のような UI 操作へマッピングしています。同じ CLI ラウンドトリップを [`examples/python/roundtrip.py`](./examples/python/roundtrip.py) と [`examples/node/roundtrip.mjs`](./examples/node/roundtrip.mjs) で確認できます。両方とも、繰り返しビルドのバイト単位の決定性と、構築した book から期待する操作を取得できることを検証します。これらは言語バインディングではなく CLI 統合例です。保守された Python/WASM パッケージが必要になるまでは、Rust CLI を正本実装とします。
+
+## WASM / JavaScript 境界
+
+workspace の `lineprior-wasm` crate は、`wasm-bindgen` による薄い2つの関数を提供します。`build_json` は
+JSONL observation とシリアライズした `BuildConfig` を受け取り、ソート済み entries、warnings、build stats を
+含む JSON を返します。`query_json` は JSONL prior book を受け取り、ランキング済み候補を返します。Rust の
+scoring を正本として利用し、不正入力は JavaScript error にします。ファイル I/O やドメイン固有の state 表現は
+持ちません。npm/wasm-pack のパッケージ化とブラウザ smoke test はまだ完了扱いにしていません。
+
 ## パフォーマンス
 
 Apple M4(macOS 26.5.1)、release ビルドで測定。100万件の観測、50,000個のユニークな `(state, action)` ペア(1,000状態 × 50行動):
@@ -286,6 +296,38 @@ lineprior eval observations.jsonl \
 
 どちらも明示的にリクエストしない限り省略され(空配列)、既存の `eval` の使い方には影響しません。
 
+## オフポリシー評価(明示的なオプトイン)
+
+別の評価モジュールとして `evaluate_self_normalized_ips` も提供します。呼び出し側は、ログを生成した
+policy の propensity と、実際にログに記録された action に対して評価対象 policy が割り当てる確率を明示的
+に渡す必要があります。`lineprior` は prior から反実仮想の reward を推測しません。レポートには通常の IPS、
+self-normalized IPS、support fraction、overlap failure 数、Kish の有効サンプルサイズが含まれます。評価対象
+policy の確率が 0 の行や、任意の上限を超える importance weight は、損失として黙って扱わず overlap failure
+として報告します。
+`evaluate_doubly_robust` は、評価対象 policy の期待 reward と、ログに記録された action の reward を予測する
+モデル値を呼び出し側が両方渡せる場合に利用できます。モデルのベースラインに propensity で重み付けした残差
+補正を加えます。overlap のない行はベースラインだけを使い、support 診断には残します。
+
+`bootstrap_self_normalized_ips` は、IPS と self-normalized IPS の決定的なパーセンタイル区間を追加します。
+seed、反復回数、信頼水準は明示的に指定し、support のない再標本は 0 の reward にせずスキップ件数として
+記録します。これは再現可能な不確実性確認を可能にしますが、実データによる保留評価の代替ではありません。
+
+ 同じ診断は CLI の `lineprior offpolicy log.jsonl --out report.json` からも利用できます。全行に2つの報酬モデル
+値がある場合は `--doubly-robust`、決定的な区間には `--bootstrap-resamples N --bootstrap-seed S` を指定します。
+入力は1行1件の `OffPolicyObservation` JSONL で、不正な行や propensity は終了コード3になります。
+
+チェックイン済みの [`examples/offpolicy.jsonl`](./examples/offpolicy.jsonl) は、正常な入力境界を示す小さなfixtureです。
+例えば次のように実行できます。
+
+```bash
+lineprior offpolicy examples/offpolicy.jsonl --out /tmp/lineprior-offpolicy.json \
+  --doubly-robust --bootstrap-resamples 128 --bootstrap-seed 42
+```
+
+これらは推定器と監査用の情報であり、因果的な改善の証明ではありません。正しい propensity、overlap、不確実性
+区間、保留データでの downstream 比較は呼び出し側の責務です。報酬モデル自体を `lineprior` が学習・推測する
+ことはありません。
+
 ## 可変長コンテキスト
 
 デフォルトの prior は order-0 です: `state -> action` のみで、シーケンス内で以前に何が起きたかを
@@ -348,6 +390,21 @@ context-order=0,1,2,3` のスイープでリフトを直接確認できます �
 `top1_hit_rate` のベースラインと比較してください。`state` がすでに直近の履歴をエンコードしている
 ドメイン(盤面全体など)では、リフトがほとんど、あるいは全く見られないこともあります — それはバグ
 ではなく、正当で有益な結果です。
+
+## オプトインの類似状態フォールバック
+
+`PriorBook::query_with_similarity` は、呼び出し側が state、0 以上の距離、透過的な provenance を付けて
+渡した近傍状態を受け取ります。距離に基づく決定的な指数重み付けを行い、近傍状態で実際に観測された
+action だけを返すため、未知の action を生成しません。`SimilarityConfig` で近傍数や距離を制限でき、各
+結果には action を裏付けた状態の evidence も残ります。
+
+これは統合境界であり、embedding やベクトルデータベースの実装ではありません。デフォルトは従来どおり
+完全一致検索と棄却です。返される confidence は元の confidence の重み付き要約であり、新しい統計的保証
+ではないため、意思決定ループで有効化する前に、未知状態の分割で類似フォールバックを検証してください。
+
+`crates/lineprior-similarity/tests/fixtures/unseen_states.jsonl` と統合テストには、完全一致、priorなしの棄却、
+オプトイン類似検索による回収を比較する決定的な境界fixtureがあります。これは契約確認であり、実データの品質や
+類似検索をデフォルトで有効化する根拠ではありません。
 
 ## シーケンス単位の prior
 
@@ -479,6 +536,25 @@ let prediction = output.model.predict(&GateQuery { features });
 // .prediction_status, .recommend_for_gate
 ```
 
+`predict_verdict` は、Gaussian な潜在 Elo posterior を明示した `GateVerdictConfig` の閾値で PASS、FAIL、
+INCONCLUSIVE の3領域に分けます。`acquire` は incumbent の `baseline_elo` に対する標準的な expected improvement
+を、呼び出し側が渡す expected gate cost で割ります。EI はすでに baseline 超過確率を含むため、`probability_positive`
+を二重には掛けません。どちらも OOD の recommendation flag を保持します。
+
+```bash
+lineprior gate gate_history.jsonl --feature valid_cp_mse_delta=0.12 \
+  --feature output_std=0.03 --monotonic valid_cp_mse_delta=increasing \
+  --expected-gate-cost 100 --out gate-report.json
+```
+
+`gate` CLI は strict JSONL の `GateObservation` から実験的モデルを fit し、指定時には予測、3種類の verdict 確率、
+acquisition score、fit 診断をJSONで出力します。GateModel は引き続きメインcrateに置きます。CLI独自のschemaや依存境界
+はまだないため、利用者が現れる前に `lineprior-gate` へ分割するとパッケージ化の表面だけが増えるためです。
+
+- **単調制約はオプトインです。** `GateModelConfig::monotonic_constraints` は指定した係数を increasing/decreasing の
+  符号直交錐へ射影します。制約付き fit の閉形式ridge不確実性は近似に過ぎないため、高コスト実行のスケジュールに
+  使う前に実ゲート履歴で検証してください。
+
 - **固定スキーマではなく、名前付き特徴量。** `GateObservation.features`/`GateQuery.features` は
   呼び出し側が名前を付ける `BTreeMap<String, f64>`(例: `valid_cp_mse_delta`、`output_std`、
   `conflict_rate`)です。診断項目のセットは、スキーマを壊さずに進化できます。training seed のような
@@ -582,9 +658,9 @@ let prediction = output.model.predict(&GateQuery { features });
   `expected_elo`/`interval_low`/`interval_high`/`probability_positive` は `recommend_for_gate` が
   `false` のときも常にモデルの本当の予測のままです — 分布外のクエリはフラグが立つだけで、黙って
   ゼロに置き換えられたりはしません。
-- **これは、より大きな設計の最初の・最小のスライスです**(不確実性を最優先した予測と OOD 時の棄権は
-  完了 → gate 判定確率レイヤー → gate acquisition function → 単調制約、という順)。何を意図的に後回し
-  にしたか・その理由は `tasks/todo.md` を参照してください。CLI サブコマンドはまだありません。
+- **実験的な診断用の機能です。** verdict確率、acquisition、単調制約は実装済みですが、高コスト実行のスケジュールに
+  使う前に実ゲート履歴でのキャリブレーションとdownstream検証が必要です。CLIは薄いままにし、独立したschema/依存境界
+  が現れるまでモデルはメインcrateに保持します。
 
 ## 学術的な位置づけ
 
@@ -594,12 +670,67 @@ let prediction = output.model.predict(&GateQuery { features });
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-features --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
+cargo deny check licenses
+sh scripts/check_candidate_contract.sh
+sh scripts/run_examples_smoke.sh
+sh scripts/run_wasm_build_smoke.sh
 ```
+
+依存クレートのライセンスは [`deny.toml`](./deny.toml) の SPDX 許可リストで検査します。新しいライセンスを
+追加する場合は、明示的なポリシーレビューが必要です。
+
+候補版の契約チェックは、workspace の固定バージョン、JSON fixture、言語例の構文、整形、空白差分を検査します。
+ランタイムテスト、WASM パッケージ化、実データ測定ゲートの代替ではありません。
+
+`lineprior-cli` をビルドした後に `sh scripts/run_examples_smoke.sh` を実行すると、同じバイナリを使って保守対象の
+Node.js と Python のラウンドトリップ例を確認できます。CI でもこの smoke workflow を実行しますが、Rust CLI の統合
+境界の確認であり、WASM パッケージ化や実データ品質の証拠ではありません。
+
+同じバイナリで `sh scripts/run_offpolicy_smoke.sh` を実行すると、OPE fixture を同じ設定で2回評価し、IPS、DR、
+bootstrap seed を含むJSONレポート全体の一致を確認できます。これは再現性の確認であり、因果的改善の証拠ではありません。
+
+`wasm32-unknown-unknown` target をインストール済みなら、`sh scripts/run_wasm_build_smoke.sh` で locked dependency
+graph による `lineprior-wasm` crate のコンパイル境界を確認できます。これはコンパイルだけの確認であり、npm/wasm-pack
+パッケージ化とブラウザ実行は別のゲートです。
 
 リリース履歴は [`CHANGELOG.md`](./CHANGELOG.md)(英語)を参照してください。crates.io への公開状況、
 および 0.9.0 以降は公開 Rust API の変更点について、JSON/serde の入力互換性とは別に Rust のソース互換性
 を明記しています。
 
 設計仕様とロードマップの全体は [`AGENTS.md`](./AGENTS.md) を参照してください。
+## 差し替え可能な scoring strategy
+
+`BuildConfig::scoring_strategy` は `WeightedSum`（後方互換の既定値）、`Bayesian`、`Ucb`、
+`Softmax` を選べます。CLI では `--scoring-strategy` と方式別パラメータを使います。
+これは順位付け方式であり、品質保証ではありません。
+
+## compact binary book
+
+交換形式は JSONL のままとし、ローカルキャッシュ向けに決定論的な LPB v1 を追加しました。
+コアの `save_prior_book_binary` / `load_prior_book_binary` と CLI の `pack` / `unpack` が使えます。
+context entry、magic/version、割り当て上限を保持し、余分な末尾 bytes は拒否します。
+
+## veridict prior on/off レシピ
+
+ペア seed・split・予算・停止規則を固定する手順を
+[`examples/veridict_prior_comparison.md`](examples/veridict_prior_comparison.md) に置きました。
+実際の `veridict` 実行結果がないため、現時点では recipe-only です。
+## macro-actions と multi-source merge
+
+`build_macro_actions` は順序付き履歴から連続した action window を抽出します。window を保持する必要があるため
+eager API とし、通常の streaming builder の挙動は変更していません。独立に作った book は
+`PriorBookSource` と明示的な weight を渡して `merge_prior_books` で統合できます（context entry 対応）。
+
+正式な型境界は `lineprior-adapters` にあり、Sekirei、UI automation、LLM agent、retrosynthesis の
+record を `Observation` に変換します。合法性・実行成否・化学的妥当性の検証は各アプリ側に残します。
+## terminal credit と Trie 表現
+
+`BuildConfig::terminal_credit_weight`（CLIでは `--terminal-credit-weight`）を指定すると、各系列の最後の既知の
+outcome を、その系列の保持された各stepへ伝播できます。既定値 `0.0` では従来のstep単位ラベルを維持します。
+有効時は現在の系列だけをbufferし、系列単位でまとまった入力を想定します。
+
+`PriorBook::to_trie()` は context entry を決定論的な `PriorTrie` に展開し、最長suffixを優先してqueryします。
+flat bookを正本の保存形式として残し、trieの性能比較は引き続きmeasurement項目です。

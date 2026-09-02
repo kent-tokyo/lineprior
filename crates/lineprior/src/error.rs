@@ -46,6 +46,9 @@ pub enum Error {
     #[error("invalid build config: {message}")]
     InvalidConfig { message: String },
 
+    #[error("invalid compact prior book: {message}")]
+    InvalidBinary { message: String },
+
     /// Raised only when `BuildConfig::context_order > 0`: deriving a
     /// sequence's recent-action window while streaming requires that
     /// sequence's own rows be contiguous and in increasing `step` order.

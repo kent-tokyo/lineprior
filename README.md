@@ -186,6 +186,23 @@ Domain-specific mappings (e.g. a chess/shogi position as `state`, a UCI/USI move
 
 For a real domain example: [`examples/shogi_opening.jsonl`](./examples/shogi_opening.jsonl) uses `state` = an SFEN string and `action` = a USI move, the mapping described in AGENTS.md's Sekirei integration notes. Its generated prior ([`examples/shogi_prior.jsonl`](./examples/shogi_prior.jsonl)) ranks `7g7f` above `2g2f` despite `2g2f`'s raw observed rate being higher (100% vs. 83%) — `7g7f` has one more supporting observation, and smoothing correctly refuses to let `2g2f`'s smaller sample outrank it on a single-observation-driven perfect record.
 
+The non-game fixture [`examples/ui_automation.jsonl`](./examples/ui_automation.jsonl) maps screen
+states to UI actions such as `click:add-to-cart`. The same CLI round-trip is available in
+[`examples/python/roundtrip.py`](./examples/python/roundtrip.py) and
+[`examples/node/roundtrip.mjs`](./examples/node/roundtrip.mjs); both assert that repeated builds
+are byte-deterministic and that querying the built book returns the expected action. These are
+CLI integration examples, not language bindings: the Rust CLI remains the authoritative
+implementation until a maintained Python or WASM package is justified.
+
+## WASM / JavaScript boundary
+
+The `lineprior-wasm` workspace crate exposes two thin `wasm-bindgen` functions: `build_json` takes
+JSONL observations plus a serialized `BuildConfig` and returns JSON containing sorted entries,
+warnings, and build stats; `query_json` takes a JSONL prior book and returns ranked candidates.
+They keep Rust scoring authoritative and return JavaScript errors for invalid input. The crate has
+no file I/O or domain-specific state representation. npm/wasm-pack packaging and browser smoke
+testing are not claimed yet.
+
 ## Performance
 
 Measured on an Apple M4 (macOS 26.5.1), release build, 1,000,000 observations across 50,000 unique `(state, action)` pairs (1,000 states × 50 actions):
@@ -294,6 +311,43 @@ lineprior eval observations.jsonl \
 
 Both are omitted (empty arrays) unless explicitly requested, so existing `eval` usage is unaffected.
 
+## Off-policy evaluation (explicitly opt-in)
+
+The library also exposes `evaluate_self_normalized_ips` in a separate evaluation module. The
+caller must provide the logging policy propensity and the evaluated policy's probability for the
+action that was actually logged; `lineprior` never infers a counterfactual reward from a prior.
+The report includes ordinary IPS, self-normalized IPS, support fraction, overlap failures, and
+Kish effective sample size. Zero-support rows and importance weights above an optional cap are
+reported as overlap failures rather than silently treated as losses.
+
+`evaluate_doubly_robust` is also available when the caller supplies both a reward-model estimate
+for the evaluated policy's expected reward and a reward-model estimate for the logged action. It
+adds the propensity-weighted residual correction to the model baseline; rows without overlap use
+the baseline only and remain visible in the support diagnostics.
+
+`bootstrap_self_normalized_ips` adds deterministic percentile intervals for IPS and self-normalized
+IPS. Its seed, resample count, and confidence level are explicit; resamples with no supported
+rows are counted as skipped. This supports replayable uncertainty checks but does not replace a
+held-out, real-data evaluation.
+
+The same diagnostics are available from the CLI with `lineprior offpolicy log.jsonl --out report.json`.
+Add `--doubly-robust` when every row contains the two reward-model fields, and
+`--bootstrap-resamples N --bootstrap-seed S` for deterministic intervals. The JSONL input is one
+`OffPolicyObservation` per line; malformed rows or invalid propensities exit with code 3.
+
+The checked-in [`examples/offpolicy.jsonl`](./examples/offpolicy.jsonl) is a small valid input
+boundary fixture. For example:
+
+```bash
+lineprior offpolicy examples/offpolicy.jsonl --out /tmp/lineprior-offpolicy.json \
+  --doubly-robust --bootstrap-resamples 128 --bootstrap-seed 42
+```
+
+These are estimators and audit surfaces, not proof of causal improvement. Valid propensities,
+overlap, uncertainty intervals, and a held-out downstream comparison remain the caller's
+responsibility. A reward model is supplied by the caller and is never trained or inferred by
+`lineprior`.
+
 ## Variable-order context
 
 By default the prior is order-0: `state -> action`, with no memory of what happened earlier in a
@@ -351,6 +405,24 @@ meaningful for your domain, only on whether it's statistically predictive on you
 Always check `context_top1_hit_rate` against the plain `top1_hit_rate` baseline before trusting a
 context-aware prior; a domain where `state` already encodes recent history (e.g. a full board
 position) may see little or no lift, and that's a legitimate, informative result — not a bug.
+
+## Opt-in similarity fallback
+
+`PriorBook::query_with_similarity` accepts neighbors supplied by the caller, each with a state,
+non-negative distance, and opaque provenance label. It applies deterministic exponential distance
+weighting and returns only actions observed in those neighbor states; unknown actions are never
+invented. `SimilarityConfig` can cap neighbors or distance, and each result retains its evidence
+so callers can audit which states supported an action.
+
+This is an integration boundary, not an embedding or vector-database implementation. Exact-match
+querying and abstention remain the default. The returned confidence is a weighted summary of the
+source confidences, not a new statistical guarantee, so callers should validate similarity
+fallback against an unseen-state split before enabling it in a decision loop.
+
+The deterministic boundary fixture at
+`crates/lineprior-similarity/tests/fixtures/unseen_states.jsonl` and its integration test compare
+exact-match, no-prior abstention, and opt-in similarity recovery. It is a contract check only; it
+does not establish real-data quality or justify enabling similarity by default.
 
 ## Sequence-level priors
 
@@ -477,6 +549,27 @@ let prediction = output.model.predict(&GateQuery { features });
 // .prediction_status, .recommend_for_gate
 ```
 
+`predict_verdict` maps the Gaussian latent-Elo posterior into PASS, FAIL, and INCONCLUSIVE regions
+using explicit `GateVerdictConfig` thresholds. `acquire` computes standard expected improvement over
+an incumbent `baseline_elo`, divided by a caller-supplied expected gate cost; it does not multiply EI
+by `probability_positive` a second time. Both surfaces preserve the model's OOD recommendation flag.
+
+```bash
+lineprior gate gate_history.jsonl --feature valid_cp_mse_delta=0.12 \
+  --feature output_std=0.03 --monotonic valid_cp_mse_delta=increasing \
+  --expected-gate-cost 100 --out gate-report.json
+```
+
+The `gate` CLI fits the experimental model from strict JSONL `GateObservation` rows and optionally
+emits prediction, three-way verdict probabilities, acquisition score, and fit diagnostics. The
+GateModel remains in the main crate: the CLI currently has no independent schema or dependencies,
+so extracting `lineprior-gate` would add packaging surface without a demonstrated consumer boundary.
+
+- **Monotonic constraints are opt-in.** `GateModelConfig::monotonic_constraints` projects named
+  coefficients to the requested increasing/decreasing sign orthant. The constrained fit is a
+  conservative shape constraint, and its closed-form ridge uncertainty is only an approximation;
+  validate it against real gate history before using it for scheduling.
+
 - **Named features, not a fixed schema.** `GateObservation.features`/`GateQuery.features` are a
   caller-named `BTreeMap<String, f64>` (e.g. `valid_cp_mse_delta`, `output_std`, `conflict_rate`),
   so the diagnostic set can evolve without a schema break. Deliberately excludes anything like a
@@ -581,10 +674,10 @@ let prediction = output.model.predict(&GateQuery { features });
   instead of matching on `prediction_status` itself. `expected_elo`/`interval_low`/`interval_high`/
   `probability_positive` are always the model's real prediction, even when `recommend_for_gate` is
   `false`: an out-of-distribution query is flagged, never silently zeroed or replaced.
-- **This is the first, smallest slice of a larger design** (uncertainty-first prediction and
-  out-of-distribution abstention, done; then a gate-verdict probability layer, then a gate
-  acquisition function, then monotonic constraints) -- see `tasks/todo.md` for what's deliberately
-  deferred and why. No CLI subcommand yet.
+- **This remains an experimental diagnostic surface.** Verdict probabilities, acquisition, and
+  monotonic constraints are implemented, but real gate-history calibration and downstream validation
+  are still required before scheduling expensive runs. The CLI is intentionally thin and the model
+  remains in the main crate until an independent schema/dependency boundary appears.
 
 ## Academic positioning
 
@@ -594,10 +687,76 @@ let prediction = output.model.predict(&GateQuery { features });
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-features --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
+cargo deny check licenses
+sh scripts/check_candidate_contract.sh
+sh scripts/run_examples_smoke.sh
+sh scripts/run_wasm_build_smoke.sh
 ```
+
+Dependency licenses are checked against the narrow SPDX allowlist in [`deny.toml`](./deny.toml);
+adding a new license requires an explicit policy review.
+
+The candidate contract script checks the fixed workspace version, JSON fixtures, language-example
+syntax, formatting, and whitespace. It does not replace runtime tests, WASM packaging, or real-data
+measurement gates.
+
+After building `lineprior-cli`, `sh scripts/run_examples_smoke.sh` runs the maintained Node.js and
+Python round-trip examples against the same binary. CI runs this smoke workflow; it checks the
+Rust-CLI integration boundary, not WASM packaging or real-data quality.
+
+The same built binary can run `sh scripts/run_offpolicy_smoke.sh` to evaluate the checked-in OPE
+fixture twice and compare the complete JSON report, including IPS, DR, and the bootstrap seed. This
+is a replayability check, not evidence of causal improvement.
+
+With the `wasm32-unknown-unknown` target installed, `sh scripts/run_wasm_build_smoke.sh` verifies
+that the `lineprior-wasm` crate compiles with the locked dependency graph. This is a compilation
+boundary only; npm/wasm-pack packaging and browser execution remain separate gates.
 
 See [`CHANGELOG.md`](./CHANGELOG.md) for release history, including which versions are published to
 crates.io and, from 0.9.0 on, notes on Rust source compatibility (distinct from JSON/serde input
 compatibility) for public API changes.
+## Pluggable scoring strategies
+
+`BuildConfig::scoring_strategy` supports `WeightedSum` (the backward-compatible
+default), `Bayesian`, `Ucb`, and `Softmax`. The CLI exposes these through
+`--scoring-strategy` and strategy parameters. These are ranking strategies, not
+quality guarantees.
+
+## Compact binary books
+
+JSONL remains the interchange format. Deterministic LPB v1 is available for
+local caching via `save_prior_book_binary` / `load_prior_book_binary`, or the
+CLI's `lineprior pack` and `lineprior unpack`. It preserves context entries,
+has a magic/version header and allocation caps, and rejects trailing bytes.
+
+## veridict on/off recipe
+
+See [`examples/veridict_prior_comparison.md`](examples/veridict_prior_comparison.md)
+and its manifest. The checked-in recipe is protocol-only until a real
+`veridict` run supplies downstream evidence.
+## Macro-actions and multi-source merge
+
+`build_macro_actions` extracts bounded contiguous action windows from ordered
+histories. It is intentionally eager because a sequence window must be held in
+memory; the normal streaming builder is unchanged. Independently-built books
+can be combined with `merge_prior_books` and explicit `PriorBookSource` weights,
+including context entries.
+
+The official typed domain boundaries are in
+[`lineprior-adapters`](crates/lineprior-adapters) and cover Sekirei, UI
+automation, LLM-agent tool traces, and retrosynthesis. They keep domain values
+opaque and do not claim legality, execution success, or chemical validity.
+## Terminal credit and Trie representation
+
+Set `BuildConfig::terminal_credit_weight` (or
+`--terminal-credit-weight`) to propagate the final known outcome of each
+sequence back to its kept steps. The default `0.0` preserves per-step labels;
+the opt-in mode buffers only the current sequence and requires grouped input.
+
+`PriorBook::to_trie()` materializes context entries into a deterministic
+`PriorTrie` for repeated longest-suffix queries. The flat book remains the
+canonical serialization format, and trie performance is still a measurement
+item rather than a quality claim.
