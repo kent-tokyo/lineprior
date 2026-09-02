@@ -35,12 +35,13 @@ def rank_metrics(candidates, expected):
 
 def similarity(book, neighbors, scale, max_neighbors, max_distance):
     selected = [n for n in neighbors if math.isfinite(n.get("distance", math.nan)) and n["distance"] >= 0
-                and (max_distance is None or n["distance"] <= max_distance)
-                and n.get("state") in book]
+                and (max_distance is None or n["distance"] <= max_distance)]
     selected.sort(key=lambda n: (n["distance"], n["state"], n.get("provenance", "")))
     if max_neighbors is not None: selected = selected[:max_neighbors]
     agg = {}
     for n in selected:
+        if n.get("state") not in book:
+            continue
         weight = math.exp(-n["distance"] / scale)
         for action in book[n["state"]]:
             key = action["action"]
