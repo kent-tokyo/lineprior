@@ -18,11 +18,11 @@ packages = {
     if package["name"].startswith("lineprior")
 }
 expected = {
-    "lineprior": "0.11.0",
-    "lineprior-adapters": "0.11.0",
-    "lineprior-cli": "0.11.0",
-    "lineprior-similarity": "0.11.0",
-    "lineprior-wasm": "0.11.0",
+    "lineprior": "0.11.1",
+    "lineprior-adapters": "0.11.1",
+    "lineprior-cli": "0.11.1",
+    "lineprior-similarity": "0.11.1",
+    "lineprior-wasm": "0.11.1",
 }
 if packages != expected:
     raise SystemExit(f"unexpected lineprior package versions: {packages!r}")
@@ -40,4 +40,4 @@ node --check examples/wasm/browser-smoke.mjs
 node -e 'const p=require("./examples/wasm/package.json"); if (p.devDependencies.playwright !== "1.55.0") process.exit(1)'
 python3 -c 'import ast; ast.parse(open("examples/python/roundtrip.py").read())'
 git diff --check
-echo "candidate contract: ok (version fixed at 0.11.0)"
+echo "candidate contract: ok (version fixed at 0.11.1)"

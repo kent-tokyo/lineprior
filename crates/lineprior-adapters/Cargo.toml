@@ -7,4 +7,4 @@ repository.workspace = true
 description = "Typed domain adapters that convert Sekirei, UI, agent, and retrosynthesis records to lineprior observations."
 
 [dependencies]
-lineprior = { path = "../lineprior", version = "0.11.0" }
+lineprior = { path = "../lineprior", version = "0.11.1" }

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1] - 2026-09-02 (not yet published)
+
+- Patch release for the post-v0.11.0 WASM browser smoke, deterministic Trie/macro-action
+  measurements, and publishing documentation/CI corrections.
+- No new scoring guarantee, causal capability, or counterfactual action generation is introduced.
+- The workspace remains version-locked at `0.11.1` for this release.
+
 ## [0.11.0] - 2026-09-02
 
 - Added pluggable Bayesian, UCB, and Softmax scoring strategies with the legacy weighted-sum

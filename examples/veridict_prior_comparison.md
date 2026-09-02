@@ -8,7 +8,7 @@ and stopping rule identical.
 
 Report paired downstream success/gate quality, coverage, fallback rate, wall
 time, evaluations, and abstentions. Record `veridict_commit`,
-`lineprior_version` (`0.11.0`), dataset ID, split, seeds, candidate budget,
+`lineprior_version` (`0.11.1`), dataset ID, split, seeds, candidate budget,
 and exact commands in a manifest. Store `off.jsonl`, `on.jsonl`, and
 `manifest.json` under an artifact directory.
 

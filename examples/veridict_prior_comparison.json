@@ -1,7 +1,7 @@
 {
   "status": "recipe_only",
   "downstream": "veridict",
-  "lineprior_version": "0.11.0",
+  "lineprior_version": "0.11.1",
   "arms": ["off", "on"],
   "pairing": "same_seed_and_candidate_set",
   "primary_metric": "paired_downstream_success_rate",
