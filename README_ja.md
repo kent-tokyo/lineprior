@@ -735,6 +735,9 @@ paired reward差分とpropensity事前確認には依存なしの
 `scripts/measure_offpolicy_arms.py`を使うと、両armのCLIレポートとpaired監査を1つのlineage付きartifactにまとめられます。
 保存前に `scripts/validate_measurement_artifact.py` でprotocol・lineage・必須指標・固定バージョンの
 artifact契約を確認できます。これは形式検証であり、downstream改善の証拠やgate通過ではありません。
+再現可能なローカル引き渡しには `scripts/run_ecosystem_matrix_smoke.sh` を使えます。Rust・Python・Nodeの
+実行時バージョンを記録してCLI・OPE・measurement smokeを再生しますが、全対応バージョンの証明や実データ品質の
+証拠ではありません。
 ## macro-actions と multi-source merge
 
 `build_macro_actions` は順序付き履歴から連続した action window を抽出します。window を保持する必要があるため

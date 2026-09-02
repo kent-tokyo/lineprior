@@ -39,10 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build -p lineprior-cli --locked
-      - run: sh scripts/run_examples_smoke.sh
-      - run: sh scripts/run_offpolicy_smoke.sh
-      - run: sh scripts/run_measurement_smoke.sh
+      - run: sh scripts/run_ecosystem_matrix_smoke.sh
 
   wasm-build-smoke:
     runs-on: ubuntu-latest
