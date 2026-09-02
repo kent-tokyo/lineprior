@@ -29,12 +29,31 @@ def load_book(path):
 
 def load_queries(path):
     rows = []
+    query_ids = set()
     for line_no, line in enumerate(pathlib.Path(path).read_text().splitlines(), 1):
         if not line.strip(): continue
         row = json.loads(line)
         for key in ("query_id", "state", "expected_action", "neighbors"):
             if key not in row: raise ValueError(f"queries line {line_no}: missing {key}")
+        if any(not isinstance(row[key], str) or not row[key].strip()
+               for key in ("query_id", "state", "expected_action")):
+            raise ValueError(f"queries line {line_no}: query_id, state, and expected_action must be non-empty strings")
+        if row["query_id"] in query_ids:
+            raise ValueError(f"queries line {line_no}: duplicate query_id")
+        query_ids.add(row["query_id"])
+        if not isinstance(row["neighbors"], list):
+            raise ValueError(f"queries line {line_no}: neighbors must be a list")
+        for neighbor_no, neighbor in enumerate(row["neighbors"], 1):
+            if not isinstance(neighbor, dict) or not isinstance(neighbor.get("state"), str) or not neighbor["state"].strip():
+                raise ValueError(f"queries line {line_no}: neighbor {neighbor_no} has invalid state")
+            distance = neighbor.get("distance")
+            if isinstance(distance, bool) or not isinstance(distance, (int, float)) or not math.isfinite(distance) or distance < 0:
+                raise ValueError(f"queries line {line_no}: neighbor {neighbor_no} has invalid distance")
+            if "provenance" in neighbor and (not isinstance(neighbor["provenance"], str) or not neighbor["provenance"].strip()):
+                raise ValueError(f"queries line {line_no}: neighbor {neighbor_no} has invalid provenance")
         rows.append(row)
+    if not rows:
+        raise ValueError("queries contain no usable rows")
     return rows
 
 def rank_metrics(candidates, expected):

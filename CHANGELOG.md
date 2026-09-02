@@ -96,6 +96,8 @@ in this project, not automatic on every version bump. See each entry for its pub
 - The ecosystem smoke now exercises rejection of malformed matrix cell metadata before artifact upload.
 - Ecosystem artifact validation now checks that the requested Python and Node.js cell matches the
   corresponding recorded runtime major/minor version.
+- Similarity measurement input validation now rejects empty or duplicate query IDs, malformed
+  neighbor lists, non-finite/negative distances, and empty required strings before scoring.
 
 ### Fixed
 
