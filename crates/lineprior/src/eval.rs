@@ -464,6 +464,11 @@ mod tests {
         assert_eq!(report.context_coverage, Some(0.5));
         assert_eq!(report.context_fallback_rate, Some(0.5));
         assert_eq!(report.mean_matched_order, Some(0.5));
+        let context_brier = report.context_calibration_brier.unwrap();
+        assert!(
+            (0.0..=1.0).contains(&context_brier),
+            "context Brier score must stay in [0, 1], got {context_brier}"
+        );
     }
 
     #[test]
@@ -511,6 +516,7 @@ mod tests {
         assert_eq!(output.report.context_coverage, None);
         assert_eq!(output.report.context_fallback_rate, None);
         assert_eq!(output.report.mean_matched_order, None);
+        assert_eq!(output.report.context_calibration_brier, None);
     }
 
     #[test]
