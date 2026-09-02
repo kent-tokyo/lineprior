@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kent-tokyo/lineprior/blob/main/docs/measurements/offpolicy-integrated-arms-v1.schema.json",
+  "title": "lineprior offpolicy-integrated-arms-v1 artifact",
+  "type": "object",
+  "required": ["protocol", "measurement", "arms", "paired"],
+  "properties": {
+    "protocol": {"const": "offpolicy-integrated-arms-v1"},
+    "measurement": {"$ref": "#/$defs/measurement"},
+    "arms": {
+      "type": "object",
+      "required": ["off", "on"],
+      "properties": {"off": {"$ref": "#/$defs/arm"}, "on": {"$ref": "#/$defs/arm"}},
+      "additionalProperties": true
+    },
+    "paired": {"$ref": "#/$defs/paired"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "measurement": {
+      "type": "object",
+      "required": ["dataset_id", "split", "lineprior_version", "input_sha256"],
+      "properties": {
+        "dataset_id": {"type": "string"},
+        "split": {"type": "string"},
+        "lineprior_version": {"const": "0.11.1"},
+        "policy_version": {"type": "string"},
+        "input_sha256": {"type": "object", "required": ["off", "on"], "properties": {"off": {"$ref": "#/$defs/digest"}, "on": {"$ref": "#/$defs/digest"}}}
+      },
+      "additionalProperties": true
+    },
+    "estimate": {"type": "object", "required": ["estimate"], "properties": {"estimate": {"type": ["number", "null"]}}, "additionalProperties": true},
+    "arm": {
+      "type": "object",
+      "required": ["ips", "doubly_robust", "bootstrap"],
+      "properties": {
+        "ips": {"type": "object", "required": ["ips", "self_normalized_ips"], "additionalProperties": true},
+        "doubly_robust": {"$ref": "#/$defs/estimate"},
+        "bootstrap": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "paired": {
+      "type": "object",
+      "required": ["protocol", "measurement", "paired_rows", "off", "on"],
+      "properties": {
+        "protocol": {"const": "offpolicy-paired-arms-v1"},
+        "measurement": {"$ref": "#/$defs/measurement"},
+        "paired_rows": {"type": "integer", "minimum": 0},
+        "off": {"type": "object"},
+        "on": {"type": "object"}
+      },
+      "additionalProperties": true
+    }
+  }
+}

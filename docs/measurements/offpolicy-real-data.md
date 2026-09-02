@@ -3,6 +3,10 @@
 This protocol is the measurement handoff for Phase C. `lineprior` estimates
 what the supplied logged-policy assumptions imply; it cannot repair missing
 propensities or create counterfactual outcomes.
+The machine-readable integrated artifact contract is
+[`offpolicy-integrated-arms-v1.schema.json`](offpolicy-integrated-arms-v1.schema.json).
+The repository validator additionally checks paired/top-level lineage equality
+and finite metric semantics.
 
 ## Required log fields
 

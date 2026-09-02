@@ -42,7 +42,8 @@ node --check examples/node/roundtrip.mjs
 node --check examples/wasm/browser-smoke.mjs
 node -e 'const p=require("./examples/wasm/package.json"); if (p.devDependencies.playwright !== "1.55.0") process.exit(1)'
 python3 -c 'import ast; ast.parse(open("examples/python/roundtrip.py").read())'
-python3 -c 'import ast; [ast.parse(open(path).read()) for path in ("scripts/measure_similarity.py", "scripts/compare_offpolicy_arms.py", "scripts/measure_offpolicy_arms.py", "scripts/validate_measurement_artifact.py", "scripts/validate_ecosystem_runtime.py", "scripts/validate_wasm_runtime.py")]'
+python3 scripts/check_measurement_schemas.py
+python3 -c 'import ast; [ast.parse(open(path).read()) for path in ("scripts/measure_similarity.py", "scripts/compare_offpolicy_arms.py", "scripts/measure_offpolicy_arms.py", "scripts/validate_measurement_artifact.py", "scripts/check_measurement_schemas.py", "scripts/validate_ecosystem_runtime.py", "scripts/validate_wasm_runtime.py")]'
 test -x scripts/run_ecosystem_matrix_smoke.sh
 sh -n scripts/run_ecosystem_matrix_smoke.sh
 git diff --check

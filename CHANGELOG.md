@@ -109,6 +109,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   paths in addition to the existing schema, lineage, version, and metric checks.
 - Artifact validation now reports typed contract errors for non-object arm collections and malformed
   JSON instead of leaking an implementation traceback.
+- Added draft 2020-12 JSON Schemas for similarity and integrated off-policy artifacts, with candidate
+  and measurement smoke checks for their fixed protocol/version envelopes.
 
 ### Fixed
 

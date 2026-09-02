@@ -8,6 +8,7 @@ if [ ! -x "$binary" ]; then
   echo "lineprior executable not found or not executable: $binary" >&2
   exit 2
 fi
+python3 "$root/scripts/check_measurement_schemas.py"
 
 directory=$(mktemp -d "${TMPDIR:-/tmp}/lineprior-measurement-XXXXXX")
 trap 'rm -rf "$directory"' EXIT

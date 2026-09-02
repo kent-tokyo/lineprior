@@ -2,6 +2,10 @@
 
 This protocol is the measurement handoff for Phase B. It does not claim that
 similarity improves decisions until a real held-out dataset is supplied.
+The machine-readable artifact contract is
+[`similarity-real-data-v1.schema.json`](similarity-real-data-v1.schema.json).
+The repository validator additionally enforces fixed-version, numeric-range,
+and cross-artifact semantics that JSON Schema alone cannot express.
 
 ## Input contract
 

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kent-tokyo/lineprior/blob/main/docs/measurements/similarity-real-data-v1.schema.json",
+  "title": "lineprior similarity-real-data-v1 artifact",
+  "type": "object",
+  "required": ["protocol", "num_queries", "measurement", "arms"],
+  "properties": {
+    "protocol": {"const": "similarity-real-data-v1"},
+    "num_queries": {"type": "integer", "minimum": 0},
+    "measurement": {"$ref": "#/$defs/measurement"},
+    "arms": {
+      "type": "object",
+      "required": ["exact", "similarity", "no_prior"],
+      "properties": {
+        "exact": {"$ref": "#/$defs/arm"},
+        "similarity": {"$ref": "#/$defs/arm"},
+        "no_prior": {"$ref": "#/$defs/arm"}
+      },
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "unit": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "arm": {
+      "type": "object",
+      "required": ["coverage", "abstention_rate", "top1_hit_rate", "mrr", "calibration_brier"],
+      "properties": {
+        "coverage": {"$ref": "#/$defs/unit"},
+        "abstention_rate": {"$ref": "#/$defs/unit"},
+        "top1_hit_rate": {"$ref": "#/$defs/unit"},
+        "mrr": {"$ref": "#/$defs/unit"},
+        "calibration_brier": {"$ref": "#/$defs/unit"},
+        "latency_us_p50": {"type": ["number", "null"]},
+        "latency_us_p95": {"type": ["number", "null"]},
+        "peak_rss_kb": {"type": ["number", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "measurement": {
+      "type": "object",
+      "required": ["dataset_id", "split", "feature_version", "lineprior_version", "input_sha256", "prior_config_fingerprint"],
+      "properties": {
+        "dataset_id": {"type": "string"},
+        "split": {"type": "string"},
+        "feature_version": {"type": "string"},
+        "lineprior_version": {"const": "0.11.1"},
+        "prior_config_fingerprint": {"type": ["string", "integer"]},
+        "input_sha256": {"type": "object", "required": ["prior", "queries"], "properties": {"prior": {"$ref": "#/$defs/digest"}, "queries": {"$ref": "#/$defs/digest"}}}
+      },
+      "additionalProperties": true
+    }
+  }
+}
