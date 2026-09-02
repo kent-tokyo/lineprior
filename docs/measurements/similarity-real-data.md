@@ -16,6 +16,8 @@ Prepare three immutable artifacts:
 
 Keep the split by sequence/case, and record dataset ID, split rule, feature
 version, `SimilarityConfig`, toolchain, hardware, and random seed (if any).
+The runner records `dataset_id`, `split`, `feature_version`, and
+`lineprior_version` in its output; pass them explicitly for every artifact.
 
 ## Paired arms
 

@@ -12,6 +12,8 @@ policy probability for that same action. For DR, also provide both explicit
 reward-model values: evaluation-policy value and logged-action value. Record
 policy commit/config, lineprior config/version, dataset/split ID, and schema
 version.
+The paired runner records `dataset_id`, `split`, and `lineprior_version` in
+its output; pass them explicitly rather than relying on defaults.
 
 ## Preflight and paired arms
 

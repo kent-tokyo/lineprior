@@ -58,6 +58,7 @@ in this project, not automatic on every version bump. See each entry for its pub
   evaluation; no result is claimed without supplied real logs.
 - Extended the fixed-version candidate contract to validate measurement fixtures and runner syntax.
 - Added a CI measurement smoke for deterministic similarity-arm and paired on/off runner replay.
+- Measurement reports now carry explicit dataset/split and version metadata for artifact lineage.
 
 ### Fixed
 

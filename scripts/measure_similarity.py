@@ -68,6 +68,8 @@ def main():
     ap.add_argument("prior"); ap.add_argument("queries"); ap.add_argument("--out", required=True)
     ap.add_argument("--distance-scale", type=float, default=1.0)
     ap.add_argument("--max-neighbors", type=int); ap.add_argument("--max-distance", type=float)
+    ap.add_argument("--dataset-id", default="unspecified"); ap.add_argument("--split", default="unspecified")
+    ap.add_argument("--feature-version", default="unspecified"); ap.add_argument("--lineprior-version", default="0.11.1")
     args = ap.parse_args()
     if not math.isfinite(args.distance_scale) or args.distance_scale <= 0: raise SystemExit("distance-scale must be finite and > 0")
     book, queries = load_book(args.prior), load_queries(args.queries)
@@ -79,7 +81,10 @@ def main():
             rank, hit, confidence = rank_metrics(candidates, row["expected_action"])
             arms[arm].append({"rank": rank, "hit": hit, "confidence": confidence,
                               "latency_us": (time.perf_counter_ns() - start) / 1000.0})
-    report = {"protocol": "similarity-real-data-v1", "num_queries": len(queries), "arms": {}}
+    report = {"protocol": "similarity-real-data-v1", "num_queries": len(queries),
+              "measurement": {"dataset_id": args.dataset_id, "split": args.split,
+                               "feature_version": args.feature_version,
+                               "lineprior_version": args.lineprior_version}, "arms": {}}
     for name, rows in arms.items():
         evaluated = [r for r in rows if r["rank"] is not None]
         hits = sum(r["hit"] for r in rows)

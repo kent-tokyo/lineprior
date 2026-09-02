@@ -46,6 +46,8 @@ def main():
     ap.add_argument("off"); ap.add_argument("on"); ap.add_argument("--out", required=True)
     ap.add_argument("--bootstrap-resamples", type=int, default=2000); ap.add_argument("--bootstrap-seed", type=int, default=42)
     ap.add_argument("--confidence-level", type=float, default=.95)
+    ap.add_argument("--dataset-id", default="unspecified"); ap.add_argument("--split", default="unspecified")
+    ap.add_argument("--lineprior-version", default="0.11.1")
     args = ap.parse_args()
     if args.bootstrap_resamples <= 0 or not 0 < args.confidence_level < 1: raise SystemExit("invalid bootstrap controls")
     off, on = load(args.off), load(args.on)
@@ -58,6 +60,8 @@ def main():
     samples.sort()
     alpha = (1 - args.confidence_level) / 2
     report = {"protocol": "offpolicy-paired-arms-v1", "paired_rows": len(ids),
+      "measurement": {"dataset_id": args.dataset_id, "split": args.split,
+                       "lineprior_version": args.lineprior_version},
       "off": propensity_audit(off), "on": propensity_audit(on),
       "observed_reward_mean": {"off": sum(float(off[k]["reward"]) for k in ids) / len(ids) if ids else None,
                                 "on": sum(float(on[k]["reward"]) for k in ids) / len(ids) if ids else None},
