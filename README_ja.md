@@ -730,6 +730,7 @@ IPS / DR のpropensity・overlap事前確認、bootstrap不確実性、lineprior
 [`docs/measurements/offpolicy-real-data.md`](docs/measurements/offpolicy-real-data.md)に分離しています。
 paired reward差分とpropensity事前確認には依存なしの
 `scripts/compare_offpolicy_arms.py`を使い、IPS / DRの推定値は各armに対してRust CLIを個別に実行します。
+`scripts/measure_offpolicy_arms.py`を使うと、両armのCLIレポートとpaired監査を1つのlineage付きartifactにまとめられます。
 ## macro-actions と multi-source merge
 
 `build_macro_actions` は順序付き履歴から連続した action window を抽出します。window を保持する必要があるため

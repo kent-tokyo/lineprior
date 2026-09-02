@@ -59,6 +59,8 @@ in this project, not automatic on every version bump. See each entry for its pub
 - Extended the fixed-version candidate contract to validate measurement fixtures and runner syntax.
 - Added a CI measurement smoke for deterministic similarity-arm and paired on/off runner replay.
 - Measurement reports now carry explicit dataset/split and version metadata for artifact lineage.
+- Added an integrated paired OPE runner that combines per-arm Rust IPS/DR reports with the
+  observed-reward pairing audit.
 
 ### Fixed
 

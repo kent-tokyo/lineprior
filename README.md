@@ -355,6 +355,8 @@ before interpreting downstream improvement.
 For paired observed-reward deltas and propensity preflight, use the dependency-free
 `scripts/compare_offpolicy_arms.py`; run the Rust `lineprior offpolicy` command separately on
 each arm for IPS/DR estimates and bootstrap intervals.
+`scripts/measure_offpolicy_arms.py` combines those two CLI reports with the paired audit into one
+lineage-tagged artifact.
 
 ## Variable-order context
 

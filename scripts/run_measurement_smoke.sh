@@ -16,6 +16,7 @@ similarity_first="$directory/similarity-1.json"
 similarity_second="$directory/similarity-2.json"
 paired_first="$directory/paired-1.json"
 paired_second="$directory/paired-2.json"
+integrated="$directory/integrated.json"
 
 "$binary" build "$root/crates/lineprior-similarity/tests/fixtures/unseen_states.jsonl" --out "$prior" >/dev/null
 python3 "$root/scripts/measure_similarity.py" "$prior" "$root/examples/similarity_queries.jsonl" --out "$similarity_first"
@@ -26,4 +27,6 @@ python3 "$root/scripts/compare_offpolicy_arms.py" "$root/examples/offpolicy_off.
 python3 "$root/scripts/compare_offpolicy_arms.py" "$root/examples/offpolicy_off.jsonl" "$root/examples/offpolicy_on.jsonl" --out "$paired_second" --bootstrap-resamples 64 --bootstrap-seed 42
 cmp -s "$paired_first" "$paired_second"
 python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); assert r["paired_rows"] == 2; assert r["paired_reward_delta_on_minus_off"] == 0.5; assert r["off"]["overlap_failures"] == 0' "$paired_first"
+python3 "$root/scripts/measure_offpolicy_arms.py" "$root/examples/offpolicy_off.jsonl" "$root/examples/offpolicy_on.jsonl" --lineprior-bin "$binary" --out "$integrated" --dataset-id fixture-v1 --split heldout --policy-version 0.11.1 --bootstrap-resamples 64 --bootstrap-seed 42
+python3 -c 'import json, pathlib, sys; r=json.loads(pathlib.Path(sys.argv[1]).read_text()); assert r["protocol"] == "offpolicy-integrated-arms-v1"; assert r["arms"]["off"]["doubly_robust"]["estimate"] is not None; assert r["paired"]["paired_reward_delta_on_minus_off"] == 0.5' "$integrated"
 echo "measurement smoke: ok (similarity arms + paired OPE audit)"

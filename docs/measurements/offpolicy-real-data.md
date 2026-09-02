@@ -34,6 +34,9 @@ lineprior offpolicy heldout.jsonl --out report.json \
   --doubly-robust --bootstrap-resamples 2000 --bootstrap-seed 42
 ```
 
+For a single paired artifact that runs the Rust CLI for both arms and adds
+the observed-reward pairing audit, use `scripts/measure_offpolicy_arms.py`.
+
 The causal/downstream gate requires valid overlap, uncertainty intervals,
 and a paired held-out improvement of `on` over `off` at the declared cost and
 abstention budget. A point estimate, a replayable fixture, or a ranking
