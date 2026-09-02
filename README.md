@@ -416,9 +416,10 @@ things. `hit_rate_by_matched_order` breaks accuracy down *by* the depth backoff 
 available, or just rarer." `context_coverage`, `context_fallback_rate`, and
 `mean_matched_order` additionally report how often an evaluated query used order >= 1, fell back
 to order 0, and the average depth reached. These are conditional on order-0 candidates existing;
-ordinary state abstentions remain in `fallback_rate`. All six context diagnostics are
-empty/`None` at `--context-order 0`. `lineprior tune`
-surfaces all five context quality/support fields per candidate in `all_results`, so `--param
+ordinary state abstentions remain in `fallback_rate`. `context_calibration_brier` reports the
+confidence-vs-hit Brier score over the context-aware multi-step path. All seven context diagnostics
+are empty/`None` at `--context-order 0`. `lineprior tune`
+surfaces the context quality/support/calibration fields per candidate in `all_results`, so `--param
 context-order=0,1,2,3` sweeps show the lift directly — no new `--objective` needed, since the
 existing objectives already read the order-0 fields those sweeps vary.
 

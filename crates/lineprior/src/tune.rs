@@ -276,6 +276,7 @@ pub struct TuneMetrics {
     pub context_coverage: Option<f64>,
     pub context_fallback_rate: Option<f64>,
     pub mean_matched_order: Option<f64>,
+    pub context_calibration_brier: Option<f64>,
 }
 
 /// One evaluated grid candidate's outcome. Note the field is
@@ -317,6 +318,7 @@ pub fn build_candidate_result(
             context_coverage: report.context_coverage,
             context_fallback_rate: report.context_fallback_rate,
             mean_matched_order: report.mean_matched_order,
+            context_calibration_brier: report.context_calibration_brier,
         },
         build_config,
     }
@@ -459,6 +461,7 @@ mod tests {
             context_coverage: None,
             context_fallback_rate: None,
             mean_matched_order: None,
+            context_calibration_brier: None,
             confidence_calibration: Vec::new(),
             threshold_sweep: Vec::new(),
         }
@@ -481,6 +484,7 @@ mod tests {
                 context_coverage: None,
                 context_fallback_rate: None,
                 mean_matched_order: None,
+                context_calibration_brier: None,
             },
             objective_value,
             meets_constraints,
@@ -683,6 +687,7 @@ mod tests {
             context_coverage: None,
             context_fallback_rate: None,
             mean_matched_order: None,
+            context_calibration_brier: None,
         };
         results.push(TuneCandidateResult {
             config_id: "cfg_001".to_string(),
@@ -700,6 +705,7 @@ mod tests {
                 context_coverage: None,
                 context_fallback_rate: None,
                 mean_matched_order: None,
+                context_calibration_brier: None,
             },
             objective_value: 0.0,
             meets_constraints: true,
@@ -720,6 +726,7 @@ mod tests {
                 context_coverage: None,
                 context_fallback_rate: None,
                 mean_matched_order: None,
+                context_calibration_brier: None,
             },
             objective_value: 0.0,
             meets_constraints: true,

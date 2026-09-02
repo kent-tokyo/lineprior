@@ -926,6 +926,10 @@ pub struct EvalReport {
     /// Mean matched context order over evaluated context queries. This is a
     /// depth diagnostic, not a measure of predictive quality.
     pub mean_matched_order: Option<f64>,
+    /// Brier score of context-aware top1 confidence versus hit/miss. This is
+    /// an aggregate calibration diagnostic over the multi-step context path,
+    /// and is `None` when context is disabled or no context query was scored.
+    pub context_calibration_brier: Option<f64>,
     /// Ranking quality bucketed by the #1 candidate's confidence. Empty
     /// unless [`EvalConfig::calibration_bins`] was set.
     pub confidence_calibration: Vec<CalibrationBin>,
@@ -1012,6 +1016,8 @@ struct EvalAccumulator<'a> {
     context_match_count: u64,
     context_fallback_count: u64,
     context_order_sum: u64,
+    context_calibration_squared_error_sum: f64,
+    context_calibration_count: u64,
     /// Keyed by matched order (`0` = order-0 rung). Small -- bounded by
     /// `context_order`, never by observation count.
     matched_order_counts: HashMap<usize, MatchedOrderAcc>,
@@ -1067,6 +1073,8 @@ impl<'a> EvalAccumulator<'a> {
             context_match_count: 0,
             context_fallback_count: 0,
             context_order_sum: 0,
+            context_calibration_squared_error_sum: 0.0,
+            context_calibration_count: 0,
             matched_order_counts: HashMap::new(),
             num_test_observations: 0,
             test_states_seen: HashSet::new(),
@@ -1181,6 +1189,9 @@ impl<'a> EvalAccumulator<'a> {
             self.context_order_sum += context_result.matched_order as u64;
             let context_top1 = &context_result.candidates[0];
             let context_is_hit = context_top1.action == obs.action;
+            self.context_calibration_squared_error_sum +=
+                (context_top1.confidence - if context_is_hit { 1.0 } else { 0.0 }).powi(2);
+            self.context_calibration_count += 1;
             if context_is_hit {
                 self.context_top1_hit_count += 1;
             }
@@ -1302,6 +1313,7 @@ impl<'a> EvalAccumulator<'a> {
             context_coverage,
             context_fallback_rate,
             mean_matched_order,
+            context_calibration_brier,
         ) = if self.context_order > 0 {
             let mut orders: Vec<usize> = self.matched_order_counts.keys().copied().collect();
             orders.sort_unstable();
@@ -1323,9 +1335,13 @@ impl<'a> EvalAccumulator<'a> {
                 ratio(self.context_match_count as f64, evaluated),
                 ratio(self.context_fallback_count as f64, evaluated),
                 ratio(self.context_order_sum as f64, evaluated),
+                ratio(
+                    self.context_calibration_squared_error_sum,
+                    self.context_calibration_count as f64,
+                ),
             )
         } else {
-            (None, None, Vec::new(), None, None, None)
+            (None, None, Vec::new(), None, None, None, None)
         };
 
         EvalReport {
@@ -1368,6 +1384,7 @@ impl<'a> EvalAccumulator<'a> {
             context_coverage,
             context_fallback_rate,
             mean_matched_order,
+            context_calibration_brier,
             confidence_calibration,
             threshold_sweep,
         }

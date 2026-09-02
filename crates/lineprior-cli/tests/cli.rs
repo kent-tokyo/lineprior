@@ -697,6 +697,7 @@ fn eval_command_with_context_order_reports_context_aware_fields() {
     let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert!(report["context_top1_hit_rate"].is_number());
     assert!(report["context_mean_reciprocal_rank"].is_number());
+    assert!(report["context_calibration_brier"].is_number());
     assert!(
         !report["hit_rate_by_matched_order"]
             .as_array()

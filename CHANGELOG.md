@@ -63,6 +63,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   observed-reward pairing audit.
 - Added a measurement-artifact contract checker for protocol, lineage, required metrics, and the
   fixed `0.11.1` version envelope; it validates shape only and does not pass a quality gate.
+- Added context-path Brier calibration diagnostics to `eval` and `tune`, separate from order-0
+  calibration bins and unchanged when context is disabled.
 
 ### Fixed
 
