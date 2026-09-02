@@ -273,6 +273,9 @@ pub struct TuneMetrics {
     /// `top1_hit_rate`/`mean_reciprocal_rank`, which stay order-0.
     pub context_top1_hit_rate: Option<f64>,
     pub context_mean_reciprocal_rank: Option<f64>,
+    pub context_coverage: Option<f64>,
+    pub context_fallback_rate: Option<f64>,
+    pub mean_matched_order: Option<f64>,
 }
 
 /// One evaluated grid candidate's outcome. Note the field is
@@ -311,6 +314,9 @@ pub fn build_candidate_result(
             failure_agreement_top1_hit_rate: report.failure_agreement_top1_hit_rate,
             context_top1_hit_rate: report.context_top1_hit_rate,
             context_mean_reciprocal_rank: report.context_mean_reciprocal_rank,
+            context_coverage: report.context_coverage,
+            context_fallback_rate: report.context_fallback_rate,
+            mean_matched_order: report.mean_matched_order,
         },
         build_config,
     }
@@ -472,6 +478,9 @@ mod tests {
                 failure_agreement_top1_hit_rate: None,
                 context_top1_hit_rate: None,
                 context_mean_reciprocal_rank: None,
+                context_coverage: None,
+                context_fallback_rate: None,
+                mean_matched_order: None,
             },
             objective_value,
             meets_constraints,
@@ -671,6 +680,9 @@ mod tests {
             failure_agreement_top1_hit_rate: None,
             context_top1_hit_rate: None,
             context_mean_reciprocal_rank: None,
+            context_coverage: None,
+            context_fallback_rate: None,
+            mean_matched_order: None,
         };
         results.push(TuneCandidateResult {
             config_id: "cfg_001".to_string(),
@@ -685,6 +697,9 @@ mod tests {
                 failure_agreement_top1_hit_rate: None,
                 context_top1_hit_rate: None,
                 context_mean_reciprocal_rank: None,
+                context_coverage: None,
+                context_fallback_rate: None,
+                mean_matched_order: None,
             },
             objective_value: 0.0,
             meets_constraints: true,
@@ -702,6 +717,9 @@ mod tests {
                 failure_agreement_top1_hit_rate: None,
                 context_top1_hit_rate: None,
                 context_mean_reciprocal_rank: None,
+                context_coverage: None,
+                context_fallback_rate: None,
+                mean_matched_order: None,
             },
             objective_value: 0.0,
             meets_constraints: true,
