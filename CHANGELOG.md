@@ -1,11 +1,14 @@
 # Changelog
 
-## [0.11.1] - 2026-09-02 (not yet published)
+## [0.11.1] - 2026-09-02
 
 - Patch release for the post-v0.11.0 WASM browser smoke, deterministic Trie/macro-action
   measurements, and publishing documentation/CI corrections.
 - No new scoring guarantee, causal capability, or counterfactual action generation is introduced.
 - The workspace remains version-locked at `0.11.1` for this release.
+- `lineprior` and `lineprior-cli` were published through GitHub Actions/OIDC (runs
+  `33624581825` and `33624654702`). The three new workspace crates passed packaging and dry-run
+  validation but still require the one-time manual crates.io bootstrap described below.
 
 ## [0.11.0] - 2026-09-02
 
