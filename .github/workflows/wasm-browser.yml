@@ -29,6 +29,6 @@ jobs:
           npm install --prefix examples/wasm --ignore-scripts=false
           npx --prefix examples/wasm playwright install --with-deps chromium
       - name: Build web package
-        run: wasm-pack build crates/lineprior-wasm --target web --out-dir target/wasm-web --release
+        run: cd crates/lineprior-wasm && wasm-pack build --target web --out-dir ../../target/wasm-web --release
       - name: Run browser round trip
         run: node examples/wasm/browser-smoke.mjs target/wasm-web

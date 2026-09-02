@@ -4,9 +4,13 @@ import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 
 const packageDir = resolve(process.argv[2] ?? "target/wasm-web");
+const packageEntry = join(packageDir, "lineprior_wasm.js");
+statSync(packageEntry);
 const server = createServer((request, response) => {
-  const relative = request.url === "/" ? "index.html" : request.url.slice(1);
-  const file = join(relative === "pkg/index.html" ? packageDir : packageDir, relative.replace(/^pkg\//, ""));
+  const relative = request.url?.startsWith("/pkg/")
+    ? decodeURIComponent(request.url.slice("/pkg/".length))
+    : "index.html";
+  const file = join(packageDir, relative);
   try {
     const stat = statSync(file);
     if (!stat.isFile()) throw new Error("not a file");
