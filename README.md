@@ -359,6 +359,9 @@ each arm for IPS/DR estimates and bootstrap intervals.
 lineage-tagged artifact.
 Use `scripts/validate_measurement_artifact.py` to check the artifact envelope before archiving it;
 this is schema/lineage validation, not evidence of downstream improvement.
+The machine-readable contracts are [`similarity-real-data-v1.schema.json`](docs/measurements/similarity-real-data-v1.schema.json)
+and [`offpolicy-integrated-arms-v1.schema.json`](docs/measurements/offpolicy-integrated-arms-v1.schema.json).
+The schemas describe the JSON shape; the validator adds semantic and cross-artifact checks.
 Similarity reports also retain the source prior's `build_config_fingerprint`, preventing results
 from different build configurations from being silently compared.
 Reports also include SHA-256 hashes of the input JSONL files, so a dataset ID cannot hide an

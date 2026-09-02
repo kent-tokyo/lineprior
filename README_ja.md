@@ -735,6 +735,9 @@ paired reward差分とpropensity事前確認には依存なしの
 `scripts/measure_offpolicy_arms.py`を使うと、両armのCLIレポートとpaired監査を1つのlineage付きartifactにまとめられます。
 保存前に `scripts/validate_measurement_artifact.py` でprotocol・lineage・必須指標・固定バージョンの
 artifact契約を確認できます。これは形式検証であり、downstream改善の証拠やgate通過ではありません。
+機械可読な契約は [`similarity-real-data-v1.schema.json`](docs/measurements/similarity-real-data-v1.schema.json) と
+[`offpolicy-integrated-arms-v1.schema.json`](docs/measurements/offpolicy-integrated-arms-v1.schema.json) です。
+SchemaはJSONの形を定義し、validatorは意味検証とartifact間の一致検証を追加で行います。
 similarity reportには元priorの `build_config_fingerprint` も引き継がれるため、異なるBuildConfigの結果を
 黙って比較することを防げます。
 reportには入力JSONLのSHA-256も含まれるため、dataset IDが同じまま入力が差し替えられた場合も検出できます。

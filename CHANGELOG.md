@@ -111,6 +111,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   JSON instead of leaking an implementation traceback.
 - Added draft 2020-12 JSON Schemas for similarity and integrated off-policy artifacts, with candidate
   and measurement smoke checks for their fixed protocol/version envelopes.
+- Linked the machine-readable measurement schemas from both READMEs and documented their boundary
+  with the semantic validator.
 
 ### Fixed
 
