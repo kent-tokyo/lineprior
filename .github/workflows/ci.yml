@@ -54,7 +54,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - run: sh scripts/run_wasm_build_smoke.sh
+      - run: sh scripts/run_wasm_build_smoke.sh --out wasm-runtime.json
+      - run: python3 scripts/validate_wasm_runtime.py wasm-runtime.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-runtime-${{ github.run_id }}
+          path: wasm-runtime.json
+          if-no-files-found: error
 
   audit:
     runs-on: ubuntu-latest

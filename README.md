@@ -370,6 +370,9 @@ Pass `--out runtime-report.json` to retain the runtime inventory, commit, fixed 
 checks as a machine-readable artifact; CI uploads this report from the examples smoke job.
 CI validates this envelope before upload, while keeping runtime coverage and real-data quality as
 separate gates.
+The WASM build smoke likewise records its `wasm32-unknown-unknown` target, Rust toolchain, commit,
+and fixed project version in a separately validated CI artifact; this remains compile evidence,
+not npm publication or browser-quality evidence.
 
 ## Variable-order context
 
