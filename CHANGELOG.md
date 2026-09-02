@@ -79,6 +79,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   drift rejection.
 - The ecosystem matrix smoke can now emit a versioned JSON runtime artifact, and CI uploads it for
   later reproduction instead of leaving the inventory only in logs.
+- CI now validates the runtime artifact envelope before upload, including fixed version, commit
+  shape, runtime inventory, and the executed-check list.
 
 ### Fixed
 

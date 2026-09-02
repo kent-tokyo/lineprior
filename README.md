@@ -368,6 +368,8 @@ Python, and Node versions before replaying the CLI, OPE, and measurement smoke s
 cover every supported runtime version or establish real-data quality.
 Pass `--out runtime-report.json` to retain the runtime inventory, commit, fixed project version, and
 checks as a machine-readable artifact; CI uploads this report from the examples smoke job.
+CI validates this envelope before upload, while keeping runtime coverage and real-data quality as
+separate gates.
 
 ## Variable-order context
 
