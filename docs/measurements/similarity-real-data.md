@@ -18,6 +18,9 @@ Keep the split by sequence/case, and record dataset ID, split rule, feature
 version, `SimilarityConfig`, toolchain, hardware, and random seed (if any).
 The runner records `dataset_id`, `split`, `feature_version`, and
 `lineprior_version` in its output; pass them explicitly for every artifact.
+Before archiving a real-data report, run the validator with
+`--require-explicit-lineage`; this rejects placeholder metadata such as
+`unspecified` while retaining a permissive mode for local fixture development.
 
 ## Paired arms
 

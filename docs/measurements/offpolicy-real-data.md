@@ -13,7 +13,10 @@ reward-model values: evaluation-policy value and logged-action value. Record
 policy commit/config, lineprior config/version, dataset/split ID, and schema
 version.
 The paired runner records `dataset_id`, `split`, and `lineprior_version` in
-its output; pass them explicitly rather than relying on defaults.
+its output, plus `policy_version` when supplied; pass them explicitly rather
+than relying on defaults. Before archiving, use
+`validate_measurement_artifact.py offpolicy --require-explicit-lineage` to
+reject placeholder lineage fields.
 
 ## Preflight and paired arms
 

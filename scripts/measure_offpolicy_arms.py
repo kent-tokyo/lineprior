@@ -37,6 +37,7 @@ def main():
         report = {"protocol": "offpolicy-integrated-arms-v1",
                   "measurement": {"dataset_id": args.dataset_id, "split": args.split,
                                   "lineprior_version": args.policy_version or "0.11.1",
+                                  "policy_version": args.policy_version or "unspecified",
                                   "input_sha256": {"off": sha256_file(args.off),
                                                    "on": sha256_file(args.on)}},
                   "arms": arm_reports, "paired": json.loads(paired_path.read_text())}

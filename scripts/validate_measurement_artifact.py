@@ -36,7 +36,7 @@ def validate_unit_interval(value, label, allow_none=True):
         raise ValueError(f"{label} must be finite and in [0, 1]")
 
 
-def validate_lineage(report, label):
+def validate_lineage(report, label, require_explicit):
     require(report, ("protocol", "measurement"), label)
     measurement = report["measurement"]
     required = ["dataset_id", "split", "lineprior_version", "input_sha256"]
@@ -48,10 +48,24 @@ def validate_lineage(report, label):
             f"{label}.measurement.lineprior_version must be {EXPECTED_VERSION}"
         )
     validate_hashes(measurement, ("prior", "queries") if label == "similarity" else ("off", "on"), label)
+    if require_explicit:
+        explicit = ["dataset_id", "split"]
+        if label == "similarity":
+            explicit += ["feature_version", "prior_config_fingerprint"]
+        else:
+            explicit.append("policy_version")
+        for key in explicit:
+            value = measurement.get(key)
+            if key == "prior_config_fingerprint":
+                if isinstance(value, bool) or not isinstance(value, (str, int)) or value == "unspecified":
+                    raise ValueError(f"{label}.measurement.{key} must be explicit when required")
+                continue
+            if not isinstance(value, str) or not value.strip() or value == "unspecified":
+                raise ValueError(f"{label}.measurement.{key} must be explicit when required")
 
 
-def validate_similarity(report):
-    validate_lineage(report, "similarity")
+def validate_similarity(report, require_explicit):
+    validate_lineage(report, "similarity", require_explicit)
     if report["protocol"] != "similarity-real-data-v1":
         raise ValueError("unexpected similarity protocol")
     require(report, ("num_queries", "arms"), "similarity")
@@ -67,8 +81,8 @@ def validate_similarity(report):
             validate_unit_interval(arm[metric], f"similarity.arms.{name}.{metric}")
 
 
-def validate_offpolicy(report):
-    validate_lineage(report, "offpolicy")
+def validate_offpolicy(report, require_explicit):
+    validate_lineage(report, "offpolicy", require_explicit)
     if report["protocol"] != "offpolicy-integrated-arms-v1":
         raise ValueError("unexpected integrated off-policy protocol")
     require(report, ("arms", "paired"), "offpolicy")
@@ -97,12 +111,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("kind", choices=("similarity", "offpolicy"))
     parser.add_argument("artifact")
+    parser.add_argument("--require-explicit-lineage", action="store_true")
     args = parser.parse_args()
     report = json.loads(pathlib.Path(args.artifact).read_text())
     if args.kind == "similarity":
-        validate_similarity(report)
+        validate_similarity(report, args.require_explicit_lineage)
     else:
-        validate_offpolicy(report)
+        validate_offpolicy(report, args.require_explicit_lineage)
     print(f"measurement artifact contract: ok ({args.kind})")
 
 

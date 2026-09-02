@@ -98,6 +98,10 @@ in this project, not automatic on every version bump. See each entry for its pub
   corresponding recorded runtime major/minor version.
 - Similarity measurement input validation now rejects empty or duplicate query IDs, malformed
   neighbor lists, non-finite/negative distances, and empty required strings before scoring.
+- Measurement artifact validation now has `--require-explicit-lineage`, requiring non-placeholder
+  dataset/split/feature-or-policy metadata, fixed version, fingerprints, and input hashes before
+  a real-data artifact is archived; fixture validation remains available without the flag.
+- The measurement smoke covers rejection of placeholder dataset lineage under the strict validator.
 
 ### Fixed
 
