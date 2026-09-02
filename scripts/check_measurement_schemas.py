@@ -40,6 +40,16 @@ def main():
             raise ValueError(f"{filename}: measurement required fields changed unexpectedly")
         if measurement.get("properties", {}).get("lineprior_version", {}).get("const") != "0.11.1":
             raise ValueError(f"{filename}: version is not fixed at 0.11.1")
+        digest = definitions.get("digest", {})
+        if digest.get("type") != "string" or digest.get("pattern") != "^[0-9a-f]{64}$":
+            raise ValueError(f"{filename}: digest constraint is incomplete")
+        unit = definitions.get("unit")
+        if filename.startswith("similarity") and (unit.get("type") != ["number", "null"] or unit.get("minimum") != 0 or unit.get("maximum") != 1):
+            raise ValueError(f"{filename}: unit interval constraint is incomplete")
+        arm_required = definitions.get("arm", {}).get("required", [])
+        expected_arm = {"coverage", "abstention_rate", "top1_hit_rate", "mrr", "calibration_brier"} if filename.startswith("similarity") else {"ips", "doubly_robust", "bootstrap"}
+        if set(arm_required) != expected_arm:
+            raise ValueError(f"{filename}: arm required fields changed unexpectedly")
     print("measurement JSON Schema contract: ok")
 
 
