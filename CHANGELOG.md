@@ -10,6 +10,8 @@
   official `lineprior-adapters` crate for four domain-neutral integration boundaries.
 - Added opt-in terminal-outcome credit propagation and deterministic `PriorTrie` materialization;
   both remain conservative opt-ins with real-data/performance measurement gates open.
+- Added and passed a wasm-pack plus headless Chromium browser smoke workflow (`33624039263`);
+  this validates package/runtime wiring, not npm publication or downstream quality.
 
 All notable changes to the workspace crates are documented here. They share one workspace version
 (`version.workspace = true`), so this file covers the library, CLI, adapters, similarity, and WASM
