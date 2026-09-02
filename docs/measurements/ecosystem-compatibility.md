@@ -21,6 +21,9 @@ validated `ecosystem-matrix-smoke-v1` JSON artifact, including the requested
 the commit, fixed project version, and checks that ran. The matrix catches
 CLI/example integration drift; it is not evidence of formal Python or npm
 bindings.
+Validation also compares the requested Python major/minor and Node.js major
+labels with the recorded runtime strings, so a mislabeled or misresolved CI
+cell is rejected before upload.
 
 ## Rust and WASM boundary
 

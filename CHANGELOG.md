@@ -94,6 +94,8 @@ in this project, not automatic on every version bump. See each entry for its pub
 - Ecosystem matrix artifacts now carry their requested Python and Node.js cell inside the JSON envelope,
   allowing CI to detect artifact/cell mismatches independently of the uploaded filename.
 - The ecosystem smoke now exercises rejection of malformed matrix cell metadata before artifact upload.
+- Ecosystem artifact validation now checks that the requested Python and Node.js cell matches the
+  corresponding recorded runtime major/minor version.
 
 ### Fixed
 

@@ -29,6 +29,12 @@ def main():
             raise ValueError("matrix python must be a major.minor version")
         if not re.fullmatch(r"\d+", matrix["node"]):
             raise ValueError("matrix node must be a major version")
+        actual_python = re.search(r"Python (\d+\.\d+)", runtimes["python"])
+        actual_node = re.search(r"v(\d+)(?:\.|$)", runtimes["node"])
+        if actual_python is None or actual_python.group(1) != matrix["python"]:
+            raise ValueError("matrix python does not match the recorded runtime")
+        if actual_node is None or actual_node.group(1) != matrix["node"]:
+            raise ValueError("matrix node does not match the recorded runtime")
     expected_checks = ["cli-roundtrip", "node-example", "python-example", "offpolicy", "measurement"]
     if report.get("checks") != expected_checks:
         raise ValueError("ecosystem check list changed unexpectedly")
