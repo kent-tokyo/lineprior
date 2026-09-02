@@ -6,21 +6,38 @@ import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 EXPECTED = {
-    "similarity-real-data-v1.schema.json": "similarity-real-data-v1",
-    "offpolicy-integrated-arms-v1.schema.json": "offpolicy-integrated-arms-v1",
+    "similarity-real-data-v1.schema.json": {
+        "protocol": "similarity-real-data-v1",
+        "root_required": {"protocol", "num_queries", "measurement", "arms"},
+        "measurement_required": {"dataset_id", "split", "feature_version", "lineprior_version", "input_sha256", "prior_config_fingerprint"},
+        "defs": {"digest", "unit", "arm", "measurement"},
+    },
+    "offpolicy-integrated-arms-v1.schema.json": {
+        "protocol": "offpolicy-integrated-arms-v1",
+        "root_required": {"protocol", "measurement", "arms", "paired"},
+        "measurement_required": {"dataset_id", "split", "lineprior_version", "input_sha256"},
+        "defs": {"digest", "measurement", "estimate", "arm", "paired"},
+    },
 }
 
 
 def main():
-    for filename, protocol in EXPECTED.items():
+    for filename, expected in EXPECTED.items():
         schema = json.loads((ROOT / "docs" / "measurements" / filename).read_text())
         if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
             raise ValueError(f"{filename}: unexpected JSON Schema dialect")
-        if schema.get("type") != "object" or schema.get("properties", {}).get("protocol", {}).get("const") != protocol:
+        if not isinstance(schema.get("$id"), str) or not schema["$id"].startswith("https://github.com/kent-tokyo/lineprior/"):
+            raise ValueError(f"{filename}: missing canonical repository $id")
+        if schema.get("type") != "object" or schema.get("properties", {}).get("protocol", {}).get("const") != expected["protocol"]:
             raise ValueError(f"{filename}: root protocol contract is incomplete")
-        if "measurement" not in schema.get("required", []):
-            raise ValueError(f"{filename}: measurement must be required")
-        measurement = schema.get("$defs", {}).get("measurement", {})
+        if set(schema.get("required", [])) != expected["root_required"]:
+            raise ValueError(f"{filename}: root required fields changed unexpectedly")
+        definitions = schema.get("$defs", {})
+        if set(definitions) != expected["defs"]:
+            raise ValueError(f"{filename}: definitions changed unexpectedly")
+        measurement = definitions.get("measurement", {})
+        if set(measurement.get("required", [])) != expected["measurement_required"]:
+            raise ValueError(f"{filename}: measurement required fields changed unexpectedly")
         if measurement.get("properties", {}).get("lineprior_version", {}).get("const") != "0.11.1":
             raise ValueError(f"{filename}: version is not fixed at 0.11.1")
     print("measurement JSON Schema contract: ok")

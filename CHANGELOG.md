@@ -113,6 +113,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   and measurement smoke checks for their fixed protocol/version envelopes.
 - Linked the machine-readable measurement schemas from both READMEs and documented their boundary
   with the semantic validator.
+- Strengthened the dependency-free schema checker to pin canonical IDs, root/measurement required
+  fields, and definition sets without introducing a new runtime dependency.
 
 ### Fixed
 
