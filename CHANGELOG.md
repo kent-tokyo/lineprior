@@ -48,6 +48,9 @@ in this project, not automatic on every version bump. See each entry for its pub
 
 ### Added
 
+- Added context prefix-support diagnostics to `summary`/`SummaryReport`, exposing distinct
+  prefixes, `(prefix, state)` entries, action entries, and raw count by context order.
+
 ### Fixed
 
 - Fixed the Python CLI round-trip example to resolve the checked-in UI-automation fixture from

@@ -386,6 +386,13 @@ unique `(state, action)` pairs at order 0, *plus* unique `(context, state, actio
 every order `1..=k`" — an inherent cost of the feature (more precision needs more storage), not a
 regression. `crates/lineprior/tests/streaming_memory.rs` has a regression test for this shape too.
 
+**Prefix support diagnostics.** `lineprior summary prior.jsonl` reports the number of
+context-conditioned entries and, for each context order, the number of distinct action prefixes,
+`(prefix, state)` entries, action entries, and stored raw observation counts. These are static
+support diagnostics for spotting sparse/deep contexts; they are not confidence guarantees or
+evidence that a context improves downstream decisions. The same values are available from the
+library's `SummaryReport::context_orders`.
+
 **Evaluating whether context actually helps.** `lineprior eval --context-order k` reports two new
 top-level fields alongside the usual order-0 ones, computed over the *same* test observations in
 the same run: `context_top1_hit_rate` / `context_mean_reciprocal_rank` (the context-aware

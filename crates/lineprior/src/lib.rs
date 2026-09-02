@@ -56,7 +56,7 @@ pub use query::{
     build_config_fingerprint, load_prior_book, load_prior_book_with_config, save_prior_book,
     save_prior_book_with_config,
 };
-pub use report::{StateEntropy, SummaryReport, state_entropy, summarize};
+pub use report::{ContextOrderSummary, StateEntropy, SummaryReport, state_entropy, summarize};
 pub use similarity::{
     SimilarState, SimilarityCandidate, SimilarityConfig, SimilarityEvidence, SimilarityQueryResult,
 };

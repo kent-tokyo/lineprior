@@ -38,6 +38,17 @@ pub fn run(args: SummaryArgs) -> Result<ExitCode> {
     println!("action entries:     {}", summary.num_action_entries);
     println!("avg confidence:     {:.3}", summary.avg_confidence);
     println!("avg entropy (bits): {:.3}", summary.avg_entropy_bits);
+    println!("context entries:    {}", summary.num_context_entries);
+    for order in &summary.context_orders {
+        println!(
+            "context order {}:  {} prefixes, {} states, {} actions, {} observations",
+            order.order,
+            order.num_prefixes,
+            order.num_states,
+            order.num_action_entries,
+            order.total_count
+        );
+    }
     println!();
     for entry in state_entropy(&book) {
         println!(
