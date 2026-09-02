@@ -30,6 +30,9 @@ print("workspace contract: ok")
 '
 
 python3 -c 'import json, pathlib, sys; rows=[json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line.strip()]; assert all(isinstance(row, dict) for row in rows)' examples/offpolicy.jsonl
+python3 -c 'import json, pathlib, sys; rows=[json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line.strip()]; assert all(isinstance(row, dict) for row in rows)' examples/offpolicy_off.jsonl
+python3 -c 'import json, pathlib, sys; rows=[json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line.strip()]; assert all(isinstance(row, dict) for row in rows)' examples/offpolicy_on.jsonl
+python3 -c 'import json, pathlib, sys; rows=[json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line.strip()]; assert all(isinstance(row, dict) for row in rows)' examples/similarity_queries.jsonl
 python3 -c 'import json, pathlib, sys; rows=[json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line.strip()]; assert all(isinstance(row, dict) for row in rows)' examples/ui_automation.jsonl
 python3 -c 'import json, pathlib, sys; rows=[json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line.strip()]; assert all(isinstance(row, dict) for row in rows)' crates/lineprior-similarity/tests/fixtures/unseen_states.jsonl
 python3 -c 'import json, pathlib; json.loads(pathlib.Path("examples/veridict_prior_comparison.json").read_text())'
@@ -39,5 +42,6 @@ node --check examples/node/roundtrip.mjs
 node --check examples/wasm/browser-smoke.mjs
 node -e 'const p=require("./examples/wasm/package.json"); if (p.devDependencies.playwright !== "1.55.0") process.exit(1)'
 python3 -c 'import ast; ast.parse(open("examples/python/roundtrip.py").read())'
+python3 -c 'import ast; [ast.parse(open(path).read()) for path in ("scripts/measure_similarity.py", "scripts/compare_offpolicy_arms.py")]'
 git diff --check
 echo "candidate contract: ok (version fixed at 0.11.1)"
