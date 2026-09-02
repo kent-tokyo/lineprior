@@ -73,6 +73,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   lineage and reject conflicting fingerprint headers.
 - Similarity and paired OPE artifacts now include SHA-256 hashes of their input JSONL files for
   immutable dataset lineage.
+- Artifact validation now checks SHA-256 syntax and rejects integrated OPE reports whose paired
+  audit hashes differ from the top-level inputs.
 
 ### Fixed
 

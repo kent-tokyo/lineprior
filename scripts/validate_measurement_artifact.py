@@ -20,6 +20,15 @@ def require(mapping, keys, label):
         raise ValueError(f"{label}: missing {', '.join(missing)}")
 
 
+def validate_hashes(measurement, expected_keys, label):
+    hashes = measurement["input_sha256"]
+    require(hashes, expected_keys, f"{label}.input_sha256")
+    for key in expected_keys:
+        value = hashes[key]
+        if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+            raise ValueError(f"{label}.input_sha256.{key} must be a lowercase SHA-256 hex digest")
+
+
 def validate_lineage(report, label):
     require(report, ("protocol", "measurement"), label)
     measurement = report["measurement"]
@@ -31,6 +40,7 @@ def validate_lineage(report, label):
         raise ValueError(
             f"{label}.measurement.lineprior_version must be {EXPECTED_VERSION}"
         )
+    validate_hashes(measurement, ("prior", "queries") if label == "similarity" else ("off", "on"), label)
 
 
 def validate_similarity(report):
@@ -66,6 +76,8 @@ def validate_offpolicy(report):
     require(paired, ("protocol", "measurement", "paired_rows", "off", "on"), "offpolicy.paired")
     if paired["protocol"] != "offpolicy-paired-arms-v1":
         raise ValueError("unexpected paired off-policy protocol")
+    if paired["measurement"]["input_sha256"] != report["measurement"]["input_sha256"]:
+        raise ValueError("offpolicy paired input hashes do not match the integrated report")
 
 
 def main():
