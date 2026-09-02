@@ -6,9 +6,9 @@
   measurements, and publishing documentation/CI corrections.
 - No new scoring guarantee, causal capability, or counterfactual action generation is introduced.
 - The workspace remains version-locked at `0.11.1` for this release.
-- `lineprior` and `lineprior-cli` were published through GitHub Actions/OIDC (runs
-  `33624581825` and `33624654702`). The three new workspace crates passed packaging and dry-run
-  validation but still require the one-time manual crates.io bootstrap described below.
+- All five workspace crates were published through GitHub Actions: `lineprior` and `lineprior-cli`
+  via OIDC, and the three new crates via the configured `CARGO_REGISTRY_TOKEN` bootstrap fallback
+  (runs `33625228643`, `33625228724`, and `33625228726`).
 
 ## [0.11.0] - 2026-09-02
 
