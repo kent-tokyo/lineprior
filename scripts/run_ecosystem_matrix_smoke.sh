@@ -33,5 +33,13 @@ LINEPRIOR_BIN="$root/target/debug/lineprior" sh "$root/scripts/run_measurement_s
 if [ -n "$report" ]; then
   python3 -c 'import json, os, pathlib, subprocess, sys; out=pathlib.Path(sys.argv[1]); report={"protocol":"ecosystem-matrix-smoke-v1","project_version":"0.11.1","git_commit":subprocess.check_output(["git","rev-parse","HEAD"], text=True).strip(),"runtimes":{"rustc":sys.argv[2],"cargo":sys.argv[3],"python":sys.argv[4],"node":sys.argv[5]},"checks":["cli-roundtrip","node-example","python-example","offpolicy","measurement"]}; py=os.environ.get("LINEPRIOR_MATRIX_PYTHON"); node=os.environ.get("LINEPRIOR_MATRIX_NODE"); report.update({"matrix":{"python":py,"node":node}} if py and node else {}); out.write_text(json.dumps(report, indent=2, sort_keys=True)+"\n")' "$report" "$rust_version" "$cargo_version" "$python_version" "$node_version"
   python3 "$root/scripts/validate_ecosystem_runtime.py" "$report"
+  if [ -n "${LINEPRIOR_MATRIX_PYTHON:-}" ] && [ -n "${LINEPRIOR_MATRIX_NODE:-}" ]; then
+    bad_matrix=$(mktemp "${TMPDIR:-/tmp}/lineprior-matrix-contract-XXXXXX.json")
+    trap 'rm -f "$bad_matrix"' EXIT
+    python3 -c 'import json, pathlib, sys; source=pathlib.Path(sys.argv[1]); target=pathlib.Path(sys.argv[2]); report=json.loads(source.read_text()); report["matrix"]["node"]="not-a-major"; target.write_text(json.dumps(report)+"\n")' "$report" "$bad_matrix"
+    if python3 "$root/scripts/validate_ecosystem_runtime.py" "$bad_matrix" >/dev/null 2>&1; then
+      exit 1
+    fi
+  fi
 fi
 echo "ecosystem matrix smoke: ok (runtime inventory + Rust/Node/Python/OPE/measurement)"
