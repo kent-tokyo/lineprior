@@ -734,3 +734,25 @@ outcome を、その系列の保持された各stepへ伝播できます。既�
 
 `PriorBook::to_trie()` は context entry を決定論的な `PriorTrie` に展開し、最長suffixを優先してqueryします。
 flat bookを正本の保存形式として残し、trieの性能比較は引き続きmeasurement項目です。
+
+## 制限と evidence gate
+
+`confidence` は信頼性の目安であり、将来性能の保証ではありません。Bayesian、UCB、Softmax は順位付けの方式を
+変えるだけで、品質、calibration、downstream 結果の改善を保証しません。既定値を変更する前に held-out 比較を
+実行してください。
+
+core の state/action は opaque key です。安全な既定値は完全一致であり、類似状態による回復は呼び出し側が渡す
+場合だけ有効です。未観測 action は生成しません。因果推論、counterfactual action generation、未記録 action の
+reward 推定も行いません。IPS/DR は propensity、overlap、不確実性、held-out downstream 検証が揃ったときだけ
+解釈できる監査用推定量です。
+
+Python、npm、WASM は現在、保守された CLI 例と Rust/WASM 境界までです。正式配布・ブラウザ実行の扱いは
+`.github/workflows/wasm-browser.yml` の gate を通過するまで supported distribution と表現しません。Trie と
+macro-action には決定論的 Criterion benchmark を追加していますが、性能と downstream 改善はまだ実測課題であり、
+benchmark だけから改善を主張しません。
+
+測定は `cargo bench -p lineprior --bench scoring` で実行できます。実装間で比較する場合は、マシン、toolchain、
+sample size、Criterion 出力を記録してください。異なる環境の数値を downstream 実験として直接比較しません。
+
+新規 workspace crate の初回 crates.io 公開には Trusted Publishing の制約で一度だけ手動 bootstrap が必要です。
+手順は [`docs/publishing.md`](docs/publishing.md) にまとめています。初回公開後は既存の OIDC workflow で継続公開できます。

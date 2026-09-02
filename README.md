@@ -760,3 +760,29 @@ the opt-in mode buffers only the current sequence and requires grouped input.
 `PriorTrie` for repeated longest-suffix queries. The flat book remains the
 canonical serialization format, and trie performance is still a measurement
 item rather than a quality claim.
+
+## Limits and evidence gates
+
+`confidence` is a reliability signal, not a promise of future performance. The Bayesian, UCB,
+and Softmax strategies change ranking behavior only; none guarantees a better policy, calibration,
+or downstream result. Run a held-out comparison before enabling one by default.
+
+States and actions are opaque keys in the core. Exact matching is therefore the safe default;
+similarity recovery is caller-supplied and opt-in, and does not create unseen actions. The core does
+not perform causal inference, generate counterfactual actions, or infer rewards for actions that were
+not logged. IPS/DR are audit estimators whose validity depends on propensities, overlap, uncertainty,
+and a held-out downstream test.
+
+Python, npm, and WASM support currently consists of maintained CLI examples and a Rust/WASM boundary.
+The browser/package gate is separate and must pass the workflow in `.github/workflows/wasm-browser.yml`
+before being described as a supported distribution. Trie and macro-action implementations have
+deterministic Criterion benchmarks, but their latency/memory and downstream benefit remain empirical
+questions; no improvement claim is made from the benchmark alone.
+
+Run these measurements with `cargo bench -p lineprior --bench scoring`. Record the machine,
+toolchain, sample sizes, and Criterion output; numbers from different environments are not a
+downstream experiment.
+
+The three new workspace crates require a one-time manual crates.io bootstrap because Trusted
+Publishing cannot create a crate. See [`docs/publishing.md`](docs/publishing.md); after that first
+publish, the existing OIDC workflow can publish subsequent versions without a long-lived token.

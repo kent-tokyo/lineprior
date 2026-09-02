@@ -36,6 +36,7 @@ python3 -c 'import json, pathlib; json.loads(pathlib.Path("examples/veridict_pri
 test -s examples/adapters.md
 
 node --check examples/node/roundtrip.mjs
+node --check examples/wasm/browser-smoke.mjs
 python3 -c 'import ast; ast.parse(open("examples/python/roundtrip.py").read())'
 git diff --check
 echo "candidate contract: ok (version fixed at 0.11.0)"

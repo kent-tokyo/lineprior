@@ -1,7 +1,10 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use lineprior::{
-    BuildConfig, Observation, Outcome, build_prior_book, build_prior_book_from_reader,
+    BuildConfig, MacroActionConfig, Observation, Outcome, PriorAction, PriorBook,
+    build_macro_actions, build_prior_book, build_prior_book_from_reader,
 };
+use std::collections::HashMap;
+use std::hint::black_box;
 
 /// `n_states` states, each with `actions_per_state` actions, each observed
 /// `obs_per_action` times. Outcomes/scores vary slightly per observation so
@@ -96,11 +99,92 @@ fn bench_build_from_reader_large(c: &mut Criterion) {
     });
 }
 
+fn context_book(n_states: usize, context_order: usize) -> PriorBook {
+    let mut book = PriorBook {
+        entries: HashMap::new(),
+        context_entries: HashMap::new(),
+    };
+    for state_index in 0..n_states {
+        let state = format!("state_{state_index:05}");
+        book.entries.insert(
+            state.clone(),
+            vec![PriorAction {
+                action: "base".into(),
+                count: 1,
+                weighted_count: 1.0,
+                success_rate: Some(0.5),
+                mean_score: None,
+                prior: 1.0,
+                confidence: 0.1,
+            }],
+        );
+        for order in 1..=context_order {
+            let context = (0..order)
+                .map(|index| format!("action_{index:03}"))
+                .collect::<Vec<_>>();
+            book.context_entries
+                .insert((context, state.clone()), book.entries[&state].clone());
+        }
+    }
+    book
+}
+
+fn bench_trie_materialize(c: &mut Criterion) {
+    let book = context_book(500, 4);
+    c.bench_function("trie_materialize_500_states_order4", |b| {
+        b.iter(|| black_box(book.to_trie()))
+    });
+}
+
+fn bench_flat_context_query(c: &mut Criterion) {
+    let book = context_book(500, 4);
+    let recent = (0..4)
+        .map(|index| format!("action_{index:03}"))
+        .collect::<Vec<_>>();
+    c.bench_function("flat_context_query_order4", |b| {
+        b.iter(|| black_box(book.query_with_context("state_00250", &recent, None)))
+    });
+}
+
+fn bench_trie_context_query(c: &mut Criterion) {
+    let trie = context_book(500, 4).to_trie();
+    let recent = (0..4)
+        .map(|index| format!("action_{index:03}"))
+        .collect::<Vec<_>>();
+    c.bench_function("trie_context_query_order4", |b| {
+        b.iter(|| black_box(trie.query("state_00250", &recent, None)))
+    });
+}
+
+fn bench_macro_action_extraction(c: &mut Criterion) {
+    let mut observations = synthetic_observations(100, 5, 10);
+    for (step, observation) in observations.iter_mut().enumerate() {
+        observation.sequence_id = "macro-sequence".into();
+        observation.step = step as u32;
+    }
+    c.bench_function("macro_actions_5000obs_window2to4", |b| {
+        b.iter(|| {
+            black_box(build_macro_actions(
+                &observations,
+                MacroActionConfig {
+                    min_length: 2,
+                    max_length: 4,
+                    min_count: 2,
+                },
+            ))
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_build_small,
     bench_build_medium,
     bench_build_large,
-    bench_build_from_reader_large
+    bench_build_from_reader_large,
+    bench_trie_materialize,
+    bench_flat_context_query,
+    bench_trie_context_query,
+    bench_macro_action_extraction
 );
 criterion_main!(benches);

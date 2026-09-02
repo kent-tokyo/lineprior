@@ -1,0 +1,33 @@
+name: WASM browser smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "crates/lineprior-wasm/**"
+      - "crates/lineprior/**"
+      - "examples/wasm/**"
+      - ".github/workflows/wasm-browser.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install wasm-pack and browser
+        run: |
+          cargo install wasm-pack --locked
+          npx playwright install --with-deps chromium
+      - name: Build web package
+        run: wasm-pack build crates/lineprior-wasm --target web --out-dir target/wasm-web --release
+      - name: Run browser round trip
+        run: node examples/wasm/browser-smoke.mjs target/wasm-web
