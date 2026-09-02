@@ -406,6 +406,10 @@ action だけを返すため、未知の action を生成しません。`Similar
 オプトイン類似検索による回収を比較する決定的な境界fixtureがあります。これは契約確認であり、実データの品質や
 類似検索をデフォルトで有効化する根拠ではありません。
 
+実データでの比較手順（exact-match / similarity / no-prior、coverage、MRR、top-1、calibration、
+abstention、速度、メモリ）は [`docs/measurements/similarity-real-data.md`](docs/measurements/similarity-real-data.md)
+に記載しています。
+
 ## シーケンス単位の prior
 
 `PriorBook::score_sequence(path: &[(String, String)]) -> SequencePriorScore` は、**呼び出し側が
@@ -718,6 +722,8 @@ context entry、magic/version、割り当て上限を保持し、余分な末尾
 ペア seed・split・予算・停止規則を固定する手順を
 [`examples/veridict_prior_comparison.md`](examples/veridict_prior_comparison.md) に置きました。
 実際の `veridict` 実行結果がないため、現時点では recipe-only です。
+IPS / DR のpropensity・overlap事前確認、bootstrap不確実性、lineprior on/offのdownstream比較手順は
+[`docs/measurements/offpolicy-real-data.md`](docs/measurements/offpolicy-real-data.md)に分離しています。
 ## macro-actions と multi-source merge
 
 `build_macro_actions` は順序付き履歴から連続した action window を抽出します。window を保持する必要があるため

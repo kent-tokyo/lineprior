@@ -54,6 +54,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   can be separated from context ranking quality.
 - Exposed the same context diagnostics in each `lineprior tune` candidate result for direct
   per-configuration comparison.
+- Added real-data measurement handoff documents for similarity arms and IPS/DR paired on/off
+  evaluation; no result is claimed without supplied real logs.
 
 ### Fixed
 

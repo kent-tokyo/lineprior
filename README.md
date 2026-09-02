@@ -348,6 +348,11 @@ overlap, uncertainty intervals, and a held-out downstream comparison remain the 
 responsibility. A reward model is supplied by the caller and is never trained or inferred by
 `lineprior`.
 
+The real-log handoff is documented in
+[`docs/measurements/offpolicy-real-data.md`](./docs/measurements/offpolicy-real-data.md). It
+defines the propensity/overlap preflight, paired on/off arms, and bootstrap evidence required
+before interpreting downstream improvement.
+
 ## Variable-order context
 
 By default the prior is order-0: `state -> action`, with no memory of what happened earlier in a
@@ -434,6 +439,10 @@ The deterministic boundary fixture at
 `crates/lineprior-similarity/tests/fixtures/unseen_states.jsonl` and its integration test compare
 exact-match, no-prior abstention, and opt-in similarity recovery. It is a contract check only; it
 does not establish real-data quality or justify enabling similarity by default.
+
+The real-data comparison handoff, including exact/similarity/no-prior arms, calibration,
+abstention, latency, and memory reporting, is in
+[`docs/measurements/similarity-real-data.md`](./docs/measurements/similarity-real-data.md).
 
 ## Sequence-level priors
 
