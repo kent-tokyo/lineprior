@@ -126,6 +126,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   including paired lineage, IPS/DR, bootstrap fields, and paired/protocol rejection cases.
 - Added boundary regression coverage proving structural JSON Schema validation remains distinct from
   semantic off-policy checks for metric ranges and cross-artifact lineage equality.
+- Added exact-message regression tests for the off-policy semantic validator's support, lineage,
+  paired-hash, and explicit-policy diagnostics.
 
 ### Fixed
 
