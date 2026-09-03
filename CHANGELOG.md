@@ -120,6 +120,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   bin/lib output collision; CLI behavior remains covered by clippy, tests, and smoke checks.
 - Candidate validation now pins the CLI executable name and doc-target setting so the Cargo doc
   collision fix cannot regress silently.
+- Added a CLI development-only `jsonschema` integration test that compiles the checked-in measurement
+  schemas and accepts representative artifacts while rejecting protocol and required-field drift.
 
 ### Fixed
 
