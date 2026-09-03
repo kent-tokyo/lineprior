@@ -122,6 +122,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   collision fix cannot regress silently.
 - Added a CLI development-only `jsonschema` integration test that compiles the checked-in measurement
   schemas and accepts representative artifacts while rejecting protocol and required-field drift.
+- Extended the JSON Schema regression suite with a representative integrated off-policy artifact,
+  including paired lineage, IPS/DR, bootstrap fields, and paired/protocol rejection cases.
 
 ### Fixed
 

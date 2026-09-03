@@ -31,6 +31,49 @@ fn similarity_artifact() -> Value {
     })
 }
 
+fn offpolicy_artifact() -> Value {
+    let arm = json!({
+        "ips": {
+            "ips": 0.42,
+            "self_normalized_ips": 0.4,
+            "support_fraction": 1.0,
+            "effective_sample_size": 2.0
+        },
+        "doubly_robust": {"estimate": 0.39},
+        "bootstrap": {
+            "seed": 42,
+            "resamples": 16,
+            "confidence_level": 0.95,
+            "lower": 0.1,
+            "upper": 0.7
+        }
+    });
+    let measurement = json!({
+        "dataset_id": "fixture-v1",
+        "split": "heldout",
+        "lineprior_version": "0.11.1",
+        "policy_version": "policy-v1",
+        "input_sha256": {"off": "0".repeat(64), "on": "1".repeat(64)}
+    });
+    json!({
+        "protocol": "offpolicy-integrated-arms-v1",
+        "measurement": measurement,
+        "arms": {"off": arm, "on": arm},
+        "paired": {
+            "protocol": "offpolicy-paired-arms-v1",
+            "measurement": {
+                "dataset_id": "fixture-v1",
+                "split": "heldout",
+                "lineprior_version": "0.11.1",
+                "input_sha256": {"off": "0".repeat(64), "on": "1".repeat(64)}
+            },
+            "paired_rows": 2,
+            "off": {"supported_rows": 2},
+            "on": {"supported_rows": 2}
+        }
+    })
+}
+
 #[test]
 fn similarity_schema_accepts_a_representative_artifact() {
     let validator = validator_for(&schema("similarity-real-data-v1.schema.json")).unwrap();
@@ -50,4 +93,22 @@ fn similarity_schema_rejects_protocol_drift_and_missing_required_fields() {
         .unwrap()
         .remove("measurement");
     assert!(!validator.is_valid(&missing_measurement));
+}
+
+#[test]
+fn offpolicy_schema_accepts_a_representative_integrated_artifact() {
+    let validator = validator_for(&schema("offpolicy-integrated-arms-v1.schema.json")).unwrap();
+    assert!(validator.is_valid(&offpolicy_artifact()));
+}
+
+#[test]
+fn offpolicy_schema_rejects_protocol_drift_and_missing_paired_report() {
+    let validator = validator_for(&schema("offpolicy-integrated-arms-v1.schema.json")).unwrap();
+    let mut wrong_protocol = offpolicy_artifact();
+    wrong_protocol["paired"]["protocol"] = json!("offpolicy-paired-arms-v0");
+    assert!(!validator.is_valid(&wrong_protocol));
+
+    let mut missing_paired = offpolicy_artifact();
+    missing_paired.as_object_mut().unwrap().remove("paired");
+    assert!(!validator.is_valid(&missing_paired));
 }
