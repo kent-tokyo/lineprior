@@ -124,6 +124,8 @@ in this project, not automatic on every version bump. See each entry for its pub
   schemas and accepts representative artifacts while rejecting protocol and required-field drift.
 - Extended the JSON Schema regression suite with a representative integrated off-policy artifact,
   including paired lineage, IPS/DR, bootstrap fields, and paired/protocol rejection cases.
+- Added boundary regression coverage proving structural JSON Schema validation remains distinct from
+  semantic off-policy checks for metric ranges and cross-artifact lineage equality.
 
 ### Fixed
 

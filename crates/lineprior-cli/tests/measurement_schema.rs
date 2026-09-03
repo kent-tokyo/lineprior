@@ -112,3 +112,20 @@ fn offpolicy_schema_rejects_protocol_drift_and_missing_paired_report() {
     missing_paired.as_object_mut().unwrap().remove("paired");
     assert!(!validator.is_valid(&missing_paired));
 }
+
+#[test]
+fn offpolicy_schema_leaves_cross_artifact_semantics_to_the_semantic_validator() {
+    let validator = validator_for(&schema("offpolicy-integrated-arms-v1.schema.json")).unwrap();
+
+    // JSON Schema can validate each nested object, but it does not express the
+    // equality between the integrated and paired lineage records.
+    let mut mismatched_lineage = offpolicy_artifact();
+    mismatched_lineage["paired"]["measurement"]["dataset_id"] = json!("other-fixture");
+    assert!(validator.is_valid(&mismatched_lineage));
+
+    // The semantic validator owns metric ranges that are intentionally not
+    // duplicated in this structural schema.
+    let mut invalid_support_fraction = offpolicy_artifact();
+    invalid_support_fraction["arms"]["off"]["ips"]["support_fraction"] = json!(1.5);
+    assert!(validator.is_valid(&invalid_support_fraction));
+}
