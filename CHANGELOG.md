@@ -128,6 +128,10 @@ in this project, not automatic on every version bump. See each entry for its pub
   semantic off-policy checks for metric ranges and cross-artifact lineage equality.
 - Added exact-message regression tests for the off-policy semantic validator's support, lineage,
   paired-hash, and explicit-policy diagnostics.
+- Refreshed `docs/publishing.md` to reflect the completed `0.11.1` bootstrap and the current OIDC
+  release path.
+- Consolidated durable maintenance guidance into the local roadmap and removed superseded internal
+  task logs; public documentation remains organized by guide, protocol, examples, and release history.
 
 ### Fixed
 

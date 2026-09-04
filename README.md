@@ -741,6 +741,11 @@ so extracting `lineprior-gate` would add packaging surface without a demonstrate
 
 ## Development
 
+Documentation map: this README is the user guide; `docs/measurements/` contains reproducible
+measurement protocols; `docs/publishing.md` contains release mechanics; `examples/` contains
+fixtures and adapter recipes; and `CHANGELOG.md` is the release history. Internal planning stays
+in the ignored local `ROADMAP.md`.
+
 ```bash
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features --locked -- -D warnings

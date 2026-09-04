@@ -678,6 +678,10 @@ acquisition score、fit 診断をJSONで出力します。GateModel は引き続
 
 ## 開発
 
+ドキュメントの案内: このREADMEは利用ガイド、`docs/measurements/` は再現可能な測定手順、
+`docs/publishing.md` はリリース手順、`examples/` はfixtureとadapter例、`CHANGELOG.md` は
+リリース履歴です。内部計画はgitignore対象のローカル `ROADMAP.md` に置きます。
+
 ```bash
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features --locked -- -D warnings
