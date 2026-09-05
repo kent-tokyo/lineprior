@@ -732,31 +732,15 @@ context entry、magic/version、割り当て上限を保持し、余分な末尾
 ペア seed・split・予算・停止規則を固定する手順を
 [`examples/veridict_prior_comparison.md`](examples/veridict_prior_comparison.md) に置きました。
 実際の `veridict` 実行結果がないため、現時点では recipe-only です。
-IPS / DR のpropensity・overlap事前確認、bootstrap不確実性、lineprior on/offのdownstream比較手順は
-[`docs/measurements/offpolicy-real-data.md`](docs/measurements/offpolicy-real-data.md)に分離しています。
-paired reward差分とpropensity事前確認には依存なしの
-`scripts/compare_offpolicy_arms.py`を使い、IPS / DRの推定値は各armに対してRust CLIを個別に実行します。
-`scripts/measure_offpolicy_arms.py`を使うと、両armのCLIレポートとpaired監査を1つのlineage付きartifactにまとめられます。
-保存前に `scripts/validate_measurement_artifact.py` でprotocol・lineage・必須指標・固定バージョンの
-artifact契約を確認できます。これは形式検証であり、downstream改善の証拠やgate通過ではありません。
-機械可読な契約は [`similarity-real-data-v1.schema.json`](docs/measurements/similarity-real-data-v1.schema.json) と
-[`offpolicy-integrated-arms-v1.schema.json`](docs/measurements/offpolicy-integrated-arms-v1.schema.json) です。
-SchemaはJSONの形を定義し、validatorは意味検証とartifact間の一致検証を追加で行います。
-similarity reportには元priorの `build_config_fingerprint` も引き継がれるため、異なるBuildConfigの結果を
-黙って比較することを防げます。
-reportには入力JSONLのSHA-256も含まれるため、dataset IDが同じまま入力が差し替えられた場合も検出できます。
-再現可能なローカル引き渡しには `scripts/run_ecosystem_matrix_smoke.sh` を使えます。Rust・Python・Nodeの
-実行時バージョンを記録してCLI・OPE・measurement smokeを再生しますが、全対応バージョンの証明や実データ品質の
-証拠ではありません。
-`--out runtime-report.json` を渡すと、実行時バージョン、commit、固定プロジェクトバージョン、実行したcheckをJSON
-artifactとして保存できます。CIでもexamples smokeのartifactとしてアップロードします。
-CIはupload前に固定版、commit形式、runtime inventory、実行check一覧のartifact契約も検証します。
-CIのexamples jobは現在Python 3.12/3.13とNode 22/24の4セルmatrixで実行します。これはCLI exampleの互換性確認であり、
-正式なPython/npm bindingの保証ではありません。
-WASM build smokeも `wasm32-unknown-unknown` target、Rust toolchain、commit、固定版を別artifactとして記録・検証します。
-これはcompileの証拠であり、npm公開やブラウザ品質の証拠ではありません。
-現在のmatrix、検証できる範囲、未完了の互換性主張は
-[`docs/measurements/ecosystem-compatibility.md`](docs/measurements/ecosystem-compatibility.md)に固定しています。
+IPS / DR のpropensity・overlap事前確認、bootstrap不確実性、lineprior on/off比較、artifact検証は
+[`docs/measurements/offpolicy-real-data.md`](docs/measurements/offpolicy-real-data.md)に集約しています。
+`scripts/compare_offpolicy_arms.py` はpaired監査、`scripts/measure_offpolicy_arms.py` はRust CLIの
+IPS / DRレポートとの統合に使います。機械可読SchemaはJSONの形を定義し、validatorは意味検証と
+artifact間の一致検証を追加します。これらは再現可能な測定境界であり、downstream改善や因果的証拠ではありません。
+
+CLIの互換性matrixとWASMコンパイル境界は
+[`docs/measurements/ecosystem-compatibility.md`](docs/measurements/ecosystem-compatibility.md)に集約しています。
+runtime・commit・固定版を記録しますが、正式なPython/npm binding、ブラウザ対応、実データ品質は主張しません。
 
 ## macro-actions と multi-source merge
 

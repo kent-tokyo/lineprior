@@ -348,38 +348,19 @@ overlap, uncertainty intervals, and a held-out downstream comparison remain the 
 responsibility. A reward model is supplied by the caller and is never trained or inferred by
 `lineprior`.
 
-The real-log handoff is documented in
-[`docs/measurements/offpolicy-real-data.md`](./docs/measurements/offpolicy-real-data.md). It
-defines the propensity/overlap preflight, paired on/off arms, and bootstrap evidence required
-before interpreting downstream improvement.
-For paired observed-reward deltas and propensity preflight, use the dependency-free
-`scripts/compare_offpolicy_arms.py`; run the Rust `lineprior offpolicy` command separately on
-each arm for IPS/DR estimates and bootstrap intervals.
-`scripts/measure_offpolicy_arms.py` combines those two CLI reports with the paired audit into one
-lineage-tagged artifact.
-Use `scripts/validate_measurement_artifact.py` to check the artifact envelope before archiving it;
-this is schema/lineage validation, not evidence of downstream improvement.
-The machine-readable contracts are [`similarity-real-data-v1.schema.json`](docs/measurements/similarity-real-data-v1.schema.json)
-and [`offpolicy-integrated-arms-v1.schema.json`](docs/measurements/offpolicy-integrated-arms-v1.schema.json).
-The schemas describe the JSON shape; the validator adds semantic and cross-artifact checks.
-Similarity reports also retain the source prior's `build_config_fingerprint`, preventing results
-from different build configurations from being silently compared.
-Reports also include SHA-256 hashes of the input JSONL files, so a dataset ID cannot hide an
-in-place input replacement.
-For a reproducible local handoff, `scripts/run_ecosystem_matrix_smoke.sh` records the active Rust,
-Python, and Node versions before replaying the CLI, OPE, and measurement smoke suite. It does not
-cover every supported runtime version or establish real-data quality.
-Pass `--out runtime-report.json` to retain the runtime inventory, commit, fixed project version, and
-checks as a machine-readable artifact; CI uploads this report from the examples smoke job.
-CI validates this envelope before upload, while keeping runtime coverage and real-data quality as
-separate gates.
-The CI examples job currently covers Python 3.12/3.13 and Node 22/24 as a four-cell matrix; this
-is compatibility evidence for the CLI examples, not a promise of formal Python/npm bindings.
-The WASM build smoke likewise records its `wasm32-unknown-unknown` target, Rust toolchain, commit,
-and fixed project version in a separately validated CI artifact; this remains compile evidence,
-not npm publication or browser-quality evidence.
-The exact current matrix and its open compatibility claims are documented in
-[`docs/measurements/ecosystem-compatibility.md`](docs/measurements/ecosystem-compatibility.md).
+The full real-log handoff, including propensity/overlap preflight, paired on/off arms, bootstrap
+evidence, and artifact validation, is in
+[`docs/measurements/offpolicy-real-data.md`](./docs/measurements/offpolicy-real-data.md). Use
+`scripts/compare_offpolicy_arms.py` for the paired audit and
+`scripts/measure_offpolicy_arms.py` to combine it with the Rust IPS/DR reports. The checked-in
+JSON Schemas define structure; `scripts/validate_measurement_artifact.py` adds semantic and
+cross-artifact checks. These tools establish reproducible measurement boundaries, not downstream
+or causal evidence.
+
+The CLI example matrix and separate WASM compilation boundary are documented in
+[`docs/measurements/ecosystem-compatibility.md`](./docs/measurements/ecosystem-compatibility.md).
+They record runtime/commit/version artifacts but do not claim formal Python/npm bindings, browser
+support, or real-data quality.
 
 ## Variable-order context
 
