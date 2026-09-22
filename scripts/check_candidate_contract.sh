@@ -41,7 +41,7 @@ test -s examples/adapters.md
 
 node --check examples/node/roundtrip.mjs
 node --check examples/wasm/browser-smoke.mjs
-node -e 'const p=require("./examples/wasm/package.json"); if (p.devDependencies.playwright !== "1.55.0") process.exit(1)'
+node -e 'const p=require("./examples/wasm/package.json"); if (p.devDependencies.playwright !== "1.55.1") process.exit(1)'
 python3 -c 'import ast; ast.parse(open("examples/python/roundtrip.py").read())'
 python3 scripts/check_measurement_schemas.py
 python3 scripts/test_measurement_validator_messages.py

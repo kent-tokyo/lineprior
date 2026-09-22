@@ -46,6 +46,12 @@ in this project, not automatic on every version bump. See each entry for its pub
 
 ## [Unreleased] - next version candidate (not yet versioned or published)
 
+### Fixed
+
+- Updated the WASM browser smoke's development-only Playwright pin to `1.55.1`, resolving the
+  Dependabot-reported high-severity TLS certificate-verification advisory. This does not change
+  the published Rust crates or their fixed `0.11.1` version.
+
 ### Added
 
 - Added `IncrementalPriorBuilder` for adapter-facing, typed incremental ingestion without a JSONL
