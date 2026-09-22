@@ -813,52 +813,19 @@ CSA games
 
 `lineprior` should not parse CSA or USI in core.
 
-## Feature Roadmap
+## Implementation status
 
-### Phase 1: MVP
+The MVP, confidence/entropy/tag/step/source controls, compact LPB cache,
+variable-order context, sequence scoring, trie materialization, macro-actions,
+multi-source merge, terminal credit, tuning, and typed adapters are implemented.
 
-1. Create Rust crate and CLI.
-2. Define observation model.
-3. Parse JSONL.
-4. Aggregate `(state, action)` statistics.
-5. Compute count-based prior.
-6. Add outcome-based success rate.
-7. Add score-based mean score.
-8. Add smoothing.
-9. Add min-count filtering.
-10. Emit prior JSONL.
-11. Implement query command.
-12. Add tests and fixtures.
+The remaining work is evidence-led rather than another default algorithm:
 
-### Phase 2: Better Priors
-
-1. Add confidence score.
-2. Add entropy per state.
-3. Add tag filtering.
-4. Add max-step filtering.
-5. Add top-k output.
-6. Add weighted source support.
-7. Add summary report.
-8. Add compact binary format if needed.
-
-### Phase 3: Advanced Sequence Support
-
-1. Prefix-tree representation.
-2. ~~Variable-order context fallback.~~ Done -- see README's "Variable-order context" (`BuildConfig::context_order`, `PriorBook::query_with_context`, `lineprior query --recent-actions`). Implemented as a flat `(context, state) -> action` map (`PriorBook::context_entries`), not a prefix tree (item 1 above) -- deliberately deferred since a flat map already gives O(1) lookup per backoff rung and the memory/complexity tradeoff of a real trie wasn't justified by anything measured yet.
-3. ~~Sequence-level priors.~~ Done -- see README's "Sequence-level priors" (`PriorBook::score_sequence`). Implemented as query-time path scoring over an already-built book (walks `query_with_context` per step, no new storage or `BuildConfig` field) -- a build-time alternative, crediting each step by its sequence's own terminal outcome, was independently designed and deliberately deferred: it would weaken the streaming-memory guarantee (bounded by longest buffered sequence, not unique pairs) for a need nobody has evidenced yet.
-4. Macro-action suggestions.
-5. ~~Confidence intervals.~~ Done -- see `## Confidence` (`ConfidenceMode::WilsonLowerBound`/`Hybrid`).
-6. ~~Time-decay weighting.~~ Done -- see `## Time Decay and Source Reliability` (`BuildConfig::time_decay_half_life_days`). Per-observation source-reliability weighting (`source_weights`) shipped alongside it; merging separately-built prior books by source is still open.
-7. Multi-source merging.
-8. ~~Automatic BuildConfig selection.~~ Done -- `lineprior tune` grid-searches candidates via `eval`, see `## CLI`'s "Tune a BuildConfig automatically". Wasn't originally on this list; added once the number of tunable knobs (confidence modes, decay, source reliability) made hand-sweeping `eval` impractical.
-
-### Phase 4: Integrations
-
-1. Sekirei adapter example.
-2. UI automation example.
-3. LLM agent example.
-4. Retrosynthesis route example.
-5. `veridict` evaluation recipe for prior on/off comparison.
+1. Measure exact/similarity/no-prior decisions on real held-out data.
+2. Validate IPS/DR assumptions and downstream on/off outcomes with real logs.
+3. Validate GateModel on real gate history before expanding its scope.
+4. Add deeper sequence storage only when it beats the flat/context baseline at
+   a declared memory and latency budget.
 
 ## Quality Bar
 

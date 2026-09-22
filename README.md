@@ -200,36 +200,19 @@ The `lineprior-wasm` workspace crate exposes two thin `wasm-bindgen` functions: 
 JSONL observations plus a serialized `BuildConfig` and returns JSON containing sorted entries,
 warnings, and build stats; `query_json` takes a JSONL prior book and returns ranked candidates.
 They keep Rust scoring authoritative and return JavaScript errors for invalid input. The crate has
-no file I/O or domain-specific state representation. npm/wasm-pack packaging and browser smoke
-testing are not claimed yet.
+no file I/O or domain-specific state representation. CI covers wasm-pack packaging and a browser
+smoke, but that boundary is not a published npm package, a general browser-support guarantee, or
+evidence of decision quality; see
+[`docs/measurements/ecosystem-compatibility.md`](./docs/measurements/ecosystem-compatibility.md).
 
 ## Performance
 
-Measured on an Apple M4 (macOS 26.5.1), release build, 1,000,000 observations across 50,000 unique `(state, action)` pairs (1,000 states × 50 actions):
-
-```text
-wall-clock:        1.71s
-peak RSS:          ~15.4 MB
-```
-
-Reproduce with:
-
-```bash
-awk 'BEGIN{
-  for (s=0; s<1000; s++) for (a=0; a<50; a++) for (i=0; i<20; i++)
-    printf "{\"sequence_id\":\"seq_%d_%d_%d\",\"step\":0,\"state\":\"state_%05d\",\"action\":\"action_%03d\",\"outcome\":\"%s\",\"score\":%.2f,\"weight\":1.0}\n", \
-      s, a, i, s, a, (i % 3 == 0 ? "failure" : "success"), 0.5 + (i % 10) * 0.01
-}' > large.jsonl
-cargo build --release
-time ./target/release/lineprior build large.jsonl --out /dev/null --min-count 1
-```
-
-Memory is now genuinely bounded by unique `(state, action)` pairs rather than total observation
-count, matching AGENTS.md's MVP performance goal: the CLI's `build` command streams straight from
-the input file into the prior book via `build_prior_book_from_reader`, folding each observation
-into a bounded accumulator as it's parsed instead of collecting a `Vec<Observation>` first. Peak
-RSS on the measurement above dropped from ~199MB (the old, fully-materializing path) to ~15.4MB —
-about 13x less, for the same 1,000,000-observation input and identical output.
+Streaming build memory is bounded by unique `(state, action)` pairs rather than total input rows
+(plus unique context tuples when context is enabled). A historical Apple M4 synthetic snapshot and
+reproduction boundary are in [`docs/benchmarks/`](./docs/benchmarks/); it is not a real-data or
+cross-machine performance claim. Checked-in Criterion coverage is in
+`crates/lineprior/benches/scoring.rs`, and the Linux CI regression guard is
+`crates/lineprior/tests/streaming_memory.rs`.
 
 Adapter authors can use the same bounded aggregation directly, without a JSONL intermediate or an
 in-memory batch:

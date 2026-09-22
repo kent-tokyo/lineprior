@@ -57,37 +57,15 @@ in this project, not automatic on every version bump. See each entry for its pub
 - Added `IncrementalPriorBuilder` for adapter-facing, typed incremental ingestion without a JSONL
   intermediate or a collected `Vec<Observation>`. It shares aggregation, filtering, diagnostics,
   and context-order checks with eager and JSONL-streaming construction.
-- Added context prefix-support diagnostics to `summary`/`SummaryReport`, exposing distinct
-  prefixes, `(prefix, state)` entries, action entries, and raw count by context order.
-- Added context coverage, fallback rate, and mean matched order to `EvalReport` so context support
-  can be separated from context ranking quality.
-- Exposed the same context diagnostics in each `lineprior tune` candidate result for direct
-  per-configuration comparison.
-- Added real-data measurement handoff documents for similarity arms and IPS/DR paired on/off
-  evaluation; no result is claimed without supplied real logs.
-- Extended the fixed-version candidate contract to validate measurement fixtures and runner syntax.
-- Added a CI measurement smoke for deterministic similarity-arm and paired on/off runner replay.
-- Measurement reports now carry explicit dataset/split and version metadata for artifact lineage.
-- Added an integrated paired OPE runner that combines per-arm Rust IPS/DR reports with the
-  observed-reward pairing audit.
-- Added a measurement-artifact contract checker for protocol, lineage, required metrics, and the
-  fixed `0.11.1` version envelope; it validates shape only and does not pass a quality gate.
-- Added context-path Brier calibration diagnostics to `eval` and `tune`, separate from order-0
-  calibration bins and unchanged when context is disabled.
-- Added matched-context-order Brier diagnostics so calibration can be audited separately for each
-  backoff depth.
-- Added an ecosystem matrix smoke harness that records Rust, Python, and Node runtime versions
-  before replaying the maintained CLI, OPE, and measurement checks.
-- Similarity measurement artifacts now retain the prior's BuildConfig fingerprint for comparison
-  lineage and reject conflicting fingerprint headers.
-- Similarity and paired OPE artifacts now include SHA-256 hashes of their input JSONL files for
-  immutable dataset lineage.
-- Artifact validation now checks SHA-256 syntax and rejects integrated OPE reports whose paired
-  audit hashes differ from the top-level inputs.
-- The measurement smoke now covers hash-mismatch rejection in addition to missing-field and version
-  drift rejection.
-- Measurement artifact validation now rejects non-finite or out-of-range bounded metrics such as
-  coverage, abstention, top-1, MRR, and Brier score.
+- Added context diagnostics to `summary`, `eval`, and `tune`, separating support and calibration
+  from ranking quality.
+- Added real-data similarity and paired IPS/DR handoff protocols; no result is claimed without
+  supplied logs.
+- Added deterministic measurement runners and a fixed-version candidate contract for fixtures,
+  lineage, paired OPE reports, and artifact envelopes. These validate protocol shape, not quality.
+- Added context-path and matched-order Brier diagnostics without changing order-zero behavior.
+- Added runtime inventory smoke for Rust/Python/Node plus fingerprint, hash, pairing, and bounded-
+  metric checks for measurement artifacts.
 - The ecosystem matrix smoke can now emit a versioned JSON runtime artifact, and CI uploads it for
   later reproduction instead of leaving the inventory only in logs.
 - CI now validates the runtime artifact envelope before upload, including fixed version, commit

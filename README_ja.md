@@ -194,30 +194,17 @@ workspace の `lineprior-wasm` crate は、`wasm-bindgen` による薄い2つの
 JSONL observation とシリアライズした `BuildConfig` を受け取り、ソート済み entries、warnings、build stats を
 含む JSON を返します。`query_json` は JSONL prior book を受け取り、ランキング済み候補を返します。Rust の
 scoring を正本として利用し、不正入力は JavaScript error にします。ファイル I/O やドメイン固有の state 表現は
-持ちません。npm/wasm-pack のパッケージ化とブラウザ smoke test はまだ完了扱いにしていません。
+持ちません。CIには wasm-pack packaging と browser smoke がありますが、これは npm公開、一般的なbrowser対応、
+意思決定品質の証拠ではありません。詳細は
+[`docs/measurements/ecosystem-compatibility.md`](./docs/measurements/ecosystem-compatibility.md)を参照してください。
 
 ## パフォーマンス
 
-Apple M4(macOS 26.5.1)、release ビルドで測定。100万件の観測、50,000個のユニークな `(state, action)` ペア(1,000状態 × 50行動):
-
-```text
-wall-clock:        1.71s
-peak RSS:          ~15.4 MB
-```
-
-再現方法:
-
-```bash
-awk 'BEGIN{
-  for (s=0; s<1000; s++) for (a=0; a<50; a++) for (i=0; i<20; i++)
-    printf "{\"sequence_id\":\"seq_%d_%d_%d\",\"step\":0,\"state\":\"state_%05d\",\"action\":\"action_%03d\",\"outcome\":\"%s\",\"score\":%.2f,\"weight\":1.0}\n", \
-      s, a, i, s, a, (i % 3 == 0 ? "failure" : "success"), 0.5 + (i % 10) * 0.01
-}' > large.jsonl
-cargo build --release
-time ./target/release/lineprior build large.jsonl --out /dev/null --min-count 1
-```
-
-メモリ使用量は、AGENTS.md の MVP パフォーマンス目標どおり、総観測数ではなくユニークな `(state, action)` ペア数に比例して有界になりました。CLI の `build` コマンドは、`build_prior_book_from_reader` を使って入力ファイルから prior book へ直接ストリーミングし、`Vec<Observation>` を先に集めるのではなく、パースした端から各観測を有界なアキュムレータへ畳み込みます。上記の計測でピークRSSは(以前の、全展開していたパスの)~199MBから~15.4MBへ低下しました — 同じ100万件の観測入力・同一の出力で、約13分の1です。
+streaming build のメモリは総入力行数ではなくユニークな `(state, action)` ペア数に比例して有界です
+（context 有効時はユニークなcontext tupleも加わります）。Apple M4でのsynthetic測定と再現境界は
+[`docs/benchmarks/`](./docs/benchmarks/)にあり、実データ品質や異なるマシン間の性能主張ではありません。
+Criterion は `crates/lineprior/benches/scoring.rs`、Linux CIの回帰guardは
+`crates/lineprior/tests/streaming_memory.rs` にあります。
 
 adapterから直接投入する場合は、JSONL中間ファイルや一括 `Vec` なしで同じ有界集計を使えます。
 
