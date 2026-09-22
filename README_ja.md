@@ -219,6 +219,20 @@ time ./target/release/lineprior build large.jsonl --out /dev/null --min-count 1
 
 メモリ使用量は、AGENTS.md の MVP パフォーマンス目標どおり、総観測数ではなくユニークな `(state, action)` ペア数に比例して有界になりました。CLI の `build` コマンドは、`build_prior_book_from_reader` を使って入力ファイルから prior book へ直接ストリーミングし、`Vec<Observation>` を先に集めるのではなく、パースした端から各観測を有界なアキュムレータへ畳み込みます。上記の計測でピークRSSは(以前の、全展開していたパスの)~199MBから~15.4MBへ低下しました — 同じ100万件の観測入力・同一の出力で、約13分の1です。
 
+adapterから直接投入する場合は、JSONL中間ファイルや一括 `Vec` なしで同じ有界集計を使えます。
+
+```rust
+let mut builder = lineprior::IncrementalPriorBuilder::new(config)?;
+for observation in adapter_observations {
+    builder.observe(observation)?;
+}
+let output = builder.finish(); // PriorBook、BuildStats、parse warningなし
+```
+
+同じ順序の観測と設定なら、`build_prior_book` / `build_prior_book_from_reader` と同じbook・統計になります。
+`context_order > 0` では各sequenceを連続させ、`step` を厳密に増加させる必要があります。違反時は
+`observe` が `Error::SequenceNotSorted` を返します。
+
 チェックイン済みの小規模なベンチマークは `crates/lineprior/benches/scoring.rs` にあります(`cargo bench -p lineprior` で実行)。一括読み込み型の `build_prior_book` とストリーミング型の `build_prior_book_from_reader` の両方を、1,000 / 10,000 / 50,000 件の観測規模でカバーしています。専用のリグレッションテスト(`crates/lineprior/tests/streaming_memory.rs`、Linux限定、CIで実行)は、ピークメモリが以前の観測数比例のスケーリングに戻った場合に失敗するようになっています。
 
 ## prior の性能を評価する

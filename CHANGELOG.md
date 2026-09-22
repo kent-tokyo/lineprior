@@ -48,6 +48,9 @@ in this project, not automatic on every version bump. See each entry for its pub
 
 ### Added
 
+- Added `IncrementalPriorBuilder` for adapter-facing, typed incremental ingestion without a JSONL
+  intermediate or a collected `Vec<Observation>`. It shares aggregation, filtering, diagnostics,
+  and context-order checks with eager and JSONL-streaming construction.
 - Added context prefix-support diagnostics to `summary`/`SummaryReport`, exposing distinct
   prefixes, `(prefix, state)` entries, action entries, and raw count by context order.
 - Added context coverage, fallback rate, and mean matched order to `EvalReport` so context support

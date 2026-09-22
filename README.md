@@ -231,6 +231,22 @@ into a bounded accumulator as it's parsed instead of collecting a `Vec<Observati
 RSS on the measurement above dropped from ~199MB (the old, fully-materializing path) to ~15.4MB —
 about 13x less, for the same 1,000,000-observation input and identical output.
 
+Adapter authors can use the same bounded aggregation directly, without a JSONL intermediate or an
+in-memory batch:
+
+```rust
+let mut builder = lineprior::IncrementalPriorBuilder::new(config)?;
+for observation in adapter_observations {
+    builder.observe(observation)?;
+}
+let output = builder.finish(); // PriorBook, BuildStats, and no parse warnings
+```
+
+For identical ordered observations and configuration, this produces the same book and statistics
+as `build_prior_book` and `build_prior_book_from_reader`. With `context_order > 0`, each sequence
+must remain contiguous with strictly increasing steps; otherwise `observe` returns
+`Error::SequenceNotSorted`.
+
 Smaller, checked-in benchmarks live in `crates/lineprior/benches/scoring.rs` (run with `cargo bench -p lineprior`), covering both the eager `build_prior_book` and the streaming `build_prior_book_from_reader` at 1k/10k/50k-observation scales. A dedicated regression test (`crates/lineprior/tests/streaming_memory.rs`, Linux-only, runs in CI) fails if peak memory ever creeps back up toward the old per-observation scaling.
 
 ## Evaluating a prior

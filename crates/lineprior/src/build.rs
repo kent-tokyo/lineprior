@@ -1,4 +1,4 @@
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, Warning};
 use crate::model::{
     BuildConfig, ConfidenceMode, MissingTimestampPolicy, Observation, Outcome, PriorAction,
     PriorBook, outcome_credit,
@@ -258,7 +258,7 @@ fn effective_weight(obs: &Observation, config: &BuildConfig) -> Option<f64> {
 ///     + observations_dropped_by_step_or_tag_filter
 ///     + observations_dropped_by_missing_timestamp
 /// ```
-#[derive(Debug, Clone, Copy, Default, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct BuildStats {
     /// Observations folded into the accumulator (survived `max_step` /
     /// `tag_filter` / the missing-timestamp policy below).
@@ -285,6 +285,21 @@ pub struct BuildStats {
     pub candidates_kept: u64,
 }
 
+/// Result of a streaming or incremental build.
+///
+/// `book` may legitimately be empty when every observation is filtered out.
+/// JSONL builds populate `warnings` for records skipped in non-strict mode;
+/// [`IncrementalPriorBuilder`] accepts already-typed observations, so its
+/// output always has an empty warning list. Callers that need validation
+/// warnings should validate their source before constructing an
+/// [`Observation`].
+#[derive(Debug)]
+pub struct BuildOutput {
+    pub book: PriorBook,
+    pub warnings: Vec<Warning>,
+    pub stats: BuildStats,
+}
+
 /// Folds observations into a [`PriorBook`] one at a time, so memory stays
 /// bounded by the number of unique `(state, action)` pairs rather than the
 /// number of observations fed in. This is what lets [`crate::input::build_prior_book_from_reader`]
@@ -298,7 +313,7 @@ pub struct BuildStats {
 /// in per-action totals *and* dataset-wide totals as observations arrive,
 /// then [`Self::finish`] uses the now-complete dataset-wide totals as the
 /// smoothing target for every action.
-pub(crate) struct PriorAccumulator<'a> {
+pub(crate) struct PriorAccumulator {
     stats: HashMap<String, HashMap<String, ActionStats>>,
     /// Order `1..=config.context_order` entries only -- order-0 stays
     /// exclusively in `stats`, never duplicated here. Keyed by
@@ -312,13 +327,13 @@ pub(crate) struct PriorAccumulator<'a> {
     observations_kept: u64,
     observations_dropped_by_step_or_tag_filter: u64,
     observations_dropped_by_missing_timestamp: u64,
-    config: &'a BuildConfig,
+    config: BuildConfig,
     terminal_sequence_id: Option<String>,
     terminal_pending: Vec<(String, String, f64, Option<f64>)>,
 }
 
-impl<'a> PriorAccumulator<'a> {
-    pub(crate) fn new(config: &'a BuildConfig) -> Result<Self> {
+impl PriorAccumulator {
+    pub(crate) fn new(config: &BuildConfig) -> Result<Self> {
         validate_config(config)?;
         Ok(Self {
             stats: HashMap::new(),
@@ -331,7 +346,7 @@ impl<'a> PriorAccumulator<'a> {
             observations_kept: 0,
             observations_dropped_by_step_or_tag_filter: 0,
             observations_dropped_by_missing_timestamp: 0,
-            config,
+            config: config.clone(),
             terminal_sequence_id: None,
             terminal_pending: Vec::new(),
         })
@@ -387,7 +402,7 @@ impl<'a> PriorAccumulator<'a> {
             self.observations_dropped_by_step_or_tag_filter += 1;
             return Ok(());
         }
-        let Some(effective_weight) = effective_weight(obs, self.config) else {
+        let Some(effective_weight) = effective_weight(obs, &self.config) else {
             self.observations_dropped_by_missing_timestamp += 1;
             return Ok(());
         };
@@ -504,7 +519,7 @@ impl<'a> PriorAccumulator<'a> {
         for (state, actions) in self.stats {
             if let Some(actions_out) = finalize_actions(
                 actions,
-                self.config,
+                &self.config,
                 global_success_rate,
                 global_mean_score,
                 &mut counters,
@@ -517,7 +532,7 @@ impl<'a> PriorAccumulator<'a> {
         for (key, actions) in self.context_stats {
             if let Some(actions_out) = finalize_actions(
                 actions,
-                self.config,
+                &self.config,
                 global_success_rate,
                 global_mean_score,
                 &mut counters,
@@ -554,6 +569,50 @@ impl<'a> PriorAccumulator<'a> {
             },
             stats,
         )
+    }
+}
+
+/// Incrementally builds a [`PriorBook`] from typed observations.
+///
+/// This is the adapter-facing counterpart to
+/// [`crate::build_prior_book_from_reader`]: it folds each observation as it
+/// arrives and retains only aggregate evidence, not a `Vec<Observation>`.
+/// It produces the same book and [`BuildStats`] as [`build_prior_book`] for
+/// the same ordered observations and [`BuildConfig`].
+///
+/// When `BuildConfig::context_order` is nonzero, observations for each
+/// `sequence_id` must be contiguous and have strictly increasing `step`.
+/// Violations return [`Error::SequenceNotSorted`] from [`Self::observe`].
+/// Unlike JSONL ingestion, observations are already typed; consequently
+/// [`BuildOutput::warnings`] is always empty.
+pub struct IncrementalPriorBuilder {
+    accumulator: PriorAccumulator,
+}
+
+impl IncrementalPriorBuilder {
+    /// Starts an incremental build after validating `config`.
+    pub fn new(config: BuildConfig) -> Result<Self> {
+        Ok(Self {
+            accumulator: PriorAccumulator::new(&config)?,
+        })
+    }
+
+    /// Folds one observation into the running aggregate.
+    ///
+    /// The observation is consumed so adapters can pass values directly as
+    /// they produce them, without first collecting a batch.
+    pub fn observe(&mut self, observation: Observation) -> Result<()> {
+        self.accumulator.observe(&observation)
+    }
+
+    /// Finalizes smoothing, filtering, and deterministic ranking.
+    pub fn finish(self) -> BuildOutput {
+        let (book, stats) = self.accumulator.finish_with_stats();
+        BuildOutput {
+            book,
+            warnings: Vec::new(),
+            stats,
+        }
     }
 }
 

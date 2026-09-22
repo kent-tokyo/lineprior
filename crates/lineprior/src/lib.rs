@@ -26,7 +26,7 @@ mod trie;
 mod tune;
 
 pub use binary::{load_prior_book_binary, save_prior_book_binary};
-pub use build::{BuildStats, build_prior_book};
+pub use build::{BuildOutput, BuildStats, IncrementalPriorBuilder, build_prior_book};
 pub use error::{Error, Result, Warning};
 pub use eval::{
     CalibrationBin, EvalConfig, EvalOutput, EvalReport, ThresholdSweepEntry, TopKHitRate, evaluate,
@@ -37,7 +37,7 @@ pub use gate::{
     GatePrediction, GateQuery, GateStatus, GateValidationOutput, GateVerdict, GateVerdictConfig,
     GateVerdictPrediction, MonotonicDirection, PredictionStatus, default_gate_lambda_grid,
 };
-pub use input::{BuildOutput, ParseOutcome, build_prior_book_from_reader, parse_jsonl};
+pub use input::{ParseOutcome, build_prior_book_from_reader, parse_jsonl};
 pub use macro_action::{
     MacroAction, MacroActionConfig, build_macro_actions, macro_action_candidates,
 };

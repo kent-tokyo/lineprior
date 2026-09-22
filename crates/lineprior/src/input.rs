@@ -1,5 +1,6 @@
+use crate::build::{BuildOutput, PriorAccumulator};
 use crate::error::{Error, Result, Warning};
-use crate::model::{BuildConfig, Observation, Outcome, PriorBook};
+use crate::model::{BuildConfig, Observation, Outcome};
 use serde::Deserialize;
 use std::io::{BufRead, BufReader, Read};
 
@@ -130,18 +131,6 @@ pub fn parse_jsonl(reader: impl Read, strict: bool) -> Result<ParseOutcome> {
     Ok(outcome)
 }
 
-/// Result of [`build_prior_book_from_reader`]: the built book plus any
-/// non-fatal warnings collected along the way. `book` may legitimately be
-/// empty (no observations, or everything got filtered out) -- callers
-/// that want "empty means an error" should check `book.entries.is_empty()`
-/// themselves, the same way [`crate::report::summarize`]'s callers do.
-#[derive(Debug)]
-pub struct BuildOutput {
-    pub book: PriorBook,
-    pub warnings: Vec<Warning>,
-    pub stats: crate::build::BuildStats,
-}
-
 /// Parses and aggregates a JSONL observation stream in one pass, without
 /// ever collecting a `Vec<Observation>` -- peak memory stays bounded by
 /// the number of unique `(state, action)` pairs, not the number of lines
@@ -159,7 +148,7 @@ pub fn build_prior_book_from_reader(
     strict: bool,
     config: &BuildConfig,
 ) -> Result<BuildOutput> {
-    let mut acc = crate::build::PriorAccumulator::new(config)?;
+    let mut acc = PriorAccumulator::new(config)?;
     let mut warnings = Vec::new();
 
     for (index, line) in BufReader::new(reader).lines().enumerate() {
