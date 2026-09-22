@@ -12,8 +12,8 @@ def main():
     report = json.loads(pathlib.Path(sys.argv[1]).read_text())
     if report.get("protocol") != "ecosystem-matrix-smoke-v1":
         raise ValueError("unexpected ecosystem runtime protocol")
-    if report.get("project_version") != "0.11.1":
-        raise ValueError("ecosystem runtime report is not for fixed version 0.11.1")
+    if report.get("project_version") != "0.12.0":
+        raise ValueError("ecosystem runtime report is not for fixed version 0.12.0")
     if not re.fullmatch(r"[0-9a-f]{40}", report.get("git_commit", "")):
         raise ValueError("git_commit must be a 40-character lowercase commit hash")
     runtimes = report.get("runtimes")

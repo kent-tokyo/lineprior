@@ -9,7 +9,7 @@ import json
 import math
 import pathlib
 
-EXPECTED_VERSION = "0.11.1"
+EXPECTED_VERSION = "0.12.0"
 
 
 def require(mapping, keys, label):

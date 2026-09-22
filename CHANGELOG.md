@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.12.0] - 2026-09-23
+
+### Release notes
+
+- Minor release covering the incremental builder, reproducible measurement-contract tooling,
+  compatibility/WASM artifacts, and documentation maintenance accumulated after `0.11.1`.
+- The five workspace crates remain version-locked at `0.12.0` and are published in dependency order
+  through the tagged GitHub Actions workflow.
+
 ## [0.11.1] - 2026-09-02
 
 - Patch release for the post-v0.11.0 WASM browser smoke, deterministic Trie/macro-action
@@ -50,7 +61,7 @@ in this project, not automatic on every version bump. See each entry for its pub
 
 - Updated the WASM browser smoke's development-only Playwright pin to `1.55.1`, resolving the
   Dependabot-reported high-severity TLS certificate-verification advisory. This does not change
-  the published Rust crates or their fixed `0.11.1` version.
+  the Rust API or scoring model.
 
 ### Added
 
@@ -161,8 +172,8 @@ in this project, not automatic on every version bump. See each entry for its pub
 - Initial `lineprior-wasm` JSON-in/JSON-out build and query boundary; npm/wasm-pack packaging is
   intentionally not included yet.
 
-The workspace version is `0.11.0`; this release includes public Rust API additions. The two
-established crates are published; the three new crates remain pending their manual first publish.
+The workspace version is `0.12.0`; this release includes public Rust API additions. All five
+workspace crates are published in dependency order by the tagged release workflow.
 
 ## [0.10.0] - 2026-08-11
 

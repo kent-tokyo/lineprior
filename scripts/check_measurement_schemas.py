@@ -38,8 +38,8 @@ def main():
         measurement = definitions.get("measurement", {})
         if set(measurement.get("required", [])) != expected["measurement_required"]:
             raise ValueError(f"{filename}: measurement required fields changed unexpectedly")
-        if measurement.get("properties", {}).get("lineprior_version", {}).get("const") != "0.11.1":
-            raise ValueError(f"{filename}: version is not fixed at 0.11.1")
+        if measurement.get("properties", {}).get("lineprior_version", {}).get("const") != "0.12.0":
+            raise ValueError(f"{filename}: version is not fixed at 0.12.0")
         digest = definitions.get("digest", {})
         if digest.get("type") != "string" or digest.get("pattern") != "^[0-9a-f]{64}$":
             raise ValueError(f"{filename}: digest constraint is incomplete")

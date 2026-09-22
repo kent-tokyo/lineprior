@@ -18,11 +18,11 @@ packages = {
     if package["name"].startswith("lineprior")
 }
 expected = {
-    "lineprior": "0.11.1",
-    "lineprior-adapters": "0.11.1",
-    "lineprior-cli": "0.11.1",
-    "lineprior-similarity": "0.11.1",
-    "lineprior-wasm": "0.11.1",
+    "lineprior": "0.12.0",
+    "lineprior-adapters": "0.12.0",
+    "lineprior-cli": "0.12.0",
+    "lineprior-similarity": "0.12.0",
+    "lineprior-wasm": "0.12.0",
 }
 if packages != expected:
     raise SystemExit(f"unexpected lineprior package versions: {packages!r}")
@@ -50,4 +50,4 @@ python3 -c 'import ast; [ast.parse(open(path).read()) for path in ("scripts/meas
 test -x scripts/run_ecosystem_matrix_smoke.sh
 sh -n scripts/run_ecosystem_matrix_smoke.sh
 git diff --check
-echo "candidate contract: ok (version fixed at 0.11.1)"
+echo "candidate contract: ok (version fixed at 0.12.0)"

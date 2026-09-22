@@ -5,9 +5,9 @@ The workspace uses crates.io Trusted Publishing through GitHub Actions OIDC. The
 
 ## Current status
 
-All five workspace crates are published at `0.11.1`. Keep the workspace version fixed until a
-separate release decision is made. The one-time bootstrap for the three newer crates is complete;
-future releases use the normal OIDC path.
+All five workspace crates share one workspace version. Verify the tagged version against crates.io
+after each release. The one-time bootstrap for the three newer crates is complete; future releases
+use the normal OIDC path.
 
 ## One-time bootstrap for a new crate
 

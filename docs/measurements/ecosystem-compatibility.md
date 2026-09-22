@@ -1,7 +1,7 @@
 # Ecosystem compatibility evidence
 
 This document defines the compatibility evidence currently maintained for
-`lineprior` `0.11.1`. It is an evidence boundary, not a promise that every
+`lineprior` `0.12.0`. It is an evidence boundary, not a promise that every
 runtime version is supported.
 
 ## Maintained CI matrix

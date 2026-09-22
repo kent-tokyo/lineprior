@@ -23,7 +23,7 @@ fn similarity_artifact() -> Value {
             "dataset_id": "fixture-v1",
             "split": "heldout",
             "feature_version": "fixture-v1",
-            "lineprior_version": "0.11.1",
+            "lineprior_version": "0.12.0",
             "prior_config_fingerprint": 123,
             "input_sha256": {"prior": "0".repeat(64), "queries": "1".repeat(64)}
         },
@@ -51,7 +51,7 @@ fn offpolicy_artifact() -> Value {
     let measurement = json!({
         "dataset_id": "fixture-v1",
         "split": "heldout",
-        "lineprior_version": "0.11.1",
+        "lineprior_version": "0.12.0",
         "policy_version": "policy-v1",
         "input_sha256": {"off": "0".repeat(64), "on": "1".repeat(64)}
     });
@@ -64,7 +64,7 @@ fn offpolicy_artifact() -> Value {
             "measurement": {
                 "dataset_id": "fixture-v1",
                 "split": "heldout",
-                "lineprior_version": "0.11.1",
+                "lineprior_version": "0.12.0",
                 "input_sha256": {"off": "0".repeat(64), "on": "1".repeat(64)}
             },
             "paired_rows": 2,

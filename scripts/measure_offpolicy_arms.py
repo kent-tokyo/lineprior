@@ -32,13 +32,13 @@ def main():
         paired_path = directory / "paired.json"
         subprocess.run(["python3", str(compare), args.off, args.on, "--out", str(paired_path),
                         "--dataset-id", args.dataset_id, "--split", args.split,
-                        "--lineprior-version", args.policy_version or "0.11.1",
+                        "--lineprior-version", args.policy_version or "0.12.0",
                         "--bootstrap-resamples", str(args.bootstrap_resamples),
                         "--bootstrap-seed", str(args.bootstrap_seed),
                         "--confidence-level", str(args.confidence_level)], check=True)
         report = {"protocol": "offpolicy-integrated-arms-v1",
                   "measurement": {"dataset_id": args.dataset_id, "split": args.split,
-                                  "lineprior_version": args.policy_version or "0.11.1",
+                                  "lineprior_version": args.policy_version or "0.12.0",
                                   "policy_version": args.policy_version or "unspecified",
                                   "input_sha256": {"off": sha256_file(args.off),
                                                    "on": sha256_file(args.on)}},

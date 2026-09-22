@@ -51,7 +51,7 @@ def main():
     ap.add_argument("--bootstrap-resamples", type=int, default=2000); ap.add_argument("--bootstrap-seed", type=int, default=42)
     ap.add_argument("--confidence-level", type=float, default=.95)
     ap.add_argument("--dataset-id", default="unspecified"); ap.add_argument("--split", default="unspecified")
-    ap.add_argument("--lineprior-version", default="0.11.1")
+    ap.add_argument("--lineprior-version", default="0.12.0")
     args = ap.parse_args()
     if args.bootstrap_resamples <= 0 or not 0 < args.confidence_level < 1: raise SystemExit("invalid bootstrap controls")
     off, on = load(args.off), load(args.on)

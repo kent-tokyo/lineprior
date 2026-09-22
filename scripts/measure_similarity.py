@@ -98,7 +98,7 @@ def main():
     ap.add_argument("--distance-scale", type=float, default=1.0)
     ap.add_argument("--max-neighbors", type=int); ap.add_argument("--max-distance", type=float)
     ap.add_argument("--dataset-id", default="unspecified"); ap.add_argument("--split", default="unspecified")
-    ap.add_argument("--feature-version", default="unspecified"); ap.add_argument("--lineprior-version", default="0.11.1")
+    ap.add_argument("--feature-version", default="unspecified"); ap.add_argument("--lineprior-version", default="0.12.0")
     args = ap.parse_args()
     if not math.isfinite(args.distance_scale) or args.distance_scale <= 0: raise SystemExit("distance-scale must be finite and > 0")
     book, prior_config_fingerprint = load_book(args.prior)

@@ -11,7 +11,7 @@ def artifact():
     measurement = {
         "dataset_id": "fixture-v1",
         "split": "heldout",
-        "lineprior_version": "0.11.1",
+        "lineprior_version": "0.12.0",
         "policy_version": "policy-v1",
         "input_sha256": {"off": "0" * 64, "on": "1" * 64},
     }
