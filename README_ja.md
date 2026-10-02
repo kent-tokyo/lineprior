@@ -137,11 +137,11 @@ lineprior validate observations.jsonl   # 構築せずに入力をパースし�
 
 `success_rate` と `mean_score` は生の(平滑化されていない)観測レート(透明性のため)、`prior` は平滑化・正規化されたランキングスコア、`confidence` はデフォルトではヒューリスティックなサンプルサイズの指標ですが、`--confidence-mode wilson-lower-bound`/`hybrid` では実際の Wilson lower bound による統計的な下限になります(上記「Confidence モード」参照)。`success_rate` は `success` を 1.0、`draw` を `--draw-value`(デフォルト 0.5)、`failure` を 0.0 としてクレジットします。
 
-`lineprior build` の CLI 出力(およびライブラリの `save_prior_book_with_config`)は、構築に使った `BuildConfig` のフィンガープリントを持つヘッダー行を先頭に付加するようになりました(例: `{"build_config_fingerprint":7592859384087124328}`)。`load_prior_book` / `lineprior query` / `lineprior summary` はいずれもこの行を透過的にスキップします — 日常的な読み取り方法は変わりません。
+`lineprior build` の CLI 出力(およびライブラリの `save_prior_book_with_config`)は、schema v1 の自己記述ヘッダーを先頭に付加します。ヘッダーには `prior_book_schema_version`、生成した lineprior のバージョン、完全な `BuildConfig` JSON、従来のフィンガープリントが入ります。`load_prior_book` / `lineprior query` / `lineprior summary` は透過的にスキップし、`load_prior_book_with_metadata` は provenance 監査用に内容を返します。ヘッダーなしのbookと旧 `{"build_config_fingerprint":...}` ヘッダーも引き続き読めます。
 
 `--context-order` > 0 の場合、一部の行に `context` フィールドが追加されます — 下記「可変長コンテキスト」参照。
 
-## キャッシュした prior book の古さを検知する
+## provenance の確認とキャッシュした prior book の古さの検知
 
 prior book をディスクにキャッシュし、後で異なる `BuildConfig`(異なる `--smoothing-alpha`、`--confidence-k` など)で再構築した場合、古いファイルの生の `confidence`/`prior` の数値は*古い*設定の意味論で計算されたものです — それを黙って再利用すると誤解を招きかねません。ライブラリとしては:
 
@@ -157,9 +157,9 @@ match load_prior_book_with_config(reader, &config) {
 }
 ```
 
-プレーンな `save_prior_book`(または、この機能より前のバージョンの lineprior)で保存されたファイルにはフィンガープリントがないため、`load_prior_book_with_config` は無条件に受け入れます — 比較対象がないからです。フィンガープリントは*特定の lineprior バージョン内で*安定することが保証されていますが、バージョンをまたいで永続的に安定するとは保証されません(`BuildConfig` の JSON エンコーディングをハッシュしており、浮動小数点の正確なバイト表現自体がバージョン間で保証されるものではないため)— これは1つのプロジェクトのライフタイム内でキャッシュの古さを検知するためのものであり、長期のアーカイブ用チェックサムではありません。
+長期保存したartifactを確認する場合は `load_prior_book_with_metadata` を使います。schema v1、旧fingerprint-onlyヘッダー、ヘッダーなしを区別でき、schema v1ではproducer versionと完全なconfig JSONを64-bit digestから推測せずに取得できます。
 
-新しい `BuildConfig` フィールド(`confidence_mode`/`confidence_z`、`time_decay_half_life_days`/`source_weights`、`context_order` など)を追加したバージョンの lineprior にアップグレードすると、新フィールドが無効なデフォルト値(`heuristic` モード、decay 無効、source weights なし)であっても、*すべての* config でフィンガープリントが変わります — そのため、アップグレード前にキャッシュした prior book は、アップグレード後に一度だけ `BuildConfigMismatch` を発生させます。これはフィンガープリント機構が意図通りに動作しているだけで、不具合ではありません。
+プレーンな `save_prior_book` で保存されたファイルには比較可能なmetadataがないため、`load_prior_book_with_config` は無条件に受け入れます。schema v1では埋め込まれたconfig JSONを正確に比較し、旧ヘッダーではfingerprintにフォールバックします。fingerprintは同一linepriorバージョン内でのみ安定する後方互換用の値で、バージョン横断の長期checksumではありません。
 
 ## 制約事項
 

@@ -133,6 +133,11 @@ fn build_command_writes_a_prior_book() {
         .success();
 
     let contents = std::fs::read_to_string(&out).unwrap();
+    let header: serde_json::Value = serde_json::from_str(contents.lines().next().unwrap()).unwrap();
+    assert_eq!(header["prior_book_schema_version"], 1);
+    assert_eq!(header["producer_version"], env!("CARGO_PKG_VERSION"));
+    assert!(header["build_config"].is_object());
+    assert!(header["build_config_fingerprint"].is_u64());
     assert!(contents.contains("\"state\":\"state_a\""));
     assert!(contents.contains("\"prior\""));
     assert!(contents.contains("\"confidence\""));

@@ -17,13 +17,54 @@ fn parse_entry_line(line: &str, line_no: usize) -> Result<PriorEntry> {
     })
 }
 
-/// Optional first line of a book saved via [`save_prior_book_with_config`]:
-/// a fingerprint of the `BuildConfig` used to build it. Schema-disjoint
-/// from [`PriorEntry`] (each requires a field the other lacks), so a
-/// header can never be mistaken for a state entry or vice versa.
-#[derive(Serialize, Deserialize)]
-struct BookHeader {
+/// Current schema version for the self-describing JSONL prior-book header.
+pub const PRIOR_BOOK_SCHEMA_VERSION: u32 = 1;
+
+/// Metadata written by [`save_prior_book_with_config`] in schema v1.
+///
+/// `build_config` stays as JSON rather than being immediately normalized
+/// through the current [`BuildConfig`] type. That preserves the producer's
+/// exact field set across lineprior upgrades, including fields a newer or
+/// older library version may not know about.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PriorBookMetadataV1 {
+    #[serde(rename = "prior_book_schema_version")]
+    pub schema_version: u32,
+    pub producer_version: String,
+    pub build_config: serde_json::Value,
+    pub build_config_fingerprint: u64,
+}
+
+/// Metadata recovered from a saved prior book.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum PriorBookMetadata {
+    /// Self-describing metadata emitted by current versions.
+    Versioned(PriorBookMetadataV1),
+    /// The fingerprint-only header emitted before schema v1.
+    LegacyFingerprint { build_config_fingerprint: u64 },
+}
+
+/// A prior book together with any metadata found on its first line.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct LoadedPriorBook {
+    pub book: PriorBook,
+    /// `None` means the input was a plain headerless JSONL book.
+    pub metadata: Option<PriorBookMetadata>,
+}
+
+/// Fingerprint-only header emitted before schema v1.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyBookHeader {
     build_config_fingerprint: u64,
+}
+
+#[derive(Deserialize)]
+struct BookHeaderSchemaProbe {
+    prior_book_schema_version: u32,
 }
 
 /// Routes one parsed [`PriorEntry`] into `entries` (order-0, `context`
@@ -37,24 +78,48 @@ fn insert_entry(entries: &mut Entries, context_entries: &mut ContextEntries, ent
     }
 }
 
-/// Shared by [`load_prior_book`] and [`load_prior_book_with_config`]: reads
-/// every line, transparently skipping a leading header if present (whether
-/// or not the caller cares to validate it), and returns whatever
-/// fingerprint it found alongside the parsed entries.
-fn load_entries(reader: impl Read) -> Result<(Entries, ContextEntries, Option<u64>)> {
+/// Shared by all JSONL loaders: reads every line, transparently skipping a
+/// supported leading header, and returns its metadata alongside the entries.
+fn load_entries(reader: impl Read) -> Result<(Entries, ContextEntries, Option<PriorBookMetadata>)> {
     let mut entries: Entries = HashMap::new();
     let mut context_entries: ContextEntries = HashMap::new();
-    let mut fingerprint = None;
+    let mut metadata = None;
     let mut lines = BufReader::new(reader).lines().enumerate();
 
     if let Some((index, line)) = lines.next() {
         let line = line?;
         if !line.trim().is_empty() {
-            match serde_json::from_str::<BookHeader>(&line) {
-                Ok(header) => fingerprint = Some(header.build_config_fingerprint),
-                Err(_) => {
-                    let entry = parse_entry_line(&line, index + 1)?;
-                    insert_entry(&mut entries, &mut context_entries, entry);
+            match serde_json::from_str::<PriorBookMetadataV1>(&line) {
+                Ok(header) => {
+                    if header.schema_version != PRIOR_BOOK_SCHEMA_VERSION {
+                        return Err(Error::UnsupportedPriorBookSchemaVersion {
+                            found: header.schema_version,
+                            supported: PRIOR_BOOK_SCHEMA_VERSION,
+                        });
+                    }
+                    metadata = Some(PriorBookMetadata::Versioned(header));
+                }
+                Err(versioned_error) => {
+                    if let Ok(probe) = serde_json::from_str::<BookHeaderSchemaProbe>(&line) {
+                        if probe.prior_book_schema_version != PRIOR_BOOK_SCHEMA_VERSION {
+                            return Err(Error::UnsupportedPriorBookSchemaVersion {
+                                found: probe.prior_book_schema_version,
+                                supported: PRIOR_BOOK_SCHEMA_VERSION,
+                            });
+                        }
+                        return Err(Error::Json {
+                            line: index + 1,
+                            source: versioned_error,
+                        });
+                    }
+                    if let Ok(header) = serde_json::from_str::<LegacyBookHeader>(&line) {
+                        metadata = Some(PriorBookMetadata::LegacyFingerprint {
+                            build_config_fingerprint: header.build_config_fingerprint,
+                        });
+                    } else {
+                        let entry = parse_entry_line(&line, index + 1)?;
+                        insert_entry(&mut entries, &mut context_entries, entry);
+                    }
                 }
             }
         }
@@ -69,7 +134,7 @@ fn load_entries(reader: impl Read) -> Result<(Entries, ContextEntries, Option<u6
         insert_entry(&mut entries, &mut context_entries, entry);
     }
 
-    Ok((entries, context_entries, fingerprint))
+    Ok((entries, context_entries, metadata))
 }
 
 /// Reads a prior book back from the JSONL format emitted by `build`.
@@ -80,10 +145,22 @@ fn load_entries(reader: impl Read) -> Result<(Entries, ContextEntries, Option<u6
 /// [`save_prior_book_with_config`]; use [`load_prior_book_with_config`] to
 /// actually validate it against an expected `BuildConfig`.
 pub fn load_prior_book(reader: impl Read) -> Result<PriorBook> {
-    let (entries, context_entries, _fingerprint) = load_entries(reader)?;
-    Ok(PriorBook {
-        entries,
-        context_entries,
+    Ok(load_prior_book_with_metadata(reader)?.book)
+}
+
+/// Reads a JSONL prior book and returns its parsed provenance metadata.
+///
+/// Headerless books return `metadata: None`. Fingerprint-only books remain
+/// distinguishable from schema-v1 books so callers do not accidentally treat
+/// legacy cache metadata as complete archival provenance.
+pub fn load_prior_book_with_metadata(reader: impl Read) -> Result<LoadedPriorBook> {
+    let (entries, context_entries, metadata) = load_entries(reader)?;
+    Ok(LoadedPriorBook {
+        book: PriorBook {
+            entries,
+            context_entries,
+        },
+        metadata,
     })
 }
 
@@ -120,16 +197,20 @@ pub fn build_config_fingerprint(config: &BuildConfig) -> u64 {
     crate::hash::fnv1a(&canonical)
 }
 
-/// Like [`save_prior_book`], but also writes a leading header line with
-/// `config`'s fingerprint, so a later [`load_prior_book_with_config`] call
-/// can detect whether the book was built under different config values
-/// than the caller currently expects.
+/// Like [`save_prior_book`], but writes a schema-v1 self-describing header.
+/// The header records the producing lineprior version, the complete config
+/// JSON, and the historical fingerprint used by
+/// [`load_prior_book_with_config`].
 pub fn save_prior_book_with_config(
     book: &PriorBook,
     config: &BuildConfig,
     mut writer: impl Write,
 ) -> Result<()> {
-    let header = BookHeader {
+    let header = PriorBookMetadataV1 {
+        schema_version: PRIOR_BOOK_SCHEMA_VERSION,
+        producer_version: env!("CARGO_PKG_VERSION").to_string(),
+        build_config: serde_json::to_value(config)
+            .expect("BuildConfig always serializes to a JSON value"),
         build_config_fingerprint: build_config_fingerprint(config),
     };
     serde_json::to_writer(&mut writer, &header).map_err(|e| Error::Io(std::io::Error::other(e)))?;
@@ -149,17 +230,32 @@ pub fn load_prior_book_with_config(
     reader: impl Read,
     expected_config: &BuildConfig,
 ) -> Result<PriorBook> {
-    let (entries, context_entries, fingerprint) = load_entries(reader)?;
-    if let Some(found) = fingerprint {
+    let loaded = load_prior_book_with_metadata(reader)?;
+    if let Some(metadata) = &loaded.metadata {
         let expected = build_config_fingerprint(expected_config);
-        if found != expected {
-            return Err(Error::BuildConfigMismatch { expected, found });
+        match metadata {
+            PriorBookMetadata::Versioned(header) => {
+                let expected_config = serde_json::to_value(expected_config)
+                    .expect("BuildConfig always serializes to a JSON value");
+                if header.build_config != expected_config {
+                    return Err(Error::BuildConfigMismatch {
+                        expected,
+                        found: header.build_config_fingerprint,
+                    });
+                }
+            }
+            PriorBookMetadata::LegacyFingerprint {
+                build_config_fingerprint: found,
+            } if *found != expected => {
+                return Err(Error::BuildConfigMismatch {
+                    expected,
+                    found: *found,
+                });
+            }
+            PriorBookMetadata::LegacyFingerprint { .. } => {}
         }
     }
-    Ok(PriorBook {
-        entries,
-        context_entries,
-    })
+    Ok(loaded.book)
 }
 
 #[cfg(test)]
@@ -268,6 +364,104 @@ mod tests {
         // Plain load_prior_book never validates the header, just tolerates it.
         let reloaded = load_prior_book(buf.as_slice()).unwrap();
         assert_eq!(reloaded.query("s", None), book.query("s", None));
+    }
+
+    #[test]
+    fn versioned_metadata_round_trips_exact_config_and_is_byte_deterministic() {
+        let book = sample_book();
+        let config = BuildConfig {
+            smoothing_alpha: 7.5,
+            source_weights: [("trusted".to_string(), 0.8)].into_iter().collect(),
+            ..BuildConfig::default()
+        };
+        let mut first = Vec::new();
+        let mut second = Vec::new();
+        save_prior_book_with_config(&book, &config, &mut first).unwrap();
+        save_prior_book_with_config(&book, &config, &mut second).unwrap();
+        assert_eq!(first, second);
+
+        let loaded = load_prior_book_with_metadata(first.as_slice()).unwrap();
+        assert_eq!(loaded.book.query("s", None), book.query("s", None));
+        let Some(PriorBookMetadata::Versioned(metadata)) = loaded.metadata else {
+            panic!("expected schema-v1 metadata");
+        };
+        assert_eq!(metadata.schema_version, PRIOR_BOOK_SCHEMA_VERSION);
+        assert_eq!(metadata.producer_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            metadata.build_config,
+            serde_json::to_value(&config).unwrap()
+        );
+        assert_eq!(
+            metadata.build_config_fingerprint,
+            build_config_fingerprint(&config)
+        );
+    }
+
+    #[test]
+    fn metadata_loader_reads_legacy_fingerprint_header() {
+        let book = sample_book();
+        let config = BuildConfig::default();
+        let fingerprint = build_config_fingerprint(&config);
+        let mut buf = format!("{{\"build_config_fingerprint\":{fingerprint}}}\n").into_bytes();
+        save_prior_book(&book, &mut buf).unwrap();
+
+        let loaded = load_prior_book_with_metadata(buf.as_slice()).unwrap();
+        assert_eq!(
+            loaded.metadata,
+            Some(PriorBookMetadata::LegacyFingerprint {
+                build_config_fingerprint: fingerprint,
+            })
+        );
+        assert_eq!(loaded.book.query("s", None), book.query("s", None));
+        assert!(load_prior_book_with_config(buf.as_slice(), &config).is_ok());
+    }
+
+    #[test]
+    fn metadata_loader_reports_headerless_book() {
+        let book = sample_book();
+        let mut buf = Vec::new();
+        save_prior_book(&book, &mut buf).unwrap();
+
+        let loaded = load_prior_book_with_metadata(buf.as_slice()).unwrap();
+        assert!(loaded.metadata.is_none());
+        assert_eq!(loaded.book.query("s", None), book.query("s", None));
+    }
+
+    #[test]
+    fn metadata_loader_rejects_unsupported_schema_version() {
+        let config = BuildConfig::default();
+        let header = serde_json::json!({
+            "prior_book_schema_version": PRIOR_BOOK_SCHEMA_VERSION + 1,
+            "producer_version": env!("CARGO_PKG_VERSION"),
+            "build_config": serde_json::to_value(&config).unwrap(),
+            "build_config_fingerprint": build_config_fingerprint(&config),
+        });
+        let mut buf = serde_json::to_vec(&header).unwrap();
+        buf.push(b'\n');
+        save_prior_book(&sample_book(), &mut buf).unwrap();
+
+        let error = load_prior_book_with_metadata(buf.as_slice()).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::UnsupportedPriorBookSchemaVersion {
+                found,
+                supported
+            } if found == PRIOR_BOOK_SCHEMA_VERSION + 1 && supported == PRIOR_BOOK_SCHEMA_VERSION
+        ));
+    }
+
+    #[test]
+    fn metadata_loader_rejects_malformed_current_schema_header() {
+        let header = serde_json::json!({
+            "prior_book_schema_version": PRIOR_BOOK_SCHEMA_VERSION,
+            "build_config": {},
+            "build_config_fingerprint": 1,
+        });
+        let mut buf = serde_json::to_vec(&header).unwrap();
+        buf.push(b'\n');
+
+        let error = load_prior_book_with_metadata(buf.as_slice()).unwrap_err();
+        assert!(matches!(error, Error::Json { line: 1, .. }));
     }
 
     #[test]

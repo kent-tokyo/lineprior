@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added schema-v1 self-describing prior-book headers with producer version and complete BuildConfig
+  JSON, plus a metadata-returning Rust loader. Headerless and legacy fingerprint-only JSONL books
+  remain readable, and identical book/config/version inputs remain byte-deterministic.
+
 ## [0.12.0] - 2026-09-23
 
 ### Release notes

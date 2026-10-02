@@ -43,6 +43,9 @@ pub enum Error {
     )]
     BuildConfigMismatch { expected: u64, found: u64 },
 
+    #[error("unsupported prior-book schema version {found}; supported version is {supported}")]
+    UnsupportedPriorBookSchemaVersion { found: u32, supported: u32 },
+
     #[error("invalid build config: {message}")]
     InvalidConfig { message: String },
 

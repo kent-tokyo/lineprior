@@ -53,8 +53,9 @@ pub use offpolicy::{
     bootstrap_self_normalized_ips, evaluate_doubly_robust, evaluate_self_normalized_ips,
 };
 pub use query::{
-    build_config_fingerprint, load_prior_book, load_prior_book_with_config, save_prior_book,
-    save_prior_book_with_config,
+    LoadedPriorBook, PRIOR_BOOK_SCHEMA_VERSION, PriorBookMetadata, PriorBookMetadataV1,
+    build_config_fingerprint, load_prior_book, load_prior_book_with_config,
+    load_prior_book_with_metadata, save_prior_book, save_prior_book_with_config,
 };
 pub use report::{ContextOrderSummary, StateEntropy, SummaryReport, state_entropy, summarize};
 pub use similarity::{

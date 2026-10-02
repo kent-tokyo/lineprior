@@ -137,11 +137,11 @@ One JSON object per state, actions ranked by descending prior:
 
 `success_rate` and `mean_score` are the raw, unsmoothed observed rates (for transparency); `prior` is the smoothed, normalized ranking score; `confidence` is a heuristic sample-size indicator by default, or a real Wilson-bound statistical lower bound under `--confidence-mode wilson-lower-bound`/`hybrid` (see "Confidence modes" above). `success_rate` credits a `success` outcome as 1.0, a `draw` as `--draw-value` (default 0.5), and a `failure` as 0.0.
 
-`lineprior build`'s CLI output (and the library's `save_prior_book_with_config`) prepends a header line carrying a fingerprint of the `BuildConfig` used to build it, e.g. `{"build_config_fingerprint":7592859384087124328}`. `load_prior_book`/`lineprior query`/`lineprior summary` all skip this line transparently — it doesn't change how you read a prior book day to day.
+`lineprior build`'s CLI output (and the library's `save_prior_book_with_config`) prepends a schema-v1 self-describing header. It records `prior_book_schema_version`, the producing lineprior version, the complete `BuildConfig` JSON, and its historical fingerprint. `load_prior_book`/`lineprior query`/`lineprior summary` skip the header transparently, while `load_prior_book_with_metadata` returns it for provenance audits. Headerless books and the older `{"build_config_fingerprint":...}` header remain readable.
 
 With `--context-order` > 0, some lines additionally carry a `context` field — see "Variable-order context" below.
 
-## Detecting a stale cached prior book
+## Inspecting provenance and detecting a stale cached prior book
 
 If you cache a prior book on disk and rebuild it later under different `BuildConfig` values (a different `--smoothing-alpha`, `--confidence-k`, etc.), the raw `confidence`/`prior` numbers in the old file were computed under the *old* config's semantics — reusing it silently can be misleading. As a library:
 
@@ -157,9 +157,9 @@ match load_prior_book_with_config(reader, &config) {
 }
 ```
 
-A file saved via plain `save_prior_book` (or by a version of lineprior that predates this) has no fingerprint to compare against, so `load_prior_book_with_config` accepts it unconditionally — there's nothing to detect drift against. The fingerprint is stable *within a given lineprior version*, not guaranteed forever-stable across upgrades (it hashes a JSON encoding of `BuildConfig`, and floats' exact byte layout isn't itself a cross-version guarantee) — it's meant to catch a stale cache within one project's lifetime, not serve as a long-term archival checksum.
+For archival inspection, use `load_prior_book_with_metadata`. It distinguishes schema-v1 metadata, a legacy fingerprint-only header, and a headerless book. Schema v1 preserves the producer version and complete config JSON rather than asking a future library version to reconstruct them from a 64-bit digest.
 
-Upgrading to a lineprior version that adds new `BuildConfig` fields (like `confidence_mode`/`confidence_z`, `time_decay_half_life_days`/`source_weights`, or `context_order`) changes the fingerprint for *every* config, even when the new fields are at their inert defaults (`heuristic` mode, decay disabled, no source weights) — so a prior book cached before upgrading will trip `BuildConfigMismatch` once after upgrading. That's the fingerprint mechanism working as intended, not a regression.
+A file saved via plain `save_prior_book` has no metadata to compare, so `load_prior_book_with_config` accepts it unconditionally. For a schema-v1 header it compares the embedded config JSON exactly; for an older header it falls back to the fingerprint. That fingerprint remains stable only *within a given lineprior version* and is retained for backward compatibility, not promoted to a cross-version archival checksum.
 
 ## Limitations
 
