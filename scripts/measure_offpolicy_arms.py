@@ -2,6 +2,8 @@
 """Run Rust IPS/DR evaluation for paired arms and combine the audit artifact."""
 import argparse, hashlib, json, pathlib, subprocess, tempfile
 
+from version_contract import workspace_version
+
 
 def sha256_file(path):
     return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
@@ -11,6 +13,7 @@ def main():
     ap.add_argument("off"); ap.add_argument("on"); ap.add_argument("--lineprior-bin", required=True)
     ap.add_argument("--out", required=True); ap.add_argument("--dataset-id", default="unspecified")
     ap.add_argument("--split", default="unspecified"); ap.add_argument("--policy-version")
+    ap.add_argument("--lineprior-version", default=workspace_version())
     ap.add_argument("--bootstrap-resamples", type=int, default=2000); ap.add_argument("--bootstrap-seed", type=int, default=42)
     ap.add_argument("--confidence-level", type=float, default=.95); ap.add_argument("--max-importance-weight", type=float)
     args = ap.parse_args()
@@ -32,13 +35,13 @@ def main():
         paired_path = directory / "paired.json"
         subprocess.run(["python3", str(compare), args.off, args.on, "--out", str(paired_path),
                         "--dataset-id", args.dataset_id, "--split", args.split,
-                        "--lineprior-version", args.policy_version or "0.12.0",
+                        "--lineprior-version", args.lineprior_version,
                         "--bootstrap-resamples", str(args.bootstrap_resamples),
                         "--bootstrap-seed", str(args.bootstrap_seed),
                         "--confidence-level", str(args.confidence_level)], check=True)
         report = {"protocol": "offpolicy-integrated-arms-v1",
                   "measurement": {"dataset_id": args.dataset_id, "split": args.split,
-                                  "lineprior_version": args.policy_version or "0.12.0",
+                                  "lineprior_version": args.lineprior_version,
                                   "policy_version": args.policy_version or "unspecified",
                                   "input_sha256": {"off": sha256_file(args.off),
                                                    "on": sha256_file(args.on)}},

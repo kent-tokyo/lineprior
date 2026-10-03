@@ -3,8 +3,8 @@
 import json
 import pathlib
 
-
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+VERSION_PATTERN = r"^[0-9]+\.[0-9]+\.[0-9]+$"
 EXPECTED = {
     "similarity-real-data-v1.schema.json": {
         "protocol": "similarity-real-data-v1",
@@ -38,8 +38,9 @@ def main():
         measurement = definitions.get("measurement", {})
         if set(measurement.get("required", [])) != expected["measurement_required"]:
             raise ValueError(f"{filename}: measurement required fields changed unexpectedly")
-        if measurement.get("properties", {}).get("lineprior_version", {}).get("const") != "0.12.0":
-            raise ValueError(f"{filename}: version is not fixed at 0.12.0")
+        version = measurement.get("properties", {}).get("lineprior_version", {})
+        if version.get("type") != "string" or version.get("pattern") != VERSION_PATTERN:
+            raise ValueError(f"{filename}: lineprior_version must use the stable semver contract")
         digest = definitions.get("digest", {})
         if digest.get("type") != "string" or digest.get("pattern") != "^[0-9a-f]{64}$":
             raise ValueError(f"{filename}: digest constraint is incomplete")

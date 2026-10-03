@@ -29,13 +29,23 @@ await page.goto(`http://127.0.0.1:${port}/index.html`);
 await page.evaluate(async () => {
   const module = await import("/pkg/lineprior_wasm.js");
   await module.default("/pkg/lineprior_wasm_bg.wasm");
-  const result = JSON.parse(module.build_json(
-    '{"sequence_id":"browser","step":0,"state":"screen","action":"click","outcome":"success"}\n',
-    '{}',
-  ));
+  const input =
+    '{"sequence_id":"browser","step":0,"state":"screen","action":"click","outcome":"success"}\n';
+  const first = module.build_json(input, '{}');
+  const second = module.build_json(input, '{}');
+  if (first !== second) throw new Error("build output is not deterministic");
+  const result = JSON.parse(first);
   if (result.entries[0].state !== "screen") throw new Error("unexpected build state");
   const query = JSON.parse(module.query_json(JSON.stringify(result.entries[0]) + "\n", "screen", 1));
   if (query[0].action !== "click") throw new Error("unexpected query action");
+  try {
+    module.build_json(input, "not-json");
+    throw new Error("malformed config was accepted");
+  } catch (error) {
+    if (!String(error).includes("invalid BuildConfig JSON")) {
+      throw new Error(`unexpected error shape: ${String(error)}`);
+    }
+  }
 });
 await browser.close();
 server.close();

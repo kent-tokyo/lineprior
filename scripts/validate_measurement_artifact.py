@@ -5,11 +5,15 @@ This checks report shape and lineage only. It does not turn fixture output into
 real-data evidence or decide whether a quality gate should pass.
 """
 import argparse
+import hashlib
 import json
 import math
 import pathlib
 
-EXPECTED_VERSION = "0.12.0"
+from version_contract import workspace_version
+
+EXPECTED_VERSION = workspace_version()
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 def require(mapping, keys, label):
@@ -41,16 +45,16 @@ def validate_nonnegative_integer(value, label):
         raise ValueError(f"{label} must be a non-negative integer")
 
 
-def validate_lineage(report, label, require_explicit):
+def validate_lineage(report, label, require_explicit, expected_version=EXPECTED_VERSION):
     require(report, ("protocol", "measurement"), label)
     measurement = report["measurement"]
     required = ["dataset_id", "split", "lineprior_version", "input_sha256"]
     if label == "similarity":
         required.append("prior_config_fingerprint")
     require(measurement, required, f"{label}.measurement")
-    if measurement["lineprior_version"] != EXPECTED_VERSION:
+    if measurement["lineprior_version"] != expected_version:
         raise ValueError(
-            f"{label}.measurement.lineprior_version must be {EXPECTED_VERSION}"
+            f"{label}.measurement.lineprior_version must be {expected_version}"
         )
     validate_hashes(measurement, ("prior", "queries") if label == "similarity" else ("off", "on"), label)
     if require_explicit:
@@ -69,12 +73,28 @@ def validate_lineage(report, label, require_explicit):
                 raise ValueError(f"{label}.measurement.{key} must be explicit when required")
 
 
-def validate_similarity(report, require_explicit):
-    validate_lineage(report, "similarity", require_explicit)
+def validate_similarity(report, require_explicit, expected_version=EXPECTED_VERSION):
+    validate_lineage(report, "similarity", require_explicit, expected_version)
     if report["protocol"] != "similarity-real-data-v1":
         raise ValueError("unexpected similarity protocol")
     require(report, ("num_queries", "arms"), "similarity")
     validate_nonnegative_integer(report["num_queries"], "similarity.num_queries")
+    measurement = report["measurement"]
+    for path_key, hash_key in (
+        ("runner_path", "runner_sha256"),
+        ("feature_adapter_path", "feature_adapter_sha256"),
+    ):
+        if measurement.get(path_key) is not None or measurement.get(hash_key) is not None:
+            path_value = measurement.get(path_key)
+            digest = measurement.get(hash_key)
+            if not isinstance(path_value, str) or not path_value:
+                raise ValueError(f"similarity.measurement.{path_key} must be a repository-relative path")
+            path = (ROOT / path_value).resolve()
+            if ROOT not in path.parents or not path.is_file():
+                raise ValueError(f"similarity.measurement.{path_key} is outside the repository or missing")
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+            if digest != actual:
+                raise ValueError(f"similarity.measurement.{hash_key} does not match {path_key}")
     arms = report["arms"]
     require(arms, (), "similarity.arms")
     for name in ("exact", "similarity", "no_prior"):
@@ -86,10 +106,20 @@ def validate_similarity(report, require_explicit):
         arm = arms[name]
         for metric in ("coverage", "abstention_rate", "top1_hit_rate", "mrr", "calibration_brier"):
             validate_unit_interval(arm[metric], f"similarity.arms.{name}.{metric}")
+        for metric in ("top1_hit_rate_covered", "false_recommendation_rate_covered"):
+            if metric in arm:
+                validate_unit_interval(arm[metric], f"similarity.arms.{name}.{metric}")
+        for metric in ("latency_us_p50", "latency_us_p95", "peak_rss_kb"):
+            if arm.get(metric) is not None and (
+                not isinstance(arm[metric], (int, float))
+                or not math.isfinite(float(arm[metric]))
+                or arm[metric] < 0
+            ):
+                raise ValueError(f"similarity.arms.{name}.{metric} must be finite and non-negative")
 
 
-def validate_offpolicy(report, require_explicit):
-    validate_lineage(report, "offpolicy", require_explicit)
+def validate_offpolicy(report, require_explicit, expected_version=EXPECTED_VERSION):
+    validate_lineage(report, "offpolicy", require_explicit, expected_version)
     if report["protocol"] != "offpolicy-integrated-arms-v1":
         raise ValueError("unexpected integrated off-policy protocol")
     require(report, ("arms", "paired"), "offpolicy")
@@ -132,12 +162,13 @@ def main():
     parser.add_argument("kind", choices=("similarity", "offpolicy"))
     parser.add_argument("artifact")
     parser.add_argument("--require-explicit-lineage", action="store_true")
+    parser.add_argument("--expected-lineprior-version", default=EXPECTED_VERSION)
     args = parser.parse_args()
     report = json.loads(pathlib.Path(args.artifact).read_text())
     if args.kind == "similarity":
-        validate_similarity(report, args.require_explicit_lineage)
+        validate_similarity(report, args.require_explicit_lineage, args.expected_lineprior_version)
     else:
-        validate_offpolicy(report, args.require_explicit_lineage)
+        validate_offpolicy(report, args.require_explicit_lineage, args.expected_lineprior_version)
     print(f"measurement artifact contract: ok ({args.kind})")
 
 

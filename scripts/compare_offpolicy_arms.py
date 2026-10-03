@@ -8,6 +8,8 @@ paired delta; it never fabricates counterfactual rewards.
 """
 import argparse, hashlib, json, math, pathlib
 
+from version_contract import workspace_version
+
 
 def sha256_file(path):
     return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
@@ -51,7 +53,7 @@ def main():
     ap.add_argument("--bootstrap-resamples", type=int, default=2000); ap.add_argument("--bootstrap-seed", type=int, default=42)
     ap.add_argument("--confidence-level", type=float, default=.95)
     ap.add_argument("--dataset-id", default="unspecified"); ap.add_argument("--split", default="unspecified")
-    ap.add_argument("--lineprior-version", default="0.12.0")
+    ap.add_argument("--lineprior-version", default=workspace_version())
     args = ap.parse_args()
     if args.bootstrap_resamples <= 0 or not 0 < args.confidence_level < 1: raise SystemExit("invalid bootstrap controls")
     off, on = load(args.off), load(args.on)

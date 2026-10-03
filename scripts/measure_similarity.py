@@ -6,11 +6,17 @@ documented distance weighting to already supplied neighbors and never invents
 an action. It is intentionally dependency-free so the same artifact can run
 in a CI or data-analysis environment.
 """
-import argparse, hashlib, json, math, pathlib, time
+import argparse, hashlib, json, math, pathlib, platform, resource, subprocess, sys, time
+
+from version_contract import workspace_version
 
 
 def sha256_file(path):
     return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+
+def repository_relative(path):
+    root = pathlib.Path(__file__).resolve().parent.parent
+    return pathlib.Path(path).resolve().relative_to(root).as_posix()
 
 def load_book(path):
     book = {}
@@ -92,29 +98,100 @@ def percentile(values, p):
     lo, hi = math.floor(pos), math.ceil(pos)
     return values[lo] if lo == hi else values[lo] + (values[hi] - values[lo]) * (pos - lo)
 
+def normalize_peak_rss_kb(raw_value, system):
+    # getrusage reports bytes on macOS and KiB on Linux/BSD. Normalize the
+    # artifact instead of silently attaching the wrong unit to macOS values.
+    return raw_value / 1024.0 if system == "Darwin" else float(raw_value)
+
+def resolve_fingerprint(header_value, override):
+    if override is None:
+        return header_value
+    if header_value != "unspecified" and str(header_value) != str(override):
+        raise ValueError("--prior-config-fingerprint conflicts with the prior header")
+    return override
+
+def git_lineage():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        dirty = bool(
+            subprocess.check_output(
+                ["git", "status", "--porcelain"],
+                cwd=root,
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        )
+        return commit, dirty
+    except (OSError, subprocess.CalledProcessError):
+        return "unavailable", None
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("prior"); ap.add_argument("queries"); ap.add_argument("--out", required=True)
     ap.add_argument("--distance-scale", type=float, default=1.0)
     ap.add_argument("--max-neighbors", type=int); ap.add_argument("--max-distance", type=float)
+    ap.add_argument("--warmup", type=int, default=1)
+    ap.add_argument("--repetitions", type=int, default=5)
     ap.add_argument("--dataset-id", default="unspecified"); ap.add_argument("--split", default="unspecified")
-    ap.add_argument("--feature-version", default="unspecified"); ap.add_argument("--lineprior-version", default="0.12.0")
+    ap.add_argument("--feature-version", default="unspecified"); ap.add_argument("--lineprior-version", default=workspace_version())
+    ap.add_argument("--prior-config-fingerprint")
+    ap.add_argument("--dataset-source-commit", default="unspecified")
+    ap.add_argument("--seed", default="none")
+    ap.add_argument("--feature-adapter")
     args = ap.parse_args()
     if not math.isfinite(args.distance_scale) or args.distance_scale <= 0: raise SystemExit("distance-scale must be finite and > 0")
+    if args.warmup < 0: raise SystemExit("warmup must be >= 0")
+    if args.repetitions <= 0: raise SystemExit("repetitions must be > 0")
     book, prior_config_fingerprint = load_book(args.prior)
+    prior_config_fingerprint = resolve_fingerprint(prior_config_fingerprint, args.prior_config_fingerprint)
     queries = load_queries(args.queries)
+    runner_commit, runner_tree_dirty = git_lineage()
     arms = {"exact": [], "similarity": [], "no_prior": []}
     for arm in arms:
         for row in queries:
-            start = time.perf_counter_ns()
-            candidates = [] if arm == "no_prior" else (book.get(row["state"], []) if arm == "exact" else similarity(book, row["neighbors"], args.distance_scale, args.max_neighbors, args.max_distance))
+            def run_arm():
+                return [] if arm == "no_prior" else (book.get(row["state"], []) if arm == "exact" else similarity(book, row["neighbors"], args.distance_scale, args.max_neighbors, args.max_distance))
+            for _ in range(args.warmup):
+                run_arm()
+            candidates = None
+            latencies = []
+            for _ in range(args.repetitions):
+                start = time.perf_counter_ns()
+                current = run_arm()
+                latencies.append((time.perf_counter_ns() - start) / 1000.0)
+                if candidates is None:
+                    candidates = current
+                elif current != candidates:
+                    raise ValueError(f"{arm} produced non-deterministic candidates")
             rank, hit, confidence = rank_metrics(candidates, row["expected_action"])
             arms[arm].append({"rank": rank, "hit": hit, "confidence": confidence,
-                              "latency_us": (time.perf_counter_ns() - start) / 1000.0})
+                              "latency_us": latencies})
     report = {"protocol": "similarity-real-data-v1", "num_queries": len(queries),
               "measurement": {"dataset_id": args.dataset_id, "split": args.split,
                                "feature_version": args.feature_version,
                                "lineprior_version": args.lineprior_version,
+                               "runner_commit": runner_commit,
+                               "runner_tree_dirty": runner_tree_dirty,
+                               "runner_path": repository_relative(__file__),
+                               "runner_sha256": sha256_file(__file__),
+                               "feature_adapter_path": repository_relative(args.feature_adapter) if args.feature_adapter else None,
+                               "feature_adapter_sha256": sha256_file(args.feature_adapter) if args.feature_adapter else None,
+                               "dataset_source_commit": args.dataset_source_commit,
+                               "seed": args.seed,
+                               "environment": {"python": sys.version.split()[0],
+                                               "platform": platform.platform(),
+                                               "machine": platform.machine()},
+                               "similarity_config": {"distance_scale": args.distance_scale,
+                                                     "max_neighbors": args.max_neighbors,
+                                                     "max_distance": args.max_distance},
+                               "timing": {"warmup": args.warmup,
+                                          "repetitions": args.repetitions},
                                "input_sha256": {"prior": sha256_file(args.prior),
                                                 "queries": sha256_file(args.queries)},
                                "prior_config_fingerprint": prior_config_fingerprint}, "arms": {}}
@@ -124,12 +201,16 @@ def main():
         brier = [((r["confidence"] - r["hit"]) ** 2) for r in evaluated]
         report["arms"][name] = {"coverage": len(evaluated) / len(rows) if rows else None,
             "abstention_rate": 1.0 - (len(evaluated) / len(rows)) if rows else None,
+            "evaluated_queries": len(evaluated),
+            "top1_hits": int(hits),
             "top1_hit_rate": hits / len(rows) if rows else None,
+            "top1_hit_rate_covered": hits / len(evaluated) if evaluated else None,
+            "false_recommendation_rate_covered": 1.0 - (hits / len(evaluated)) if evaluated else None,
             "mrr": sum(1.0 / r["rank"] if r["rank"] else 0.0 for r in rows) / len(rows) if rows else None,
             "calibration_brier": sum(brier) / len(brier) if brier else None,
-            "latency_us_p50": percentile([r["latency_us"] for r in rows], .50),
-            "latency_us_p95": percentile([r["latency_us"] for r in rows], .95),
-            "peak_rss_kb": __import__("resource").getrusage(__import__("resource").RUSAGE_SELF).ru_maxrss}
+            "latency_us_p50": percentile([value for r in rows for value in r["latency_us"]], .50),
+            "latency_us_p95": percentile([value for r in rows for value in r["latency_us"]], .95),
+            "peak_rss_kb": normalize_peak_rss_kb(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss, platform.system())}
     pathlib.Path(args.out).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 
 if __name__ == "__main__":

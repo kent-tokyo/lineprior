@@ -1,12 +1,12 @@
 # IPS / DR real-log measurement protocol
 
-This protocol is the measurement handoff for Phase C. `lineprior` estimates
-what the supplied logged-policy assumptions imply; it cannot repair missing
-propensities or create counterfactual outcomes.
-The machine-readable integrated artifact contract is
-[`offpolicy-integrated-arms-v1.schema.json`](offpolicy-integrated-arms-v1.schema.json).
-The repository validator additionally checks paired/top-level lineage equality
-and finite metric semantics.
+Use this protocol to evaluate IPS/DR on real logs. `lineprior` estimates what the supplied
+logged-policy assumptions imply; it cannot repair missing propensities or create counterfactual
+outcomes.
+The machine-readable contract is
+[`offpolicy-integrated-arms-v1.schema.json`](offpolicy-integrated-arms-v1.schema.json). The
+repository validator additionally checks paired/top-level lineage equality and finite metric
+semantics.
 
 ## Required log fields
 
@@ -48,3 +48,14 @@ The causal/downstream gate requires valid overlap, uncertainty intervals,
 and a paired held-out improvement of `on` over `off` at the declared cost and
 abstention budget. A point estimate, a replayable fixture, or a ranking
 correlation alone does not pass this gate.
+
+## Sekirei readiness audit
+
+The checked-in [2026-10-03 audit](offpolicy-sekirei-readiness-2026-10-03.json) inspected 183 real
+search decisions from six Floodgate analysis logs. Every decision had a state and selected action,
+but none had a declared reward, logging propensity, evaluation-policy probability, or reward-model
+values. Support, overlap, ESS, weight caps, bootstrap intervals, and IPS/DR are therefore undefined.
+
+Do not reconstruct propensities from search scores, PV rank, or a post-hoc softmax. The recorded
+decision is `not_estimable`: no causal or downstream on/off claim is permitted until a randomized
+or otherwise known logging policy records its probability at decision time.

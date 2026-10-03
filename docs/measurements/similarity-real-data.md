@@ -1,7 +1,7 @@
 # Similarity real-data measurement protocol
 
-This protocol is the measurement handoff for Phase B. It does not claim that
-similarity improves decisions until a real held-out dataset is supplied.
+Use this protocol to compare similarity fallback on real held-out data. The protocol does not
+claim that similarity improves decisions before such data is supplied.
 The machine-readable artifact contract is
 [`similarity-real-data-v1.schema.json`](similarity-real-data-v1.schema.json).
 The repository validator additionally enforces fixed-version, numeric-range,
@@ -13,10 +13,10 @@ Prepare three immutable artifacts:
 
 1. `train.jsonl`: observations used to build the prior.
 2. `queries.jsonl`: one row per held-out query, containing `query_id`, opaque
-   `state`, `expected_action`, and the caller-owned feature vector.
-3. `neighbors.jsonl`: deterministic nearest-neighbor output for each query,
-   containing `query_id`, neighbor `state`, `distance`, and `provenance`.
-   Do not generate actions from the feature model.
+   `state`, `expected_action`, and deterministic caller-owned `neighbors`.
+3. The upstream neighbor-generation input or manifest. Record its hash and
+   feature version even though the runner consumes neighbors inline. Do not
+   generate actions from the feature model.
 
 Keep the split by sequence/case, and record dataset ID, split rule, feature
 version, `SimilarityConfig`, toolchain, hardware, and random seed (if any).
@@ -46,3 +46,12 @@ and coverage budget. If similarity only increases coverage while worsening
 false recommendations or calibration, keep exact-match plus abstention as
 the default. Synthetic fixtures and the checked-in unseen-state test verify
 the contract only; they are not real-data evidence.
+
+## Sekirei 2023-2025 result
+
+The checked-in [Sekirei artifact](similarity-sekirei-2026-10-03.json) uses 2023-2024 Floodgate
+records for training and 2025 records for holdout (210 query states). The current SFEN one-hot
+adapter increased coverage from 0.548 to 0.743, but reduced all-query top-1 from 0.505 to 0.148 and
+MRR from 0.525 to 0.323. Among covered queries, its false-recommendation rate was 0.801 versus
+0.078 for exact match. It therefore fails the declared error and MRR budgets: keep exact match plus
+abstention and do not adopt this similarity adapter.

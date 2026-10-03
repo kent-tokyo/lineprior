@@ -1,0 +1,85 @@
+{
+  "protocol": "sekirei-lineprior-book-case-study-v1",
+  "status": "complete",
+  "decision": "inconclusive_keep_optional",
+  "claim": "integration_verified_downstream_improvement_not_proven",
+  "dataset": {
+    "id": "sekirei-phase2/gateA_csa_subset",
+    "files": 500,
+    "parsed_games": 494,
+    "content_manifest_sha256": "1c591d031f8ed0ac9665d52bad1998deda5a18d5422e5a6a188c04d57f296e5c"
+  },
+  "book": {
+    "observations": 14721,
+    "positions": 132,
+    "max_ply": 30,
+    "min_count": 5,
+    "max_actions_per_state": 6,
+    "smoothing_alpha": 5.0,
+    "query_min_confidence": 0.2
+  },
+  "protocol_controls": {
+    "opening_selection": "first_20_states_from_deterministically_sorted_book",
+    "opening_positions": 20,
+    "games_per_position": 2,
+    "games": 40,
+    "byoyomi_ms": 20,
+    "max_moves": 256,
+    "threads": 1,
+    "spec_top_n": 0,
+    "same_binary_both_arms": true,
+    "arm_on": {
+      "UseBook": "true",
+      "BookMaxPly": "30",
+      "BookMinConfidence": "0.20"
+    },
+    "arm_off": {
+      "UseBook": "false"
+    }
+  },
+  "result": {
+    "book_on_wins": 15,
+    "draws": 10,
+    "book_on_losses": 15,
+    "book_on_score": 0.5,
+    "elo_diff": 0.0,
+    "elo_ci_95_half_width": 107.67,
+    "elo_ci_low": -107.67,
+    "elo_ci_high": 107.67,
+    "los": 0.5,
+    "unique_games": 40,
+    "eligible_initial_book_turns": 20,
+    "top_action_matches": 20,
+    "pair_score_distribution": {
+      "0.0": 3,
+      "0.5": 2,
+      "1.0": 9,
+      "1.5": 4,
+      "2.0": 2
+    }
+  },
+  "lineage": {
+    "lineprior_version": "0.12.0",
+    "lineprior_crates_io_checksum": "e5f4daee617708a69d324a1f29aff2880db4afda0d00d694e5d284b8cdeec5cc",
+    "sekirei_commit": "ea06a1e2c7b87f57d8912c8932cc658283583982",
+    "sekirei_relevant_source_clean": true,
+    "sekirei_tree_dirty_outside_relevant_source": true,
+    "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+    "hardware": "Apple M4, 10 cores, 16 GB",
+    "os": "macOS 27.0.1",
+    "sha256": {
+      "sekirei_binary": "cc76eb04ac936c3f0eb63cb72db6cbefc9b0d6696bf672728bd1a31e6a24136f",
+      "match_runner_binary": "7d7ff2ed3fb8706d3d3574aa19cc82cacc9f25a7076fb2c033d3e8113d87d605",
+      "book": "59c190b9363f031cf71793ba97343dac34435a6bb71edfe6143c64b69fbe3dc6",
+      "openings": "b9d315a7176ebeb83d2680381ec0e317610c61a99a68684b994c323aa1bc8f3d",
+      "result": "74e5cd1f74d5808148d60e4c98ad97a648c1712020ac49047927becd41694e46",
+      "records": "391bd3754347c169d935c00459894ec70423ba1a00da261c86c57db70c94e3ea"
+    }
+  },
+  "limitations": [
+    "opening positions were selected from the training book rather than a held-out corpus",
+    "40 games leave a wide uncertainty interval",
+    "20 ms byoyomi is not a production strength control",
+    "the run verifies adapter use and fallback but does not prove improvement"
+  ]
+}

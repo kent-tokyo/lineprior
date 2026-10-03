@@ -44,7 +44,7 @@
         "dataset_id": {"type": "string"},
         "split": {"type": "string"},
         "feature_version": {"type": "string"},
-        "lineprior_version": {"const": "0.12.0"},
+        "lineprior_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
         "prior_config_fingerprint": {"type": ["string", "integer"]},
         "input_sha256": {"type": "object", "required": ["prior", "queries"], "properties": {"prior": {"$ref": "#/$defs/digest"}, "queries": {"$ref": "#/$defs/digest"}}}
       },

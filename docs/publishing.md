@@ -1,38 +1,48 @@
 # Publishing workspace crates
 
-The workspace uses crates.io Trusted Publishing through GitHub Actions OIDC. The workflow is
-`.github/workflows/publish.yml` and checks out an exact release tag.
+The workspace publishes five version-locked crates through
+[`publish.yml`](../.github/workflows/publish.yml). GitHub Actions OIDC is the normal crates.io
+authentication path. Version `0.12.0` completed the one-time bootstrap for every current crate.
+Version `0.12.1` is the current workspace release.
 
-## Current status
+## Release checklist
 
-All five workspace crates share one workspace version. Verify the tagged version against crates.io
-after each release. The one-time bootstrap for the three newer crates is complete; future releases
-use the normal OIDC path.
+1. Confirm all manifests and internal dependency requirements use the intended version.
+2. Run the workspace quality gate and `cargo package -p lineprior`. Before the new core version is
+   visible on crates.io, Cargo cannot fully package the four crates that depend on it.
+3. Commit and push a clean tree. Wait for CI and `WASM browser smoke` on that commit.
+4. Create and push the exact `vX.Y.Z` tag, then create the GitHub Release.
+5. Dispatch `publish.yml` once per crate with that tag and `dry_run=false`.
+6. Publish `lineprior` first. After crates.io exposes the new core version, run the workflow's full
+   package and dry-run checks while publishing each of the four dependent crates.
+7. Verify each workflow conclusion, each crates.io version, the GitHub Release, and the tag commit
+   separately. Record the release in `CHANGELOG.md`.
 
-## One-time bootstrap for a new crate
+The workflow validates the tag shape, crate allowlist, exact tagged checkout, clean tree, and
+manifest/tag version match. It runs `cargo package` and `cargo publish --dry-run` before requesting
+credentials.
 
-Trusted Publishing cannot create a crate that does not exist yet. For a future new workspace crate,
-publish it once with a tightly scoped crates.io token, then configure its Trusted Publisher and
-remove or rotate the bootstrap token. Never commit, print, or paste the token into an issue.
+## New crates require one bootstrap publish
+
+Trusted Publishing cannot create a crate name. If a future workspace crate is added, publish that
+crate once with a tightly scoped crates.io token, configure its Trusted Publisher, then remove or
+rotate the token. Never commit, print, or paste a token into logs or issues.
 
 ```bash
-# Local fallback for a new crate only; normally use publish.yml.
 cargo login
-cargo publish -p lineprior-adapters --locked
-cargo publish -p lineprior-similarity --locked
-cargo publish -p lineprior-wasm --locked
+cargo publish -p new-crate
 ```
 
-Run the commands from the release tag and in dependency order, after `cargo package --workspace
---locked` and the release checks pass.
-
-## Subsequent releases
-
-Dispatch the workflow once per crate with `release_tag=vX.Y.Z`, `dry_run=false`, and the crate name.
-Publish `lineprior` before workspace crates that depend on it. The workflow performs package and
-publish dry-runs before requesting OIDC credentials.
+Run the bootstrap from the reviewed release tag and only after its dependencies are available on
+crates.io. Existing crates should use the OIDC workflow.
 
 ## Evidence boundary
 
-A successful package or dry-run is not a publication, and a successful workflow is not a browser
-runtime test. Record the workflow URL and crates.io version separately in `CHANGELOG.md`.
+A successful package or dry-run is not a publication. A successful publish workflow does not prove
+registry visibility, browser behavior, or downstream quality. Keep these records separate:
+
+- tag and commit;
+- CI and WASM browser-smoke URLs;
+- one publish workflow per crate;
+- crates.io version pages;
+- GitHub Release URL.

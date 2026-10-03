@@ -1,398 +1,159 @@
 # Changelog
 
+All notable workspace changes are recorded here. The five crates share one version. Publishing is a
+separate release step; a version is not considered published until the tag, workflow, registry, and
+GitHub Release have been checked.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Before `1.0`, a minor
+release may include Rust source-breaking changes; such changes are called out explicitly.
+
 ## [Unreleased]
+
+## [0.12.1] - 2026-10-03
 
 ### Added
 
-- Added schema-v1 self-describing prior-book headers with producer version and complete BuildConfig
-  JSON, plus a metadata-returning Rust loader. Headerless and legacy fingerprint-only JSONL books
-  remain readable, and identical book/config/version inputs remain byte-deterministic.
+- Added schema-v1 self-describing prior-book headers containing the producer version, complete
+  `BuildConfig` JSON, and the legacy config fingerprint.
+- Added `load_prior_book_with_metadata` and public metadata types. Headerless and fingerprint-only
+  books remain readable.
+- Added one version-contract check for workspace manifests, Cargo.lock, measurement Schemas,
+  generated fixtures, and current-version documentation. Runtime tools now derive the version from
+  the workspace manifest instead of repeating it.
+- Added a formal web-target `lineprior-wasm` package contract. CI now packs the npm tarball,
+  installs it into an empty consumer, and checks browser build/query, deterministic output, and the
+  malformed-config error shape. Registry publication and Python bindings remain out of scope.
+- Added a reproducible Sekirei opening-book case study. The book was used for all 20 eligible
+  initial turns, while the 40-game on/off result was exactly 50% with a wide interval, so the
+  integration stays optional and no downstream improvement is claimed.
+- Added the first real held-out similarity decision artifact. The tested Sekirei feature adapter
+  raised coverage but sharply worsened MRR and covered-query false recommendations, so exact match
+  plus abstention remains the supported decision.
+- Added a real-log IPS/DR readiness audit. Six Sekirei analysis logs contained 183 decisions but no
+  decision-time propensities or declared rewards, so overlap, ESS, bootstrap, and causal effects are
+  explicitly recorded as not estimable rather than fabricated.
+- Added a GateModel real-history readiness audit. Twenty-three aggregate Sekirei result files had
+  no shared pre-gate feature map or group IDs, so baseline/model/calibration/OOD/acquisition
+  comparisons are recorded as not computable and the experimental scope remains frozen.
+
+### Fixed
+
+- Separated off-policy `policy_version` lineage from `lineprior_version`; the integrated runner no
+  longer records the policy version as if it were the producing lineprior version.
+- Kept immutable measurement artifacts pinned to their actual `0.12.0` producer while allowing
+  stable-semver lineage in JSON Schema and explicit historical-version validation.
+- Included the canonical MIT and Apache-2.0 license texts in the generated WASM npm tarball.
+
+### Compatibility
+
+- Identical book, config, and producer-version inputs remain byte-deterministic.
+- Unsupported schema versions and malformed schema-v1 headers return typed errors.
+- All five workspace crates and internal dependency requirements are version-locked at `0.12.1`.
 
 ## [0.12.0] - 2026-09-23
 
-### Release notes
+### Added
 
-- Minor release covering the incremental builder, reproducible measurement-contract tooling,
-  compatibility/WASM artifacts, and documentation maintenance accumulated after `0.11.1`.
-- The five workspace crates remain version-locked at `0.12.0` and are published in dependency order
-  through the tagged GitHub Actions workflow.
+- Added `IncrementalPriorBuilder` for typed, bounded ingestion without a JSONL intermediate.
+- Added context support and calibration diagnostics to `summary`, `eval`, and `tune`.
+- Added deterministic similarity and paired IPS/DR measurement runners, lineage envelopes, JSON
+  Schemas, and semantic validators. These establish artifact contracts, not real-data improvement.
+- Added runtime inventory artifacts for the Python 3.12/3.13 × Node.js 22/24 CLI matrix and a
+  separate WASM build artifact.
+- Added the experimental `lineprior gate` CLI for verdict probabilities, acquisition output, and
+  monotonic constraints.
+- Added UI-automation fixtures plus Python and Node.js CLI round trips.
+- Added license, audit, locked-build, rustdoc, candidate-contract, and measurement-schema gates.
+
+### Fixed
+
+- Updated the development-only Playwright dependency for its TLS verification advisory.
+- Fixed the Python round-trip fixture path.
+- Removed the generated-doc collision between the same-named library and CLI binary.
+
+### Release
+
+- Published all five workspace crates at `0.12.0` through the tagged workflow.
 
 ## [0.11.1] - 2026-09-02
 
-- Patch release for the post-v0.11.0 WASM browser smoke, deterministic Trie/macro-action
-  measurements, and publishing documentation/CI corrections.
-- No new scoring guarantee, causal capability, or counterfactual action generation is introduced.
-- The workspace remains version-locked at `0.11.1` for this release.
-- All five workspace crates were published through GitHub Actions: `lineprior` and `lineprior-cli`
-  via OIDC, and the three new crates via the configured `CARGO_REGISTRY_TOKEN` bootstrap fallback
-  (runs `33625228643`, `33625228724`, and `33625228726`).
+- Added post-`0.11.0` WASM browser smoke and deterministic Trie/macro-action measurements.
+- Corrected publishing documentation and CI. The three new crates completed their one-time
+  token-based bootstrap; subsequent releases use OIDC.
+- No scoring guarantee, causal capability, or counterfactual action generation was added.
 
 ## [0.11.0] - 2026-09-02
 
-- Added pluggable Bayesian, UCB, and Softmax scoring strategies with the legacy weighted-sum
-  behavior retained as the default.
-- Added deterministic LPB v1 compact binary persistence and CLI `pack`/`unpack` commands.
-- Added a veridict prior on/off comparison recipe and manifest; no downstream result is claimed.
-- Added bounded macro-action extraction, deterministic weighted multi-source book merge, and the
-  official `lineprior-adapters` crate for four domain-neutral integration boundaries.
-- Added opt-in terminal-outcome credit propagation and deterministic `PriorTrie` materialization;
-  both remain conservative opt-ins with real-data/performance measurement gates open.
-- Added and passed a wasm-pack plus headless Chromium browser smoke workflow (`33624039263`);
-  this validates package/runtime wiring, not npm publication or downstream quality.
-
-All notable changes to the workspace crates are documented here. They share one workspace version
-(`version.workspace = true`), so this file covers the library, CLI, adapters, similarity, and WASM
-crates.
-
-`lineprior` and `lineprior-cli` v0.11.0 were published to crates.io through the tagged GitHub
-Actions workflow. The newly introduced `lineprior-adapters`, `lineprior-similarity`, and
-`lineprior-wasm` packages passed package/dry-run/authentication, but crates.io rejected their first
-publication because Trusted Publishing cannot create a new crate; each requires one manual first
-publication before the workflow can publish subsequent versions.
-
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning follows
-[Semantic Versioning](https://semver.org/), with the pre-1.0 caveat SemVer itself states: while the
-crate is `0.x`, a minor version bump (`0.x.0`) may include breaking changes to the public Rust API,
-not just additions — each entry below says explicitly when that's the case. JSON/JSONL input and
-`serde` (de)serialization compatibility is tracked separately from Rust source compatibility, since
-the two can diverge (a new `Option<T>` struct field is serde-compatible but source-breaking for a
-caller using an exhaustive struct literal).
-
-Not every version below has been published to crates.io -- publishing is a separate explicit step
-in this project, not automatic on every version bump. See each entry for its publish status.
-
-## [Unreleased] - next version candidate (not yet versioned or published)
-
-### Fixed
-
-- Updated the WASM browser smoke's development-only Playwright pin to `1.55.1`, resolving the
-  Dependabot-reported high-severity TLS certificate-verification advisory. This does not change
-  the Rust API or scoring model.
-
-### Added
-
-- Added `IncrementalPriorBuilder` for adapter-facing, typed incremental ingestion without a JSONL
-  intermediate or a collected `Vec<Observation>`. It shares aggregation, filtering, diagnostics,
-  and context-order checks with eager and JSONL-streaming construction.
-- Added context diagnostics to `summary`, `eval`, and `tune`, separating support and calibration
-  from ranking quality.
-- Added real-data similarity and paired IPS/DR handoff protocols; no result is claimed without
-  supplied logs.
-- Added deterministic measurement runners and a fixed-version candidate contract for fixtures,
-  lineage, paired OPE reports, and artifact envelopes. These validate protocol shape, not quality.
-- Added context-path and matched-order Brier diagnostics without changing order-zero behavior.
-- Added runtime inventory smoke for Rust/Python/Node plus fingerprint, hash, pairing, and bounded-
-  metric checks for measurement artifacts.
-- The ecosystem matrix smoke can now emit a versioned JSON runtime artifact, and CI uploads it for
-  later reproduction instead of leaving the inventory only in logs.
-- CI now validates the runtime artifact envelope before upload, including fixed version, commit
-  shape, runtime inventory, and the executed-check list.
-- The CLI ecosystem smoke now runs in a four-cell Python 3.12/3.13 × Node 22/24 CI matrix, with
-  one runtime artifact per cell.
-- The WASM build smoke now emits and validates a separate target/toolchain JSON artifact before CI
-  upload, preserving its boundary from browser and npm publication evidence.
-- The WASM smoke also covers rejection of a mismatched compilation target in the runtime artifact
-  contract.
-- Added an ecosystem compatibility evidence document that defines the current four-cell CLI matrix,
-  the separate WASM compile boundary, and the runtime/package claims that remain open.
-- Ecosystem matrix artifacts now carry their requested Python and Node.js cell inside the JSON envelope,
-  allowing CI to detect artifact/cell mismatches independently of the uploaded filename.
-- The ecosystem smoke now exercises rejection of malformed matrix cell metadata before artifact upload.
-- Ecosystem artifact validation now checks that the requested Python and Node.js cell matches the
-  corresponding recorded runtime major/minor version.
-- Similarity measurement input validation now rejects empty or duplicate query IDs, malformed
-  neighbor lists, non-finite/negative distances, and empty required strings before scoring.
-- Measurement artifact validation now has `--require-explicit-lineage`, requiring non-placeholder
-  dataset/split/feature-or-policy metadata, fixed version, fingerprints, and input hashes before
-  a real-data artifact is archived; fixture validation remains available without the flag.
-- The measurement smoke covers rejection of placeholder dataset lineage under the strict validator.
-- Strict measurement smoke coverage now also rejects placeholder feature and policy version metadata.
-- Integrated off-policy validation now checks paired row counts and dataset/split/version lineage
-  against the top-level report, preventing mismatched paired sub-artifacts.
-- Measurement smoke now covers malformed digest, negative count, and unexpected protocol rejection
-  paths in addition to the existing schema, lineage, version, and metric checks.
-- Artifact validation now reports typed contract errors for non-object arm collections and malformed
-  JSON instead of leaking an implementation traceback.
-- Added draft 2020-12 JSON Schemas for similarity and integrated off-policy artifacts, with candidate
-  and measurement smoke checks for their fixed protocol/version envelopes.
-- Linked the machine-readable measurement schemas from both READMEs and documented their boundary
-  with the semantic validator.
-- Strengthened the dependency-free schema checker to pin canonical IDs, root/measurement required
-  fields, and definition sets without introducing a new runtime dependency.
-- The schema checker now also pins digest syntax, bounded unit metrics, and the required arm fields.
-- Excluded the `lineprior` CLI binary target from generated Rust API docs to remove the known
-  bin/lib output collision; CLI behavior remains covered by clippy, tests, and smoke checks.
-- Candidate validation now pins the CLI executable name and doc-target setting so the Cargo doc
-  collision fix cannot regress silently.
-- Added a CLI development-only `jsonschema` integration test that compiles the checked-in measurement
-  schemas and accepts representative artifacts while rejecting protocol and required-field drift.
-- Extended the JSON Schema regression suite with a representative integrated off-policy artifact,
-  including paired lineage, IPS/DR, bootstrap fields, and paired/protocol rejection cases.
-- Added boundary regression coverage proving structural JSON Schema validation remains distinct from
-  semantic off-policy checks for metric ranges and cross-artifact lineage equality.
-- Added exact-message regression tests for the off-policy semantic validator's support, lineage,
-  paired-hash, and explicit-policy diagnostics.
-- Refreshed `docs/publishing.md` to reflect the completed `0.11.1` bootstrap and the current OIDC
-  release path.
-- Consolidated durable maintenance guidance into the local roadmap and removed superseded internal
-  task logs; public documentation remains organized by guide, protocol, examples, and release history.
-
-### Fixed
-
-- Fixed the Python CLI round-trip example to resolve the checked-in UI-automation fixture from
-  `examples/ui_automation.jsonl` when executed from the repository root.
-
-- Opt-in `PriorBook::query_with_similarity` for caller-supplied similar states with deterministic
-  distance weighting, provenance-preserving evidence, and no invented actions.
-- `lineprior-similarity`, a dependency-free Euclidean feature-vector nearest-neighbor adapter with
-  finite-value/dimension validation and deterministic tie-breaking.
-- A checked-in unseen-state similarity measurement fixture that keeps exact-match/no-prior
-  abstention separate from opt-in neighbor recovery; it is not real-data quality evidence.
-- Separate self-normalized IPS evaluation with explicit propensity inputs, overlap diagnostics,
-  importance-weight caps, and effective sample size reporting.
-- Doubly robust evaluation using caller-supplied reward-model predictions; no reward model is
-  trained or inferred by the library.
-- Deterministic percentile-bootstrap intervals for IPS and self-normalized IPS.
-- `lineprior offpolicy` CLI command for JSONL logs, with optional DR and bootstrap output.
-- A small valid OPE JSONL boundary fixture, public IPS/DR replay test, and documented deterministic
-  CLI invocation.
-- A repeatable candidate-contract script and CI job for version, fixture, syntax, formatting, and
-  diff checks; it does not replace runtime or real-data release gates.
-- A maintained CLI example smoke workflow that runs the Node.js and Python round trips against one
-  built Rust binary and checks deterministic output plus the expected query result.
-- The CLI smoke helper now accepts either an executable path or a PATH-resolved `LINEPRIOR_BIN`.
-- A locked `wasm32-unknown-unknown` compilation smoke workflow for `lineprior-wasm`; packaging and
-  browser execution remain separate, intentionally open gates.
-- A replayable OPE CLI smoke workflow that compares two complete IPS/DR/bootstrap reports from the
-  checked-in fixture; it is not causal-improvement evidence.
-- CI candidate checks now use Cargo's `--locked` mode for clippy, tests, and the CLI smoke build.
-- Candidate contract validation now covers all checked-in OPE, UI-automation, and similarity JSONL
-  fixtures.
-- CI now includes a locked workspace rustdoc check with warnings denied for public API documentation.
-- Public boundary tests for non-strict WASM warning propagation and same-seed bootstrap replayability.
-- Experimental GateModel layers: PASS/FAIL/INCONCLUSIVE posterior probabilities, expected
-  improvement per expected gate cost, opt-in monotonic coefficient constraints, and a strict JSONL
-  `lineprior gate` CLI. These remain diagnostic and are not real-data scheduling evidence.
-- UI-automation JSONL fixture plus Python and Node.js CLI round-trip examples.
-- `cargo-deny` license policy and CI check for the current dependency graph.
-- Initial `lineprior-wasm` JSON-in/JSON-out build and query boundary; npm/wasm-pack packaging is
-  intentionally not included yet.
-
-The workspace version is `0.12.0`; this release includes public Rust API additions. All five
-workspace crates are published in dependency order by the tagged release workflow.
+- Added opt-in Bayesian, UCB, and Softmax scoring while retaining weighted-sum as the default.
+- Added LPB v1 persistence and `pack`/`unpack`.
+- Added bounded macro-actions, weighted multi-source merge, terminal credit, and `PriorTrie`.
+- Added `lineprior-adapters` for Sekirei, UI automation, LLM agents, and retrosynthesis.
+- Added a reproducible veridict prior on/off protocol. No downstream result was claimed.
+- Added wasm-pack and headless Chromium smoke; npm publication was not included.
 
 ## [0.10.0] - 2026-08-11
 
-Minor version, not a patch: `TuneParam` (public, non-`#[non_exhaustive]`) gains three new
-variants, which is source-breaking for external exhaustive matches -- see the source-compatibility
-note below, and this file's own intro on why a `0.x` minor bump can include that.
-
-### Added
-
-- `GateStatus`/`PredictionStatus` (added in 0.9.0, never reachable externally) are now
-  re-exported from the crate root.
-- `--count-weight` / `--success-weight` / `--score-weight` CLI flags on `build`/`eval`
-  (`BuildConfig` fields that already existed in the library, newly wired to the CLI).
-- The same three as `lineprior tune --param` keys (`count-weight`, `success-weight`,
-  `score-weight`), so they can be swept and saved like every other tunable `BuildConfig` field.
-- `cargo audit` CI job.
-
-### Changed
-
-- **Rust source compatibility**: `TuneParam` is a public, non-`#[non_exhaustive]` enum; this
-  release adds three new variants (`CountWeight`, `SuccessWeight`, `ScoreWeight`). Additive for
-  construction, but source-breaking for any external code that `match`es on `TuneParam`
-  exhaustively without a wildcard arm -- the same pattern already documented for `GateObservation`/
-  `GatePrediction`/`Error` in the 0.9.0 entry below. `#[non_exhaustive]` was deliberately not added
-  to `TuneParam` in this change (a separate, larger decision, not folded into a 3-variant addition).
-- Fixed a real dependency-tree security advisory, RUSTSEC-2026-0204 (`crossbeam-epoch`, transitive
-  via the `criterion` dev-dependency used only by benches -- never reached a published build).
+- Exposed the existing count/success/score weights through `build`, `eval`, and `tune`.
+- Re-exported `GateStatus` and `PredictionStatus`.
+- Added `cargo audit` to CI and fixed transitive `RUSTSEC-2026-0204` in the benchmark dependency
+  tree.
+- **Rust source compatibility:** `TuneParam` gained three variants. Exhaustive external matches
+  require an update.
 
 ## [0.9.0] - 2026-07-26
 
-Gate outcome prediction (`gate.rs`, library-only, no CLI surface): Elo observation uncertainty
-weighting and out-of-distribution abstention. Pre-real-data-validation, per this project's
-established gate.rs convention -- Phase 3 (gate-verdict PASS/FAIL/INCONCLUSIVE probability) and the
-acquisition function remain deferred, blocked on the `veridict` project's stopping-rule spec.
-
-### Added
-
-- `GateObservation`: `actual_elo_stddev`, `elo_ci_low`/`elo_ci_high`, `completed_pairs`,
-  `gate_status` (new `GateStatus` enum: `Pass`/`Fail`/`Inconclusive`, audit-only), `provenance`
-  (opaque caller-composed `BTreeMap<String, String>`, never parsed by this crate). When a measured
-  (or CI-implied) stddev is present, it becomes the ridge fit's per-row inverse-variance reliability
-  weight in place of `gate_games_played`.
-- `GateModelConfig`: `observation_ci_z` (decodes a caller's CI width independently of the model's
-  own output-interval `interval_z`), `max_weight_ratio` (clamps each observation's normalized
-  reliability weight so one near-noiseless measurement can't dominate the fit),
-  `ood_leverage_ratio_threshold`, `ood_missing_fraction_threshold`.
-- `GateFitReport`: `dispersion_factor` (an out-of-fold calibration check on the caller's stated
-  stddevs themselves), `min_observation_weight`, `max_observation_weight`, `effective_sample_size`,
-  `clamped_observation_count`.
-- `GatePrediction` / `GateOofPrediction`: `leverage`, `support_distance`, `nearest_group_distance`,
-  `missing_feature_fraction`, `prediction_status` (new `PredictionStatus` enum:
-  `Supported`/`Extrapolation`/`Unsupported`), `recommend_for_gate` (exactly
-  `prediction_status == Supported`, nothing else). Out-of-distribution queries are flagged, never
-  silently answered with false confidence -- `expected_elo`/`interval_low`/`interval_high`/
-  `probability_positive` are always the model's real prediction, never faked or zeroed because a
-  query is unsupported. Every out-of-fold diagnostic is computed from a support model
-  (standardizer, group centroids, mean leverage) fit on only that outer CV fold's own training
-  rows, proven by dedicated regression tests, not just by inspection.
-- `Error::NonPositiveGateStddev`, `ConflictingGateUncertaintySources`,
-  `IncompleteGateConfidenceInterval`, `GateEloOutsideConfidenceInterval`: reject an
-  `actual_elo_stddev` <= 0; reject specifying both a stddev and a complete confidence interval on
-  one observation (exactly one uncertainty source, never a silent priority between them); reject a
-  partial confidence interval (only one of `elo_ci_low`/`elo_ci_high`); reject a `gate_elo_delta`
-  outside its own stated confidence interval.
-
-### Changed
-
-- **JSON/serde input compatibility is preserved.** Every new `GateObservation` field is
-  `Option<T>` or `#[serde(default)]`, so older-shaped JSONL continues to deserialize unchanged
-  (tested directly against a pre-existing JSON shape).
-- **The Rust API is source-breaking for some usage patterns**, despite the minor version bump
-  (acceptable pre-1.0). `GateObservation`, `GatePrediction`, `GateOofPrediction`, and
-  `GateFitReport` are public structs with all-public fields, no `Default`, and no
-  `#[non_exhaustive]`; each gained public fields this release, so external code constructing them
-  via an exhaustive struct literal (naming every field) will not compile until updated.
-  `GateModelConfig` also gained fields; it has a `Default` impl, so callers using
-  `..Default::default()` are unaffected, but a caller listing every field explicitly is not.
-  `Error` gained four new variants; external code exhaustively matching on it without a wildcard
-  arm will not compile until updated.
-- Two new enums, `GateStatus` and `PredictionStatus`, are used in these structs' field types but
-  are **not** re-exported from the crate root (`gate` is a private module, and `lib.rs`'s
-  `pub use gate::{...}` omits both) -- external code cannot currently name or match on either type
-  at all. Flagged here as a known gap in this release's own API surface, not fixed in this release.
-- The `gate` module's public API has been part of a published crates.io release since v0.7.0
-  (published 2026-07-19) and v0.7.1 (published 2026-07-20) -- not first here, correcting this
-  entry's earlier claim to the contrary. The source-compatibility notes above are a real
-  constraint against that already-published v0.7.1 API surface, not just a forward-looking one.
+- Added uncertainty-aware `GateModel` fitting, group-aware validation, OOD diagnostics, prediction
+  support status, and gate-history provenance.
+- Added typed validation for conflicting or incomplete gate uncertainty.
+- **Rust source compatibility:** several public gate structs and `Error` gained fields or variants;
+  exhaustive struct literals and matches may require an update. JSON input compatibility was
+  preserved.
 
 ## [0.7.1] - 2026-07-20
 
-Statistical-correctness patch to `gate.rs`'s Round A, found before moving on to real gate-history
-validation or an acquisition function.
-
-### Fixed
-
-- Predictive variance dropped intercept uncertainty entirely: a query at the training feature mean
-  (including a fully-missing-feature query) collapsed to variance `0.0`, treating the fitted
-  intercept as known exactly rather than itself estimated from finite data.
-- `sigma2`'s denominator didn't count the intercept's own degree of freedom.
-- Hash-mod fold assignment (`fnv1a(group_id) % cv_folds`) had no guarantee every fold got at least
-  one group; a hash collision could silently leave a fold empty or several folds overloaded.
-  Replaced with deterministic balanced GroupKFold assignment.
+- Fixed GateModel predictive variance to include intercept uncertainty and the correct degrees of
+  freedom.
+- Replaced hash-mod folds with deterministic balanced group folds.
 
 ## [0.7.0] - 2026-07-19
 
-Adds `gate.rs`: a small, regularized surrogate (`GateModel`) predicting a training candidate's
-real-gate Elo delta -- and how much to trust that prediction -- from cheap validation-time
-diagnostics, so expensive gate runs can be reserved for candidates likely to be worth them.
-Library-only, no CLI surface yet.
-
-### Added
-
-- `GateModel::fit`/`predict`: weighted ridge regression (hand-rolled normal equations, no
-  linear-algebra dependency) with `gate_games_played` as the per-row reliability weight, group-aware
-  k-fold cross-validation for lambda selection (leave-one-group-out fallback at low group counts),
-  closed-form Bayesian-ridge posterior variance for `interval_low`/`interval_high`, and a
-  hand-rolled standard normal CDF for `probability_positive`.
-- `GateModel::fit_with_validation`: everything `fit` returns, plus a per-candidate out-of-fold
-  audit table (`GateOofPrediction`) built from nested cross-validation (an inner CV, scoped to each
-  outer fold's own training rows, selects that fold's lambda -- avoiding the optimistic bias of
-  reusing the same CV pass that picked the deployed model's lambda).
-- `GateObservation`/`GateQuery`/`GatePrediction`: caller-named `BTreeMap<String, f64>` features
-  rather than a fixed schema, so the diagnostic set can evolve without a schema break.
+- Added the library-only `GateModel`: weighted ridge fitting, group-aware lambda selection,
+  predictive intervals, and out-of-fold audit rows.
 
 ## [0.6.0] - 2026-07-12
 
-### Added
-
-- Variable-order context with backoff (`BuildConfig::context_order`): learns
-  `(recent-k-actions, state) -> action` for order `1..=k` alongside the always-present order-0
-  prior, derived automatically from `sequence_id`/`step`. `query --recent-actions` for
-  context-aware CLI queries; new `EvalReport` fields for context-vs-order-0 lift comparison.
-- Sequence-level priors via path scoring: `PriorBook::score_sequence` -- given a caller-supplied
-  candidate multi-step plan, how much historical precedent backs it, aggregated by minimum (not
-  average) confidence across the path.
+- Added variable-order context with deterministic backoff.
+- Added sequence-level path scoring with conservative minimum confidence.
 
 ## [0.5.1] - 2026-07-09
 
-### Added
-
-- crates.io/GitHub discoverability metadata only (keywords, categories, repository link). No code
-  changes.
+- Added crates.io and GitHub discoverability metadata only.
 
 ## [0.5.0] - 2026-07-09
 
-### Added
-
-- `--confidence-mode` (`heuristic` (default) / `wilson-lower-bound` / `hybrid`): an actual
-  statistical lower bound on an action's success rate, in addition to the original sample-size
-  heuristic. `eval --calibration-bins` / `--thresholds` for confidence calibration and
-  selective-prediction threshold sweeps.
-- Time-decay and source-reliability weighting: `effective_weight = weight * time_decay_multiplier
-  * source_reliability_multiplier`, computed once and picked up automatically by `build`, `eval`,
-  confidence, and calibration. Both factors default to a no-op (opt-in).
-- `lineprior tune`: grid-search `BuildConfig` candidates against held-out `eval` metrics
-  (`--objective`, `--param key=v1,v2,...`, `--save-best-config`); `--config <path.json>` on
-  `build`/`eval` to load a whole `BuildConfig` from a file.
-
-### Changed
-
-- `--min-confidence`'s meaning now depends on `--confidence-mode`: under `wilson-lower-bound`/
-  `hybrid` it becomes success-rate-aware, so a high-count but mostly-failing action that used to
-  pass the filter under `heuristic` can now be dropped by it. A real behavior change when switching
-  modes on an existing threshold, not purely additive.
+- Added heuristic, Wilson-lower-bound, and hybrid confidence modes.
+- Added calibration bins, threshold sweeps, time decay, source reliability, and `lineprior tune`.
+- Added whole-config load/save for `build` and `eval`.
+- Changing confidence mode can change `--min-confidence` filtering behavior.
 
 ## [0.4.0] - 2026-07-06
 
-### Added
-
-- `PriorBook::candidates()`: flat, deterministically-ordered `(state, action)` candidates across
-  the whole book, for filtering/sampling without manually nesting through `PriorEntry`/`PriorAction`.
-- `BuildStats` (`BuildOutput.stats`, streaming path): counts of what a build's filters actually
-  rejected, per threshold (`min_count`/`min_weighted_count`/`min_confidence`/
-  `max_actions_per_state`).
-- `build_config_fingerprint` + `save_prior_book_with_config`/`load_prior_book_with_config` +
-  `Error::BuildConfigMismatch`: detects a cached prior book built under different `BuildConfig`
-  values than a caller currently expects.
+- Added deterministic flat candidate iteration and detailed build-filter statistics.
+- Added config fingerprints and stale-cache detection.
 
 ## [0.3.0] - 2026-07-05
 
-### Added
-
-- `lineprior eval`: holds out part of a JSONL log by `sequence_id` (deterministic hash split),
-  builds a prior from the train split, ranks the test split's actual actions against it.
-  `EvalReport` metrics: `coverage`, `fallback_rate`, `top1_hit_rate`, `topk_hit_rate`,
-  `mean_reciprocal_rank`, `avg_rank_when_found`, `avg_confidence_on_hit`/`on_miss`, `score_lift`.
+- Added `lineprior eval` with deterministic sequence-level train/test splitting and held-out ranking
+  metrics.
 
 ## [0.2.0] - 2026-07-05
 
-### Added
-
-- Streaming build path (`build_prior_book_from_reader`): fuses parsing and aggregation into one
-  pass, bounding memory by unique `(state, action)` pairs rather than total observations
-  (~13x peak-RSS reduction on a 1M-observation benchmark, measured and documented).
-
-### Changed
-
-- `PriorAccumulator::finish()` (streaming path only) returns an empty `PriorBook` rather than
-  `Error::NoObservations` on empty/all-filtered input, so warnings collected before an empty result
-  are never silently discarded. The eager `build_prior_book` path is unchanged (still errors on
-  empty input, for compatibility).
+- Added streaming JSONL aggregation with memory proportional to unique state/action pairs.
+- The streaming path returns an empty book for empty or fully filtered input so parse warnings are
+  preserved; the eager API retains its original error behavior.
 
 ## [0.1.0] - 2026-07-05
 
-Initial release: a Rust library and CLI for building domain-agnostic action priors from historical
-`(state, action, outcome)` sequences.
-
-### Added
-
-- `build`/`query`/`summary`/`validate` CLI subcommands; JSONL streaming parse with strict/
-  non-strict validation.
-- Aggregate -> smooth -> normalize -> confidence -> per-state entropy pipeline; deterministic
-  output ordering.
-- `--draw-value` (partial success credit for draws), `--min-weighted-count`/`--min-confidence`
-  filters, `save_prior_book`/`load_prior_book` (read/write API symmetry).
-- CI workflow (fmt/clippy/test on push and PR).
+- Initial domain-agnostic Rust library and CLI.
+- Added `build`, `query`, `summary`, and `validate` with deterministic JSONL output, smoothing,
+  confidence, entropy, thresholds, and strict/non-strict input handling.

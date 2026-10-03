@@ -1,0 +1,55 @@
+{
+  "audit": {
+    "causal_claim_permitted": false,
+    "dr_status": "not_estimable",
+    "effective_sample_size": null,
+    "fields_present": {
+      "action": 183,
+      "decision_rows": 183,
+      "evaluation_probability": 0,
+      "logging_propensity": 0,
+      "reward": 0,
+      "reward_model_logged_action": 0,
+      "reward_model_policy_value": 0,
+      "state": 183
+    },
+    "invalid_propensity_pairs": 0,
+    "ips_status": "not_estimable",
+    "overlap_status": "not_computable",
+    "rows": 195,
+    "support_status": "not_computable"
+  },
+  "decision": "do_not_run_ips_dr_or_make_causal_claim",
+  "measurement": {
+    "dataset_id": "sekirei-floodgate-analysis-20260914-six-games",
+    "dataset_source_commit": "ea06a1e2c7b87f57d8912c8932cc658283583982",
+    "input_sha256": {
+      "wdoor_floodgate-300-10F_JHBR5_sekirei_20260914_20260914133003_1789360200727.analysis.jsonl": "2ee2343b4a1a901ff50ae40b0da313abcc82a9106647661aee77b6e9478d69c3",
+      "wdoor_floodgate-300-10F_Yss1000k_sekirei_20260914_20260914130001_1789358400710.analysis.jsonl": "05f18931adf3c32c710da82077dfeafc447e6b95c8eea404d9711bf22b3163f7",
+      "wdoor_floodgate-300-10F_gikou2_1c_sekirei_20260914_20260914140003_1789362000686.analysis.jsonl": "515a105cc25d73f806987a33af521c294f721b7c7625ce2f29b268374901db1b",
+      "wdoor_floodgate-300-10F_gikou2_1c_sekirei_20260914_20260914153003_1789367400762.analysis.jsonl": "448ecd12902f1683ce64ef43c63191ba6a796539513435c5271244c1a28755e1",
+      "wdoor_floodgate-300-10F_sekirei_20260914_JHBR5_20260914150003_1789365600982.analysis.jsonl": "004924aec88870c7a036350115e9e663e927c327bd79408a196ff41108dc14f1",
+      "wdoor_floodgate-300-10F_sekirei_20260914_JHBR5_20260914173002_1789374600977.analysis.jsonl": "aa23b0c0ce2ec2aadf9771f2ce495f5f9d17ca6d8f26bc1554917ab5de95ba41"
+    },
+    "lineprior_version": "0.12.0",
+    "runner_commit": "29f5e315480bedd7f8a5b3606b1a0ffcb932d220",
+    "runner_path": "scripts/audit_offpolicy_readiness.py",
+    "runner_sha256": "8e52418ca318bf9d0793c0c89b5a8554812d05ec7af9444e40ae7543de5651e1",
+    "runner_tree_dirty": true
+  },
+  "notes": [
+    "search score, PV rank, and post-hoc softmax are not logging propensities",
+    "bootstrap intervals, weight caps, overlap, and ESS are undefined until valid propensities exist"
+  ],
+  "protocol": "offpolicy-readiness-audit-v1",
+  "required_next_log_fields": [
+    "state",
+    "action",
+    "terminal_or_declared_horizon_reward",
+    "logging_propensity_recorded_at_decision_time",
+    "evaluation_probability",
+    "paired_arm_id",
+    "split_group_id"
+  ],
+  "status": "not_estimable"
+}

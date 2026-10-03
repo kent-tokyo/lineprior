@@ -5,13 +5,14 @@ import re
 import unittest
 
 from validate_measurement_artifact import validate_offpolicy
+from version_contract import workspace_version
 
 
 def artifact():
     measurement = {
         "dataset_id": "fixture-v1",
         "split": "heldout",
-        "lineprior_version": "0.12.0",
+        "lineprior_version": workspace_version(),
         "policy_version": "policy-v1",
         "input_sha256": {"off": "0" * 64, "on": "1" * 64},
     }

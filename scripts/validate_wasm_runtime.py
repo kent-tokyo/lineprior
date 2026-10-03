@@ -5,6 +5,8 @@ import pathlib
 import re
 import sys
 
+from version_contract import workspace_version
+
 
 def main():
     if len(sys.argv) != 2:
@@ -12,8 +14,9 @@ def main():
     report = json.loads(pathlib.Path(sys.argv[1]).read_text())
     if report.get("protocol") != "wasm-build-smoke-v1":
         raise ValueError("unexpected WASM smoke protocol")
-    if report.get("project_version") != "0.12.0":
-        raise ValueError("WASM report is not for fixed version 0.12.0")
+    expected_version = workspace_version()
+    if report.get("project_version") != expected_version:
+        raise ValueError(f"WASM report is not for fixed version {expected_version}")
     if not re.fullmatch(r"[0-9a-f]{40}", report.get("git_commit", "")):
         raise ValueError("git_commit must be a 40-character lowercase commit hash")
     if report.get("target") != "wasm32-unknown-unknown":

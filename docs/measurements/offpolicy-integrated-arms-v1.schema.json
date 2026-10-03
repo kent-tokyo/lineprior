@@ -23,7 +23,7 @@
       "properties": {
         "dataset_id": {"type": "string"},
         "split": {"type": "string"},
-        "lineprior_version": {"const": "0.12.0"},
+        "lineprior_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
         "policy_version": {"type": "string"},
         "input_sha256": {"type": "object", "required": ["off", "on"], "properties": {"off": {"$ref": "#/$defs/digest"}, "on": {"$ref": "#/$defs/digest"}}}
       },

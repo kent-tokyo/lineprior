@@ -25,10 +25,15 @@ jobs:
           node-version: 22
       - name: Install wasm-pack and browser
         run: |
-          cargo install wasm-pack --locked
-          npm install --prefix examples/wasm --ignore-scripts=false
+          cargo install wasm-pack --locked --version 0.15.0
+          npm ci --prefix examples/wasm --ignore-scripts=false
           npx --prefix examples/wasm playwright install --with-deps chromium
-      - name: Build web package
-        run: cd crates/lineprior-wasm && wasm-pack build --target web --out-dir ../../target/wasm-web --release
-      - name: Run browser round trip
-        run: node examples/wasm/browser-smoke.mjs target/wasm-web
+      - name: Pack, clean-install, and test the web package
+        run: sh scripts/run_npm_package_smoke.sh --out npm-package-runtime.json
+      - name: Validate package evidence
+        run: python3 scripts/validate_npm_package_runtime.py npm-package-runtime.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-wasm-package-${{ github.run_id }}
+          path: npm-package-runtime.json
+          if-no-files-found: error
