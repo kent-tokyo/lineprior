@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kent-tokyo/lineprior/blob/main/docs/measurements/prior-artifact-manifest-v1.schema.json",
+  "title": "lineprior prior-artifact-manifest v1",
+  "type": "object",
+  "required": ["schema", "producer_version", "input_sha256", "prior_book_sha256", "build_config", "build_config_fingerprint", "lineage", "summary"],
+  "properties": {
+    "schema": {"const": "lineprior.prior-artifact-manifest.v1"},
+    "producer_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "input_sha256": {"$ref": "#/$defs/digest"},
+    "prior_book_sha256": {"$ref": "#/$defs/digest"},
+    "build_config": {"type": "object"},
+    "build_config_fingerprint": {"type": "integer", "minimum": 0},
+    "lineage": {"$ref": "#/$defs/lineage"},
+    "summary": {"$ref": "#/$defs/summary"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "lineage": {
+      "type": "object",
+      "properties": {
+        "dataset_id": {"type": ["string", "null"]},
+        "split": {"type": ["string", "null"]},
+        "adapter_id": {"type": ["string", "null"]},
+        "adapter_version": {"type": ["string", "null"]},
+        "metadata": {"type": "object", "additionalProperties": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": ["warning_count", "order_zero_states_kept", "context_entries_kept", "build_stats"],
+      "properties": {
+        "warning_count": {"type": "integer", "minimum": 0},
+        "order_zero_states_kept": {"type": "integer", "minimum": 0},
+        "context_entries_kept": {"type": "integer", "minimum": 0},
+        "build_stats": {"$ref": "#/$defs/build_stats"}
+      },
+      "additionalProperties": false
+    },
+    "build_stats": {
+      "type": "object",
+      "required": [
+        "observations_kept",
+        "observations_dropped_by_step_or_tag_filter",
+        "observations_dropped_by_missing_timestamp",
+        "candidates_before_filtering",
+        "candidates_dropped_by_min_count",
+        "candidates_dropped_by_min_weighted_count",
+        "candidates_dropped_by_min_confidence",
+        "candidates_dropped_by_max_actions_per_state",
+        "candidates_kept"
+      ],
+      "properties": {
+        "observations_kept": {"type": "integer", "minimum": 0},
+        "observations_dropped_by_step_or_tag_filter": {"type": "integer", "minimum": 0},
+        "observations_dropped_by_missing_timestamp": {"type": "integer", "minimum": 0},
+        "candidates_before_filtering": {"type": "integer", "minimum": 0},
+        "candidates_dropped_by_min_count": {"type": "integer", "minimum": 0},
+        "candidates_dropped_by_min_weighted_count": {"type": "integer", "minimum": 0},
+        "candidates_dropped_by_min_confidence": {"type": "integer", "minimum": 0},
+        "candidates_dropped_by_max_actions_per_state": {"type": "integer", "minimum": 0},
+        "candidates_kept": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  }
+}

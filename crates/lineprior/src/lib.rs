@@ -7,6 +7,7 @@
 //! malformed user input; all failure paths return [`Error`].
 #![forbid(unsafe_code)]
 
+mod artifact;
 mod binary;
 mod build;
 mod error;
@@ -25,6 +26,10 @@ mod similarity;
 mod trie;
 mod tune;
 
+pub use artifact::{
+    PRIOR_ARTIFACT_MANIFEST_SCHEMA, PriorArtifactLineage, PriorArtifactManifestV1,
+    PriorArtifactSummary,
+};
 pub use binary::{load_prior_book_binary, save_prior_book_binary};
 pub use build::{BuildOutput, BuildStats, IncrementalPriorBuilder, build_prior_book};
 pub use error::{Error, Result, Warning};
@@ -36,6 +41,7 @@ pub use gate::{
     GateFitOutput, GateFitReport, GateModel, GateModelConfig, GateObservation, GateOofPrediction,
     GatePrediction, GateQuery, GateStatus, GateValidationOutput, GateVerdict, GateVerdictConfig,
     GateVerdictPrediction, MonotonicDirection, PredictionStatus, default_gate_lambda_grid,
+    validate_gate_observations,
 };
 pub use input::{ParseOutcome, build_prior_book_from_reader, parse_jsonl};
 pub use macro_action::{
@@ -51,6 +57,7 @@ pub use offpolicy::{
     BootstrapConfig, BootstrapInterval, DoublyRobustReport, OffPolicyBootstrapReport,
     OffPolicyConfig, OffPolicyError, OffPolicyObservation, OffPolicyReport,
     bootstrap_self_normalized_ips, evaluate_doubly_robust, evaluate_self_normalized_ips,
+    validate_offpolicy_observations,
 };
 pub use query::{
     LoadedPriorBook, PRIOR_BOOK_SCHEMA_VERSION, PriorBookMetadata, PriorBookMetadataV1,

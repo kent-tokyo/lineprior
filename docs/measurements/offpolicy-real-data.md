@@ -8,6 +8,12 @@ The machine-readable contract is
 repository validator additionally checks paired/top-level lineage equality and finite metric
 semantics.
 
+Before estimation, validate raw rows against
+[`offpolicy-observation-v1.schema.json`](offpolicy-observation-v1.schema.json) and run
+`lineprior validate heldout.jsonl --kind offpolicy`. This checks finite rewards, non-empty opaque
+keys, logging propensity in `(0, 1]`, and evaluation probability in `[0, 1]`; it does not prove
+that the logged propensity was generated correctly.
+
 ## Required log fields
 
 Every held-out row must include an immutable case/sequence ID, state, logged

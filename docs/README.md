@@ -22,6 +22,9 @@ API.
 
 The JSON Schemas in `measurements/` validate artifact structure. The repository's semantic
 validator separately checks numeric ranges, lineage equality, hashes, and fixed-version rules.
+Raw `OffPolicyObservation` and `GateObservation` rows also have schemas there; validate their
+cross-row semantics with `lineprior validate INPUT --kind offpolicy|gate`. The prior-artifact
+manifest schema covers the optional SHA-256 sidecar emitted by `build --artifact-manifest`.
 
 ## Release operations
 

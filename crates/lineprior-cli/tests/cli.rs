@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 // Fixtures live at the workspace root so lib and CLI tests can share them.
@@ -111,8 +112,60 @@ fn gate_command_writes_verdict_and_acquisition_report() {
     let _ = std::fs::remove_file(&output);
 }
 
+#[test]
+fn validate_command_checks_raw_offpolicy_semantics() {
+    let valid = temp_path("validate_offpolicy_valid.jsonl");
+    let invalid = temp_path("validate_offpolicy_invalid.jsonl");
+    std::fs::write(
+        &valid,
+        "{\"state\":\"s\",\"action\":\"a\",\"reward\":1.0,\"logging_propensity\":0.5,\"evaluation_probability\":0.5}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &invalid,
+        "{\"state\":\"s\",\"action\":\"a\",\"reward\":1.0,\"logging_propensity\":1.1,\"evaluation_probability\":0.5}\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args(["validate", valid.to_str().unwrap(), "--kind", "offpolicy"])
+        .assert()
+        .success();
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args(["validate", invalid.to_str().unwrap(), "--kind", "offpolicy"])
+        .assert()
+        .code(3);
+
+    let _ = std::fs::remove_file(&valid);
+    let _ = std::fs::remove_file(&invalid);
+}
+
+#[test]
+fn validate_command_checks_gate_rows_without_requiring_a_fit_sized_history() {
+    let input = temp_path("validate_gate.jsonl");
+    std::fs::write(
+        &input,
+        "{\"candidate_id\":\"c-1\",\"group_id\":\"g-1\",\"features\":{\"signal\":1.0},\"gate_elo_delta\":2.0,\"gate_games_played\":20.0}\n",
+    )
+    .unwrap();
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args(["validate", input.to_str().unwrap(), "--kind", "gate"])
+        .assert()
+        .success();
+
+    let _ = std::fs::remove_file(&input);
+}
+
 fn temp_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("lineprior_cli_test_{name}"))
+}
+
+fn sha256(path: &Path) -> String {
+    format!("{:x}", Sha256::digest(std::fs::read(path).unwrap()))
 }
 
 #[test]
@@ -143,6 +196,69 @@ fn build_command_writes_a_prior_book() {
     assert!(contents.contains("\"confidence\""));
 
     let _ = std::fs::remove_file(&out);
+}
+
+#[test]
+fn build_command_writes_a_content_linked_artifact_manifest() {
+    let input = fixture("mixed_outcomes.jsonl");
+    let out = temp_path("build_manifest_book.jsonl");
+    let manifest = temp_path("build_manifest.json");
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--min-count",
+            "1",
+            "--artifact-manifest",
+            manifest.to_str().unwrap(),
+            "--dataset-id",
+            "fixture-v1",
+            "--split",
+            "train",
+            "--adapter-id",
+            "fixture-adapter",
+            "--adapter-version",
+            "v1",
+            "--lineage",
+            "downstream_commit=abc123",
+        ])
+        .assert()
+        .success();
+
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest).unwrap()).unwrap();
+    assert_eq!(value["schema"], "lineprior.prior-artifact-manifest.v1");
+    assert_eq!(value["producer_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(value["input_sha256"], sha256(&input));
+    assert_eq!(value["prior_book_sha256"], sha256(&out));
+    assert_eq!(value["lineage"]["dataset_id"], "fixture-v1");
+    assert_eq!(value["lineage"]["metadata"]["downstream_commit"], "abc123");
+    assert!(value["summary"]["build_stats"]["observations_kept"].is_u64());
+
+    let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_file(&manifest);
+}
+
+#[test]
+fn build_command_rejects_artifact_manifest_path_collisions() {
+    let out = temp_path("build_manifest_collision.jsonl");
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            fixture("mixed_outcomes.jsonl").to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--artifact-manifest",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .code(3);
+    assert!(!out.exists());
 }
 
 #[test]

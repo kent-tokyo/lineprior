@@ -7,7 +7,7 @@ use crate::score::{
     confidence, effective_sample_size, normalize_for_strategy, ratio, raw_score, shrink_toward,
     time_decay_multiplier, wilson_lower_bound,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
 
@@ -258,7 +258,8 @@ fn effective_weight(obs: &Observation, config: &BuildConfig) -> Option<f64> {
 ///     + observations_dropped_by_step_or_tag_filter
 ///     + observations_dropped_by_missing_timestamp
 /// ```
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BuildStats {
     /// Observations folded into the accumulator (survived `max_step` /
     /// `tag_filter` / the missing-timestamp policy below).

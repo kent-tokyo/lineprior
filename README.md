@@ -90,6 +90,11 @@ schema-v1 config. Headerless books and the older fingerprint-only header remain 
 Identical ordered input, config, and producer version produce byte-identical JSONL. `pack` and
 `unpack` convert between JSONL and the compact LPB v1 format.
 
+For archival or downstream evaluation, `build --artifact-manifest manifest.json` writes a separate
+sidecar linking the exact input and book bytes by SHA-256. Optional `--dataset-id`, `--split`,
+`--adapter-id`, `--adapter-version`, and repeatable `--lineage key=value` fields remain
+caller-owned. The sidecar does not change the schema-v1 book, so existing readers stay compatible.
+
 ## Ranking and confidence
 
 The default strategy combines log weighted count, smoothed success rate, and smoothed mean score,
@@ -117,7 +122,7 @@ surface.
 | `build` | Build a JSONL prior book |
 | `query` | Query exact state or contextual backoff |
 | `summary` | Report coverage, confidence, entropy, and context support |
-| `validate` | Validate observation JSONL |
+| `validate` | Validate observation, off-policy, or gate-history JSONL |
 | `eval` | Measure held-out ranking and calibration |
 | `tune` | Grid-search `BuildConfig` on one deterministic split |
 | `pack` / `unpack` | Convert JSONL and LPB v1 |

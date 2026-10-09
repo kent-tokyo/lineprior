@@ -90,6 +90,11 @@ config不一致を拒否します。headerのない旧bookとfingerprintだけ�
 同じ順序の入力、config、producer versionからはbyte単位で同じJSONLが得られます。
 `pack`と`unpack`でJSONLとcompact LPB v1を相互変換できます。
 
+保存・評価用には、`build --artifact-manifest manifest.json`で入力とbookの正確なbyte列を
+SHA-256で結ぶsidecarを出力できます。`--dataset-id`、`--split`、`--adapter-id`、
+`--adapter-version`、繰り返し指定できる`--lineage key=value`はcallerが管理します。
+sidecarはschema-v1 bookを変更しないため、既存readerとの互換性を保ちます。
+
 ## rankingとconfidence
 
 既定のrankingは、weighted countの対数、平滑化したsuccess rate、平滑化したmean scoreを
@@ -116,7 +121,7 @@ time decayとsource reliabilityはopt-inです。time decayでは再現性を保
 | `build` | JSONL prior bookを構築 |
 | `query` | exact stateまたはcontext backoffで問い合わせ |
 | `summary` | coverage、confidence、entropy、context supportを要約 |
-| `validate` | observation JSONLを検証 |
+| `validate` | observation、off-policy、gate-history JSONLを検証 |
 | `eval` | held-out rankingとcalibrationを測定 |
 | `tune` | 同じsplitで`BuildConfig`をgrid search |
 | `pack` / `unpack` | JSONLとLPB v1を変換 |

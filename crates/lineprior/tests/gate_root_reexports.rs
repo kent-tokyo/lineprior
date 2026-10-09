@@ -11,7 +11,7 @@
 use lineprior::{
     ContextQueryResult, GateAcquisitionConfig, GateAcquisitionQuery, GateModel, GateModelConfig,
     GateObservation, GateQuery, GateStatus, GateVerdictConfig, MonotonicDirection,
-    PredictionStatus, PriorBook,
+    PredictionStatus, PriorBook, validate_gate_observations,
 };
 use std::collections::BTreeMap;
 
@@ -24,6 +24,42 @@ fn gate_status_is_nameable_and_matchable_from_the_crate_root() {
         GateStatus::Inconclusive => "inconclusive",
     };
     assert_eq!(label, "pass");
+}
+
+#[test]
+fn collection_time_gate_validation_is_public_and_rejects_empty_identity() {
+    let observation = GateObservation {
+        candidate_id: String::new(),
+        group_id: "group-a".to_string(),
+        features: BTreeMap::from([("signal".to_string(), 1.0)]),
+        gate_elo_delta: 1.0,
+        gate_games_played: 20.0,
+        actual_elo_stddev: None,
+        elo_ci_low: None,
+        elo_ci_high: None,
+        completed_pairs: None,
+        gate_status: None,
+        provenance: BTreeMap::new(),
+    };
+    assert!(validate_gate_observations(&[observation]).is_err());
+}
+
+#[test]
+fn collection_time_gate_validation_rejects_negative_pair_counts() {
+    let observation = GateObservation {
+        candidate_id: "candidate-a".to_string(),
+        group_id: "group-a".to_string(),
+        features: BTreeMap::from([("signal".to_string(), 1.0)]),
+        gate_elo_delta: 1.0,
+        gate_games_played: 20.0,
+        actual_elo_stddev: None,
+        elo_ci_low: None,
+        elo_ci_high: None,
+        completed_pairs: Some(-1.0),
+        gate_status: None,
+        provenance: BTreeMap::new(),
+    };
+    assert!(validate_gate_observations(&[observation]).is_err());
 }
 
 #[test]

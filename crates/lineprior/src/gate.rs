@@ -996,7 +996,15 @@ fn validate_observations(observations: &[GateObservation]) -> Result<Vec<String>
         });
     }
     let feature_names: Vec<String> = observations[0].features.keys().cloned().collect();
-    for obs in observations {
+    for (index, obs) in observations.iter().enumerate() {
+        if obs.candidate_id.is_empty() {
+            return Err(Error::EmptyGateCandidateId { index });
+        }
+        if obs.group_id.is_empty() {
+            return Err(Error::EmptyGateGroupId {
+                candidate_id: obs.candidate_id.clone(),
+            });
+        }
         if !obs.gate_elo_delta.is_finite() {
             return Err(Error::NonFiniteGateValue {
                 candidate_id: obs.candidate_id.clone(),
@@ -1030,6 +1038,14 @@ fn validate_observations(observations: &[GateObservation]) -> Result<Vec<String>
                     field: field.to_string(),
                 });
             }
+        }
+        if let Some(completed_pairs) = obs.completed_pairs
+            && completed_pairs < 0.0
+        {
+            return Err(Error::NegativeGateCompletedPairs {
+                candidate_id: obs.candidate_id.clone(),
+                value: completed_pairs,
+            });
         }
         if obs.elo_ci_low.is_some() != obs.elo_ci_high.is_some() {
             return Err(Error::IncompleteGateConfidenceInterval {
@@ -1067,6 +1083,16 @@ fn validate_observations(observations: &[GateObservation]) -> Result<Vec<String>
         }
     }
     Ok(feature_names)
+}
+
+/// Validate GateModel input rows without requiring enough history to fit a
+/// model.
+///
+/// This is intended for collection-time checks: it validates identifiers,
+/// finite values, uncertainty fields, and the shared feature schema, while
+/// leaving minimum sample and group-count requirements to [`GateModel::fit`].
+pub fn validate_gate_observations(observations: &[GateObservation]) -> Result<()> {
+    validate_observations(observations).map(|_| ())
 }
 
 fn distinct_sorted<'a>(ids: impl Iterator<Item = &'a str>) -> Vec<&'a str> {

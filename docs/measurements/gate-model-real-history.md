@@ -4,6 +4,12 @@ GateModel consumes one row per completed candidate, with a stable numeric featur
 the gate, an opaque leakage group, and the eventual Elo result. Opening shards, repeated snapshots,
 and the same candidate under another time control are not independent rows.
 
+New exports should follow
+[`gate-observation-v1.schema.json`](gate-observation-v1.schema.json) and pass
+`lineprior validate history.jsonl --kind gate` before model fitting. Collection-time validation
+checks identifiers, finite values, uncertainty fields, and one shared feature-name set without
+requiring enough rows to fit a model.
+
 Run the readiness audit against a pinned downstream checkout before fitting anything:
 
 ```bash

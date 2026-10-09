@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kent-tokyo/lineprior/blob/main/docs/measurements/gate-observation-v1.schema.json",
+  "title": "lineprior GateObservation JSONL row v1",
+  "type": "object",
+  "required": ["candidate_id", "group_id", "features", "gate_elo_delta", "gate_games_played"],
+  "properties": {
+    "candidate_id": {"type": "string", "minLength": 1},
+    "group_id": {"type": "string", "minLength": 1},
+    "features": {
+      "type": "object",
+      "additionalProperties": {"type": "number"}
+    },
+    "gate_elo_delta": {"type": "number"},
+    "gate_games_played": {"type": "number", "exclusiveMinimum": 0},
+    "actual_elo_stddev": {"type": ["number", "null"], "exclusiveMinimum": 0},
+    "elo_ci_low": {"type": ["number", "null"]},
+    "elo_ci_high": {"type": ["number", "null"]},
+    "completed_pairs": {"type": ["number", "null"], "minimum": 0},
+    "gate_status": {"type": ["string", "null"], "enum": ["Pass", "Fail", "Inconclusive", null]},
+    "provenance": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    }
+  },
+  "additionalProperties": true
+}

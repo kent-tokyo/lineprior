@@ -52,6 +52,9 @@ pub enum Error {
     #[error("invalid compact prior book: {message}")]
     InvalidBinary { message: String },
 
+    #[error("{field} must be a lowercase SHA-256 digest, got `{value}`")]
+    InvalidArtifactDigest { field: &'static str, value: String },
+
     /// Raised only when `BuildConfig::context_order > 0`: deriving a
     /// sequence's recent-action window while streaming requires that
     /// sequence's own rows be contiguous and in increasing `step` order.
@@ -99,6 +102,12 @@ pub enum Error {
     )]
     InconsistentGateFeatures { candidate_id: String },
 
+    #[error("gate observation {index} has an empty candidate_id")]
+    EmptyGateCandidateId { index: usize },
+
+    #[error("gate observation `{candidate_id}` has an empty group_id")]
+    EmptyGateGroupId { candidate_id: String },
+
     /// Raised by [`crate::gate::GateModel::fit`]: a `gate_elo_delta`,
     /// `gate_games_played`, or feature value was NaN or infinite.
     #[error("gate observation `{candidate_id}` has a non-finite value in field `{field}`")]
@@ -115,6 +124,9 @@ pub enum Error {
     /// weight).
     #[error("gate observation `{candidate_id}` has actual_elo_stddev <= 0: {value}")]
     NonPositiveGateStddev { candidate_id: String, value: f64 },
+
+    #[error("gate observation `{candidate_id}` has completed_pairs < 0: {value}")]
+    NegativeGateCompletedPairs { candidate_id: String, value: f64 },
 
     /// Raised by [`crate::gate::GateModel::fit`]: an observation must not
     /// specify both `actual_elo_stddev` and a complete `elo_ci_low`/

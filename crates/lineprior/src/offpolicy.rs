@@ -82,12 +82,78 @@ pub enum OffPolicyError {
     NonFiniteValue { index: usize, field: &'static str },
     #[error("observation {index} has logging_propensity <= 0: {value}")]
     NonPositiveLoggingPropensity { index: usize, value: f64 },
+    #[error("observation {index} has logging_propensity > 1: {value}")]
+    LoggingPropensityAboveOne { index: usize, value: f64 },
     #[error("observation {index} has evaluation_probability outside [0, 1]: {value}")]
     InvalidEvaluationProbability { index: usize, value: f64 },
+    #[error("observation {index} has an empty state")]
+    EmptyState { index: usize },
+    #[error("observation {index} has an empty action")]
+    EmptyAction { index: usize },
     #[error("observation {index} is missing {field} required for doubly robust evaluation")]
     MissingRewardModelValue { index: usize, field: &'static str },
     #[error("bootstrap resamples must be > 0 and confidence_level must be in (0, 1)")]
     InvalidBootstrapConfig,
+}
+
+/// Validate the row-level contract shared by every off-policy estimator.
+///
+/// This deliberately does not require reward-model fields: plain IPS does
+/// not need them, while [`evaluate_doubly_robust`] reports their absence when
+/// DR is explicitly requested. Propensities must be probabilities supplied
+/// by the caller at decision time; this function never derives them from a
+/// score or prior.
+pub fn validate_offpolicy_observations(
+    observations: &[OffPolicyObservation],
+) -> Result<(), OffPolicyError> {
+    for (index, observation) in observations.iter().enumerate() {
+        if observation.state.is_empty() {
+            return Err(OffPolicyError::EmptyState { index });
+        }
+        if observation.action.is_empty() {
+            return Err(OffPolicyError::EmptyAction { index });
+        }
+        validate_finite(index, observation.reward, "reward")?;
+        validate_finite(index, observation.logging_propensity, "logging_propensity")?;
+        validate_finite(
+            index,
+            observation.evaluation_probability,
+            "evaluation_probability",
+        )?;
+        if observation.logging_propensity <= 0.0 {
+            return Err(OffPolicyError::NonPositiveLoggingPropensity {
+                index,
+                value: observation.logging_propensity,
+            });
+        }
+        if observation.logging_propensity > 1.0 {
+            return Err(OffPolicyError::LoggingPropensityAboveOne {
+                index,
+                value: observation.logging_propensity,
+            });
+        }
+        if !(0.0..=1.0).contains(&observation.evaluation_probability) {
+            return Err(OffPolicyError::InvalidEvaluationProbability {
+                index,
+                value: observation.evaluation_probability,
+            });
+        }
+        for (field, value) in [
+            (
+                "reward_model_policy_value",
+                observation.reward_model_policy_value,
+            ),
+            (
+                "reward_model_logged_action",
+                observation.reward_model_logged_action,
+            ),
+        ] {
+            if let Some(value) = value {
+                validate_finite(index, value, field)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Report from self-normalized inverse propensity scoring.
@@ -160,6 +226,7 @@ pub fn evaluate_self_normalized_ips(
     {
         return Err(OffPolicyError::InvalidMaxImportanceWeight);
     }
+    validate_offpolicy_observations(observations)?;
 
     let mut weighted_reward_sum = 0.0;
     let mut importance_sum = 0.0;
@@ -168,26 +235,7 @@ pub fn evaluate_self_normalized_ips(
     let mut overlap_failure_count = 0;
     let mut max_observed_importance_weight: Option<f64> = None;
 
-    for (index, observation) in observations.iter().enumerate() {
-        validate_finite(index, observation.reward, "reward")?;
-        validate_finite(index, observation.logging_propensity, "logging_propensity")?;
-        validate_finite(
-            index,
-            observation.evaluation_probability,
-            "evaluation_probability",
-        )?;
-        if observation.logging_propensity <= 0.0 {
-            return Err(OffPolicyError::NonPositiveLoggingPropensity {
-                index,
-                value: observation.logging_propensity,
-            });
-        }
-        if !(0.0..=1.0).contains(&observation.evaluation_probability) {
-            return Err(OffPolicyError::InvalidEvaluationProbability {
-                index,
-                value: observation.evaluation_probability,
-            });
-        }
+    for observation in observations {
         if observation.evaluation_probability == 0.0 {
             overlap_failure_count += 1;
             continue;
@@ -360,6 +408,7 @@ pub fn evaluate_doubly_robust(
     {
         return Err(OffPolicyError::InvalidMaxImportanceWeight);
     }
+    validate_offpolicy_observations(observations)?;
     let mut estimate_sum = 0.0;
     let mut importance_sum = 0.0;
     let mut importance_squared_sum = 0.0;
@@ -368,13 +417,6 @@ pub fn evaluate_doubly_robust(
     let mut max_observed_importance_weight: Option<f64> = None;
 
     for (index, observation) in observations.iter().enumerate() {
-        validate_finite(index, observation.reward, "reward")?;
-        validate_finite(index, observation.logging_propensity, "logging_propensity")?;
-        validate_finite(
-            index,
-            observation.evaluation_probability,
-            "evaluation_probability",
-        )?;
         let model_policy_value = observation.reward_model_policy_value.ok_or(
             OffPolicyError::MissingRewardModelValue {
                 index,
@@ -387,20 +429,6 @@ pub fn evaluate_doubly_robust(
                 field: "reward_model_logged_action",
             },
         )?;
-        validate_finite(index, model_policy_value, "reward_model_policy_value")?;
-        validate_finite(index, model_logged_action, "reward_model_logged_action")?;
-        if observation.logging_propensity <= 0.0 {
-            return Err(OffPolicyError::NonPositiveLoggingPropensity {
-                index,
-                value: observation.logging_propensity,
-            });
-        }
-        if !(0.0..=1.0).contains(&observation.evaluation_probability) {
-            return Err(OffPolicyError::InvalidEvaluationProbability {
-                index,
-                value: observation.evaluation_probability,
-            });
-        }
 
         let correction = if observation.evaluation_probability == 0.0 {
             overlap_failure_count += 1;
@@ -530,6 +558,10 @@ mod tests {
             Err(OffPolicyError::InvalidEvaluationProbability { .. })
         ));
         assert!(matches!(
+            evaluate_self_normalized_ips(&[observation(0.0, 1.1, 1.0)], &Default::default()),
+            Err(OffPolicyError::LoggingPropensityAboveOne { .. })
+        ));
+        assert!(matches!(
             evaluate_self_normalized_ips(&[observation(f64::NAN, 1.0, 1.0)], &Default::default()),
             Err(OffPolicyError::NonFiniteValue {
                 field: "reward",
@@ -545,6 +577,23 @@ mod tests {
                 }
             ),
             Err(OffPolicyError::InvalidMaxImportanceWeight)
+        ));
+    }
+
+    #[test]
+    fn empty_state_or_action_is_rejected_by_the_row_contract() {
+        let mut row = observation(1.0, 1.0, 1.0);
+        row.state.clear();
+        assert!(matches!(
+            validate_offpolicy_observations(&[row]),
+            Err(OffPolicyError::EmptyState { index: 0 })
+        ));
+
+        let mut row = observation(1.0, 1.0, 1.0);
+        row.action.clear();
+        assert!(matches!(
+            validate_offpolicy_observations(&[row]),
+            Err(OffPolicyError::EmptyAction { index: 0 })
         ));
     }
 
