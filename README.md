@@ -127,9 +127,9 @@ Run `lineprior <command> --help` for all options.
 - `lineprior-adapters` provides typed conversion boundaries for Sekirei, UI automation, LLM
   agents, and retrosynthesis. Parsing, legality, execution, and chemical validation remain with
   the downstream application.
-- `lineprior-wasm` exposes initialized JSON-in/JSON-out build and query functions. CI verifies a
-  clean-installed web-target tarball in Chromium. It is not registry-published, and there is no
-  Python binding.
+- `lineprior-wasm` exposes initialized JSON-in/JSON-out build and query functions. Its Rust crate
+  is released with the workspace; CI also verifies a clean-installed web-target tarball in
+  Chromium. That web package is not published to the npm registry, and there is no Python binding.
 - GateModel and off-policy evaluation are diagnostic tools. They cannot repair missing features,
   support, propensities, or outcomes.
 

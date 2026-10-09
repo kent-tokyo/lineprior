@@ -35,10 +35,14 @@ The mean baseline, ridge without OOD, current GateModel, caller rule, verdict ca
 abstention, and acquisition efficiency are all `not_computable`. The decision is to keep GateModel
 experimental, avoid splitting `lineprior-gate`, and make no acquisition-efficiency claim.
 
-## Required next history contract
+## Next validation
 
-Future candidate records need a candidate ID, a predeclared group ID, a versioned numeric feature
-map captured before gating, Elo and uncertainty, terminal verdict, caller-rule decision, expected
-gate cost, and candidate/baseline/recipe/dataset/code lineage. Once several independent groups share
-that exact feature schema, the declared model comparison can run without reconstructing features
-from post-gate outcomes.
+[Sekirei v0.3.67](https://github.com/kent-tokyo/sekirei/releases/tag/v0.3.67) added a fail-closed
+exporter for independent gate observations. Exported rows still need a candidate ID, a predeclared
+group ID, one versioned numeric feature map captured before the outcome, Elo and uncertainty,
+terminal verdict, expected cost, and complete lineage. No v0.3.67 history artifact has been checked
+into this repository yet, so the 2026-10-03 result remains `not_computable`.
+
+The next step is to export several independent groups, validate the JSONL with `lineprior validate
+--kind gate`, and archive the admitted/rejected counts and hashes before fitting. Do not reconstruct
+features from post-gate outcomes.

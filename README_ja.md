@@ -123,9 +123,9 @@ ranking指標が良くてもdownstream改善の証明にはなりません。実
   embeddingは生成しません。
 - `lineprior-adapters`は、Sekirei、UI automation、LLM agent、retrosynthesis向けのtypedな
   変換境界です。parse、legality、実行、chemical validationはdownstream側で行います。
-- `lineprior-wasm`は、初期化後にJSON入出力のbuild/queryを提供します。CIではweb targetの
-  tarballを空の環境へinstallし、Chromiumで検証します。registryには未公開で、Python binding
-  も提供していません。
+- `lineprior-wasm`は、初期化後にJSON入出力のbuild/queryを提供します。Rust crateはworkspace
+  と同時に公開し、CIではweb targetのtarballを空の環境へinstallしてChromiumで検証します。
+  web packageはnpm registryには公開しておらず、Python bindingも提供していません。
 - GateModelとoff-policy評価はdiagnosticです。欠けたfeature、support、propensity、outcomeは
   補えません。
 

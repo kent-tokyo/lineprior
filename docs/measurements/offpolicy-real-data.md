@@ -55,7 +55,7 @@ and a paired held-out improvement of `on` over `off` at the declared cost and
 abstention budget. A point estimate, a replayable fixture, or a ranking
 correlation alone does not pass this gate.
 
-## Sekirei readiness audit
+## Sekirei readiness
 
 The checked-in [2026-10-03 audit](offpolicy-sekirei-readiness-2026-10-03.json) inspected 183 real
 search decisions from six Floodgate analysis logs. Every decision had a state and selected action,
@@ -65,3 +65,10 @@ values. Support, overlap, ESS, weight caps, bootstrap intervals, and IPS/DR are 
 Do not reconstruct propensities from search scores, PV rank, or a post-hoc softmax. The recorded
 decision is `not_estimable`: no causal or downstream on/off claim is permitted until a randomized
 or otherwise known logging policy records its probability at decision time.
+
+[Sekirei v0.3.67](https://github.com/kent-tokyo/sekirei/releases/tag/v0.3.67) added optional
+structured opening-book decision logs and terminal-outcome linkage.
+Those logs can support paired on/off analysis, but they contain propensities only when Sekirei uses
+an explicitly randomized policy with a known decision-time distribution. No v0.3.67 real-log
+artifact has been checked into this repository yet, so the 2026-10-03 IPS/DR result remains
+`not_estimable`.

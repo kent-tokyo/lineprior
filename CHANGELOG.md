@@ -9,6 +9,15 @@ release may include Rust source-breaking changes; such changes are called out ex
 
 ## [Unreleased]
 
+### Changed
+
+- Condensed `AGENTS.md` to repository-changing rules and moved usage, measurement, and release
+  details back to their canonical documents.
+- Clarified that the Rust `lineprior-wasm` crate is published on crates.io while the generated web
+  package is not published to the npm registry.
+- Updated Sekirei integration notes for the v0.3.67 manifest, decision-log, and gate-export
+  boundaries without rewriting the existing historical evidence.
+
 ## [0.12.2] - 2026-10-10
 
 ### Added
@@ -47,7 +56,7 @@ release may include Rust source-breaking changes; such changes are called out ex
   the workspace manifest instead of repeating it.
 - Added a formal web-target `lineprior-wasm` package contract. CI now packs the npm tarball,
   installs it into an empty consumer, and checks browser build/query, deterministic output, and the
-  malformed-config error shape. Registry publication and Python bindings remain out of scope.
+  malformed-config error shape. npm registry publication and Python bindings remain out of scope.
 - Added a reproducible Sekirei opening-book case study. The book was used for all 20 eligible
   initial turns, while the 40-game on/off result was exactly 50% with a wide interval, so the
   integration stays optional and no downstream improvement is claimed.

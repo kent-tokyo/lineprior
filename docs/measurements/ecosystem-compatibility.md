@@ -35,14 +35,15 @@ The maintained package boundary is:
 
 - package name: `lineprior-wasm`;
 - owner: the repository maintainers;
+- Rust distribution: the crate is published on crates.io with the version-locked workspace;
 - build target: `web` only;
 - tooling: Node.js 22 and 24 are maintained for package construction; runtime execution is covered
   only by the workflow's Playwright Chromium;
 - API: initialized `build_json` and `query_json` exports, with Rust as the scoring source of truth;
 - license: the tarball includes the workspace's canonical MIT and Apache-2.0 texts;
-- release form: a clean-installable npm tarball generated from a tagged source tree.
+- web-package release form: a clean-installable npm tarball generated from a tagged source tree.
 
-The source-package smoke is separate from registry publication. There is no maintained Python
+The source-package smoke is separate from npm registry publication. There is no maintained Python
 binding: Python support means invoking the CLI, as exercised by the runtime matrix.
 
 ## What remains open
@@ -55,5 +56,5 @@ The following are deliberately not claimed by this matrix:
 - downstream quality, similarity, IPS/DR, GateModel, or memory performance;
 - real-data compatibility or improvement.
 
-The source-package gate is closed by the clean-install tarball workflow above. Registry publication
-remains a separate release decision and must not be inferred from this smoke test.
+The source-package gate is closed by the clean-install tarball workflow above. npm registry
+publication remains a separate release decision and must not be inferred from this smoke test.

@@ -9,8 +9,8 @@ for CLI options and [docs.rs](https://docs.rs/lineprior) for the Rust API.
 | Document | What it establishes |
 | --- | --- |
 | [Similarity evaluation](measurements/similarity-real-data.md) | Exact/similarity/no-prior protocol and the rejected Sekirei adapter result |
-| [IPS/DR evaluation](measurements/offpolicy-real-data.md) | Required propensity, overlap, bootstrap, and paired-arm evidence |
-| [GateModel readiness](measurements/gate-model-real-history.md) | Candidate admission rules and the current not-estimable decision |
+| [IPS/DR evaluation](measurements/offpolicy-real-data.md) | Required propensity, overlap, bootstrap, paired arms, and the Sekirei v0.3.67 logging boundary |
+| [GateModel readiness](measurements/gate-model-real-history.md) | Candidate admission rules, historical result, and the Sekirei v0.3.67 export boundary |
 | [Runtime and WASM](measurements/ecosystem-compatibility.md) | Maintained CI matrix and package boundary |
 | [Sekirei case study](case-studies/sekirei-opening-book.md) | Adapter wiring and an inconclusive 40-game diagnostic |
 | [Historical benchmark](benchmarks/v0.11.0-m4-arm64-2026-09-02.md) | One synthetic Apple M4 snapshot; not a current performance claim |

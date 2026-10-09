@@ -40,3 +40,7 @@ Keep the book optional. Do not change defaults or make a strength claim from thi
 adoption gate needs a held-out opening corpus, production time control, and a materially narrower
 interval. The machine-readable evidence is
 [`sekirei-opening-book-2026-10-03.json`](sekirei-opening-book-2026-10-03.json).
+
+[Sekirei v0.3.67](https://github.com/kent-tokyo/sekirei/releases/tag/v0.3.67) can now emit
+reproducible book manifests and optional structured decision logs. That improves future provenance
+and pairing, but it does not change this historical result or add a playing-strength claim.
