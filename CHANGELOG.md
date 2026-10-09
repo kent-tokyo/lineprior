@@ -9,6 +9,8 @@ release may include Rust source-breaking changes; such changes are called out ex
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-10-10
+
 ### Added
 
 - Added optional SHA-256 prior-artifact sidecars that link exact input and book bytes while leaving
@@ -16,10 +18,21 @@ release may include Rust source-breaking changes; such changes are called out ex
 - Added JSON Schemas and `validate --kind offpolicy|gate` collection-time checks for raw
   `OffPolicyObservation` and `GateObservation` logs.
 
+### Changed
+
+- Shortened the English and Japanese READMEs around the supported workflow and evidence boundary;
+  reorganized the documentation index and adapter summary.
+
 ### Fixed
 
 - Rejected logging propensities above one and empty off-policy or gate identifiers before
   estimation or model fitting.
+
+### Compatibility
+
+- Prior-book schema v1 and existing readers remain compatible; artifact manifests are optional
+  sidecars.
+- All five workspace crates and internal dependency requirements are version-locked at `0.12.2`.
 
 ## [0.12.1] - 2026-10-03
 

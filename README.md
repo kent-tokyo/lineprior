@@ -7,36 +7,31 @@
 
 [日本語](./README_ja.md) / English
 
-`lineprior` is a Rust library and CLI that builds a reproducible action prior from historical
+`lineprior` is a Rust library and CLI for building reproducible action priors from historical
 sequences:
 
 ```text
 state -> ranked candidate actions
 ```
 
-It helps a caller decide which action to examine first. It does not decide the best action, explore
-online, or replace search, rules, evaluation, or verification. Sparse or unseen states return no
-candidates.
+It suggests which action a caller may examine first. It does not choose the best action, explore
+online, or replace search, rules, evaluation, or verification. State and action values are opaque
+keys; sparse or unseen states return no candidates.
 
-## Install
+## Quick start
 
 ```bash
 cargo add lineprior
 cargo install lineprior-cli
 ```
 
-The workspace also contains optional crates for typed adapters, caller-supplied similarity search,
-and a thin WASM boundary. They remain independent of the core crate.
-
-## Quick start
-
-An observation is one JSON object per line:
+Create an observation file with one JSON object per line:
 
 ```json
 {"sequence_id":"case-001","step":0,"state":"state_a","action":"action_x","outcome":"success","score":0.8,"weight":1.0}
 ```
 
-Build, inspect, and query a book:
+Then validate, build, inspect, and query the book:
 
 ```bash
 lineprior validate observations.jsonl
@@ -47,20 +42,10 @@ lineprior query prior.jsonl --state state_a --top-k 5
 
 An unseen state prints no candidates and exits successfully. The caller owns fallback behavior.
 
-## Data contracts
+## Data contract
 
-### Observation JSONL
-
-Required fields:
-
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `sequence_id` | string | Sequence or case identifier |
-| `step` | non-negative integer | Position within the sequence |
-| `state` | non-empty string | Opaque state key |
-| `action` | non-empty string | Opaque action key |
-
-Optional fields:
+Every observation requires `sequence_id`, a non-negative `step`, and non-empty `state` and
+`action` strings. Optional fields are:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
@@ -68,68 +53,46 @@ Optional fields:
 | `score` | `null` | Finite caller-defined score |
 | `weight` | `1.0` | Non-negative observation weight |
 | `tags` | `[]` | Caller-defined filters |
-| `observed_at_unix_seconds` | `null` | Used only when time decay is enabled |
+| `observed_at_unix_seconds` | `null` | Used only with time decay |
 | `source` | `null` | Used by source reliability weights |
 
-Strict mode fails on the first invalid row. Non-strict mode skips safe-to-isolate invalid rows and
-returns warnings.
+Strict mode stops at the first invalid row. Non-strict mode skips rows that can be isolated safely
+and reports warnings.
 
-### Prior-book JSONL
-
-`lineprior build` writes a schema-v1 metadata header followed by deterministic state entries:
+`build` writes a schema-v1 metadata header followed by deterministically ordered state entries:
 
 ```text
-{"prior_book_schema_version":1,"producer_version":"0.12.1","build_config":{...},"build_config_fingerprint":7308171529403319118}
+{"prior_book_schema_version":1,"producer_version":"0.12.2","build_config":{...},"build_config_fingerprint":7308171529403319118}
 {"state":"state_a","actions":[{"action":"action_x","count":3,"weighted_count":3.0,"success_rate":0.667,"mean_score":0.633,"prior":0.557,"confidence":0.130}]}
 ```
 
-The header preserves the producer version and complete `BuildConfig`. The Rust API
-`load_prior_book_with_metadata` exposes it; `load_prior_book_with_config` rejects a mismatched
-schema-v1 config. Headerless books and the older fingerprint-only header remain readable.
+The header records the producer version and complete `BuildConfig`. Headerless books and the older
+fingerprint-only header remain readable. `pack` and `unpack` convert JSONL to and from compact LPB
+v1.
 
-Identical ordered input, config, and producer version produce byte-identical JSONL. `pack` and
-`unpack` convert between JSONL and the compact LPB v1 format.
+For archived measurements, add `--artifact-manifest manifest.json`. The sidecar links the exact
+input and book bytes by SHA-256 and can record caller-owned dataset, split, adapter, and lineage
+fields without changing the book schema. Artifact schemas and validation commands are indexed in
+[`docs/README.md`](./docs/README.md).
 
-For archival or downstream evaluation, `build --artifact-manifest manifest.json` writes a separate
-sidecar linking the exact input and book bytes by SHA-256. Optional `--dataset-id`, `--split`,
-`--adapter-id`, `--adapter-version`, and repeatable `--lineage key=value` fields remain
-caller-owned. The sidecar does not change the schema-v1 book, so existing readers stay compatible.
+## Ranking, confidence, and evaluation
 
-## Ranking and confidence
+The default ranker combines log weighted count, smoothed success rate, and smoothed mean score,
+then normalizes within each state. `--scoring-strategy` also supports `bayesian`, `ucb`, and
+`softmax`. These are ranking strategies, not guarantees of future performance.
 
-The default strategy combines log weighted count, smoothed success rate, and smoothed mean score,
-then normalizes scores within each state. Missing outcome or score signals are omitted.
+`--confidence-mode` accepts:
 
-`--scoring-strategy` selects `weighted-sum`, `bayesian`, `ucb`, or `softmax`. These are ranking
-strategies, not future-performance guarantees.
+- `heuristic`: sample-size support; the default and usable without outcomes.
+- `wilson-lower-bound`: a lower bound on observed success, with heuristic fallback when decisive
+  outcomes are absent.
+- `hybrid`: the heuristic multiplied by the Wilson lower bound.
 
-`--confidence-mode` selects:
+Use count, weighted-count, and confidence thresholds to abstain on weak evidence. Time decay and
+source weights are opt-in; time decay requires an explicit reference timestamp so builds remain
+reproducible.
 
-- `heuristic`: sample-size heuristic; default and usable without outcomes.
-- `wilson-lower-bound`: Wilson lower bound on observed success, with a heuristic fallback when
-  decisive outcomes are absent.
-- `hybrid`: sample-size heuristic multiplied by the Wilson lower bound.
-
-Use `--min-count`, `--min-weighted-count`, and `--min-confidence` to abstain on weak evidence.
-Time decay and source reliability are opt-in. Time decay requires an explicit reference timestamp
-so repeated builds remain reproducible. Run `lineprior build --help` for the full configuration
-surface.
-
-## Commands
-
-| Command | Purpose |
-| --- | --- |
-| `build` | Build a JSONL prior book |
-| `query` | Query exact state or contextual backoff |
-| `summary` | Report coverage, confidence, entropy, and context support |
-| `validate` | Validate observation, off-policy, or gate-history JSONL |
-| `eval` | Measure held-out ranking and calibration |
-| `tune` | Grid-search `BuildConfig` on one deterministic split |
-| `pack` / `unpack` | Convert JSONL and LPB v1 |
-| `offpolicy` | Compute IPS, SNIPS, DR, overlap, and optional bootstrap intervals |
-| `gate` | Fit the experimental GateModel and optionally predict verdict/acquisition |
-
-`eval` splits by `sequence_id` to avoid leaking one sequence across train and test:
+Held-out evaluation splits by `sequence_id` to avoid train/test leakage:
 
 ```bash
 lineprior eval observations.jsonl \
@@ -137,93 +100,58 @@ lineprior eval observations.jsonl \
   --top-k 1,3,5 --calibration-bins 10 --out eval.json
 ```
 
-`tune` reuses the same split for every candidate and can save the winning config:
+A good ranking score does not prove a downstream benefit. Compare prior-on and prior-off arms in
+the real decision loop.
 
-```bash
-lineprior tune observations.jsonl \
-  --param confidence-mode=heuristic,wilson-lower-bound,hybrid \
-  --param min-confidence=0.0,0.3,0.5 \
-  --objective covered-mrr \
-  --out tune.json --save-best-config best_config.json
-```
+## CLI commands
 
-A good held-out ranking score does not prove downstream improvement. Compare prior-on and prior-off
-arms in the actual decision loop.
+| Command | Purpose |
+| --- | --- |
+| `build` | Build a JSONL prior book |
+| `query` | Query an exact state or contextual backoff |
+| `summary` | Report coverage, confidence, entropy, and context support |
+| `validate` | Validate observation, off-policy, or gate-history JSONL |
+| `eval` / `tune` | Evaluate one config or tune it on a fixed split |
+| `pack` / `unpack` | Convert JSONL and LPB v1 |
+| `offpolicy` | Compute IPS, SNIPS, DR, overlap, and bootstrap intervals |
+| `gate` | Run the experimental GateModel diagnostics |
+
+Run `lineprior <command> --help` for all options.
 
 ## Optional capabilities
 
-- **Variable-order context:** `--context-order N` learns recent-action context while retaining
-  order-zero fallback. Context input must be grouped by sequence with increasing steps.
-- **Similarity fallback:** `lineprior-similarity` searches caller-supplied finite feature vectors.
-  The core accepts deterministic neighbors and never generates actions.
-- **Sequence reuse:** the library can score caller-supplied paths, materialize a `PriorTrie`,
-  extract bounded macro-actions, propagate opt-in terminal credit, and merge independently built
-  books with explicit source weights.
-- **Typed adapters:** `lineprior-adapters` maps Sekirei, UI automation, LLM-agent, and
-  retrosynthesis records into generic observations. Parsing, legality, execution, and chemical
-  validation stay downstream.
-- **WASM:** `lineprior-wasm` exposes JSON-in/JSON-out build and query functions. CI packs and
-  clean-installs a web-target npm tarball before a Chromium round trip. It is not registry-published,
-  and other browsers are outside the maintained boundary.
-- **GateModel:** verdict probabilities, expected-improvement-per-cost acquisition, and monotonic
-  constraints are experimental diagnostics. A real-history audit found no admissible shared
-  pre-gate feature table, so model comparison remains non-estimable and scope stays frozen.
-- **Off-policy evaluation:** IPS/DR consumes caller-supplied propensities and reward-model values.
-  Missing support or bad propensities cannot be repaired by the estimator.
+- Variable-order context, sequence scoring, `PriorTrie`, bounded macro-actions, terminal credit,
+  and weighted multi-source book merging are available in the core library.
+- `lineprior-similarity` searches caller-supplied finite feature vectors. It does not generate
+  actions or embeddings.
+- `lineprior-adapters` provides typed conversion boundaries for Sekirei, UI automation, LLM
+  agents, and retrosynthesis. Parsing, legality, execution, and chemical validation remain with
+  the downstream application.
+- `lineprior-wasm` exposes initialized JSON-in/JSON-out build and query functions. CI verifies a
+  clean-installed web-target tarball in Chromium. It is not registry-published, and there is no
+  Python binding.
+- GateModel and off-policy evaluation are diagnostic tools. They cannot repair missing features,
+  support, propensities, or outcomes.
 
-## Domain examples
-
-The core treats state and action as opaque keys:
-
-| Domain | State | Action |
-| --- | --- | --- |
-| UI automation | screen, DOM, or OCR state | click, type, shortcut, wait |
-| Optimization | partial-solution key | branch or expansion |
-| Games | position string or hash | legal action identifier |
-| LLM agent | task/tool context | tool call or plan step |
-| Retrosynthesis | molecule/intermediate fingerprint | reaction template |
-
-The checked-in fixtures include
-[UI automation](./examples/ui_automation.jsonl),
-[a shogi mapping](./examples/shogi_opening.jsonl), and
-[Python](./examples/python/roundtrip.py) /
-[Node.js](./examples/node/roundtrip.mjs) CLI round trips. Domain formats are adapter concerns; the
-core does not parse SFEN, CSA, FEN, PGN, prompts, or molecules.
-
-There is no Python binding. The maintained browser package boundary and clean-install evidence are
-defined in the [runtime compatibility document](./docs/measurements/ecosystem-compatibility.md).
+The core does not parse SFEN, CSA, FEN, PGN, prompts, UI trees, or molecules. Example JSONL and
+Python, Node.js, and browser round trips are under [`examples/`](./examples/).
 
 ## Evidence and limitations
 
 - Historical bias and distribution shift can make a prior worse.
-- `confidence` describes observed support or an observed-rate bound. It is not certainty about a
-  future action.
+- `confidence` describes observed support or an observed-rate bound, not certainty about a future
+  action.
 - Similar states do not generalize automatically; feature construction belongs to the caller.
 - The project does not perform causal inference or counterfactual action generation.
-- Synthetic fixtures test contracts, not decision quality.
-- A historical benchmark does not establish cross-machine performance.
-- A real Sekirei holdout rejected the current similarity adapter. Real-log audits found IPS/DR
-  non-estimable because propensities were not logged and GateModel non-estimable because candidate
-  identity, group IDs, and shared pre-gate features were not recorded. Trie and macro-action
-  improvement gates remain open.
+- Synthetic fixtures verify contracts, not decision quality. Historical benchmarks do not
+  establish cross-machine performance.
+- A Sekirei holdout rejected the current similarity adapter. Existing logs lacked the information
+  needed to estimate IPS/DR or validate GateModel. Trie and macro-action downstream gains remain
+  unverified.
 
 Streaming build memory is proportional to unique state/action pairs, plus context tuples when
-enabled. The historical Apple M4 synthetic snapshot is retained under
-[`docs/benchmarks/`](./docs/benchmarks/), clearly separated from real-data evidence.
-
-## Documentation
-
-- [Documentation index](./docs/README.md)
-- [Similarity real-data protocol](./docs/measurements/similarity-real-data.md)
-- [IPS/DR real-log protocol](./docs/measurements/offpolicy-real-data.md)
-- [GateModel real-history readiness](./docs/measurements/gate-model-real-history.md)
-- [Runtime and WASM evidence](./docs/measurements/ecosystem-compatibility.md)
-- [Sekirei downstream case study](./docs/case-studies/sekirei-opening-book.md)
-- [Publishing checklist](./docs/publishing.md)
-- [Release history](./CHANGELOG.md)
-- [Rust API](https://docs.rs/lineprior)
-
-The internal `ROADMAP.md` is intentionally not published.
+enabled. See the [documentation index](./docs/README.md) for measurement protocols, evidence,
+publishing, examples, and schemas.
 
 ## Development
 
@@ -235,8 +163,8 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --lock
 sh scripts/check_candidate_contract.sh
 ```
 
-`lineprior` is an engineering-oriented Rust implementation inspired by case-based planning, plan
-reuse, sequence prediction, variable-order Markov models, policy-guided search, and temporal
-abstraction. It does not claim a new theoretical algorithm.
+`lineprior` is an engineering-oriented implementation inspired by case-based planning, plan reuse,
+sequence prediction, variable-order Markov models, policy-guided search, and temporal abstraction.
+It does not claim a new theoretical algorithm.
 
 Licensed under MIT or Apache-2.0.

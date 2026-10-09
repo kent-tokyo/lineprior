@@ -1,41 +1,43 @@
-# Documentation index
+# Documentation
 
 Start with the repository [README](../README.md) or [Japanese README](../README_ja.md). They cover
-installation, the JSONL contract, core commands, and feature boundaries. Use `lineprior <command>
---help` for the complete CLI option reference and [docs.rs](https://docs.rs/lineprior) for the Rust
-API.
+installation, the JSONL contract, commands, and safety boundaries. Use `lineprior <command> --help`
+for CLI options and [docs.rs](https://docs.rs/lineprior) for the Rust API.
 
 ## Evidence and measurement
 
-- [Similarity real-data protocol](measurements/similarity-real-data.md): exact, similarity, and
-  no-prior held-out comparison, including the rejected Sekirei adapter result.
-- [IPS/DR real-log protocol](measurements/offpolicy-real-data.md): propensity, overlap, bootstrap,
-  paired prior-on/off requirements, and the current Sekirei not-estimable audit.
-- [GateModel real-history readiness](measurements/gate-model-real-history.md): candidate-level
-  admission rules and the current no-feature-table, not-estimable decision.
-- [Runtime and WASM evidence](measurements/ecosystem-compatibility.md): maintained CI matrix and
-  the claims it does and does not support.
-- [Sekirei opening-book case study](case-studies/sekirei-opening-book.md): real adapter wiring and
-  an inconclusive 40-game on/off diagnostic.
-- [Historical benchmark](benchmarks/v0.11.0-m4-arm64-2026-09-02.md): one synthetic Apple M4
-  snapshot, retained for reproduction rather than current performance claims.
+| Document | What it establishes |
+| --- | --- |
+| [Similarity evaluation](measurements/similarity-real-data.md) | Exact/similarity/no-prior protocol and the rejected Sekirei adapter result |
+| [IPS/DR evaluation](measurements/offpolicy-real-data.md) | Required propensity, overlap, bootstrap, and paired-arm evidence |
+| [GateModel readiness](measurements/gate-model-real-history.md) | Candidate admission rules and the current not-estimable decision |
+| [Runtime and WASM](measurements/ecosystem-compatibility.md) | Maintained CI matrix and package boundary |
+| [Sekirei case study](case-studies/sekirei-opening-book.md) | Adapter wiring and an inconclusive 40-game diagnostic |
+| [Historical benchmark](benchmarks/v0.11.0-m4-arm64-2026-09-02.md) | One synthetic Apple M4 snapshot; not a current performance claim |
 
-The JSON Schemas in `measurements/` validate artifact structure. The repository's semantic
-validator separately checks numeric ranges, lineage equality, hashes, and fixed-version rules.
-Raw `OffPolicyObservation` and `GateObservation` rows also have schemas there; validate their
-cross-row semantics with `lineprior validate INPUT --kind offpolicy|gate`. The prior-artifact
-manifest schema covers the optional SHA-256 sidecar emitted by `build --artifact-manifest`.
+## Schemas and validators
 
-## Release operations
+The JSON Schemas under [`measurements/`](measurements/) cover raw off-policy and gate rows,
+integrated measurement artifacts, similarity reports, and the optional prior-artifact sidecar.
+Use these commands for semantic checks that JSON Schema does not express:
 
-- [Publishing workspace crates](publishing.md): release checklist, OIDC publishing, and the
-  one-time new-crate bootstrap boundary.
-- [Changelog](../CHANGELOG.md): published history and the single current `Unreleased` section.
+```bash
+lineprior validate observations.jsonl
+lineprior validate offpolicy.jsonl --kind offpolicy
+lineprior validate gate-history.jsonl --kind gate
+python3 scripts/check_measurement_schemas.py
+sh scripts/check_candidate_contract.sh
+```
 
-## Examples
+The repository validators also check numeric ranges, hashes, lineage equality, and fixed-version
+rules. Structural schema validation alone does not establish those properties.
 
+## Operations and recipes
+
+- [Publishing workspace crates](publishing.md)
 - [Typed adapter boundaries](../examples/adapters.md)
 - [veridict prior on/off protocol](../examples/veridict_prior_comparison.md)
+- [Release history](../CHANGELOG.md)
 - JSONL fixtures and Python, Node.js, and browser smoke examples under [`examples/`](../examples/)
 
-`ROADMAP.md` is an internal planning file and is intentionally excluded from published artifacts.
+`ROADMAP.md` is an ignored internal planning file and is not part of published artifacts.

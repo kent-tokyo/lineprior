@@ -100,7 +100,7 @@ fn gate_observation() -> Value {
 fn prior_artifact_manifest() -> Value {
     json!({
         "schema": "lineprior.prior-artifact-manifest.v1",
-        "producer_version": "0.12.1",
+        "producer_version": "0.12.2",
         "input_sha256": "0".repeat(64),
         "prior_book_sha256": "1".repeat(64),
         "build_config": {},
