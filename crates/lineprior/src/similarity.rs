@@ -126,6 +126,12 @@ impl PriorBook {
         let mut aggregates: BTreeMap<String, Aggregate> = BTreeMap::new();
         for neighbor in selected.iter().copied() {
             let weight = (-neighbor.distance / config.distance_scale).exp();
+            // A finite but very large distance can underflow exp() to zero.
+            // Aggregating it would later divide 0 by 0 and expose NaN as a
+            // candidate prior/confidence; zero support must abstain instead.
+            if weight == 0.0 {
+                continue;
+            }
             for action in self.query(&neighbor.state, None) {
                 let entry = aggregates.entry(action.action.clone()).or_default();
                 entry.prior_sum += weight * action.prior;
@@ -323,5 +329,23 @@ mod tests {
             None,
         );
         assert!(matches!(error, Err(Error::InvalidConfig { .. })));
+    }
+
+    #[test]
+    fn underflowed_distance_weight_abstains_instead_of_returning_nan() {
+        let result = book()
+            .query_with_similarity(
+                &[SimilarState {
+                    state: "near-a".to_string(),
+                    distance: f64::MAX,
+                    provenance: "too-far".to_string(),
+                }],
+                &SimilarityConfig::default(),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(result.neighbors_used, 1);
+        assert!(result.candidates.is_empty());
     }
 }

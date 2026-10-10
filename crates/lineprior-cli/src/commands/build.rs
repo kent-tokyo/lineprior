@@ -1,14 +1,13 @@
-use super::{BuildConfigArgs, same_path};
+use super::{BuildConfigArgs, hashing::HashingReader, hashing::HashingWriter, same_path};
 use anyhow::{Context, Result};
 use clap::Args;
 use lineprior::{
     PriorArtifactLineage, PriorArtifactManifestV1, build_prior_book_from_reader,
     save_prior_book_with_config,
 };
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{BufWriter, Read, Write};
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -62,44 +61,6 @@ pub struct BuildArgs {
         requires = "artifact_manifest"
     )]
     lineage: Vec<(String, String)>,
-}
-
-struct HashingReader<R> {
-    inner: R,
-    hasher: Option<Sha256>,
-}
-
-impl<R: Read> Read for HashingReader<R> {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        let read = self.inner.read(buffer)?;
-        if let Some(hasher) = &mut self.hasher {
-            hasher.update(&buffer[..read]);
-        }
-        Ok(read)
-    }
-}
-
-struct HashingWriter<W> {
-    inner: W,
-    hasher: Option<Sha256>,
-}
-
-impl<W: Write> Write for HashingWriter<W> {
-    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        let written = self.inner.write(buffer)?;
-        if let Some(hasher) = &mut self.hasher {
-            hasher.update(&buffer[..written]);
-        }
-        Ok(written)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.flush()
-    }
-}
-
-fn digest(hasher: Option<Sha256>) -> Option<String> {
-    hasher.map(|hasher| format!("{:x}", hasher.finalize()))
 }
 
 fn parse_lineage(value: &str) -> std::result::Result<(String, String), String> {
@@ -158,10 +119,7 @@ pub fn run(args: BuildArgs) -> Result<ExitCode> {
             return Ok(ExitCode::from(3));
         }
     };
-    let mut input = HashingReader {
-        inner: file,
-        hasher: emit_manifest.then(Sha256::new),
-    };
+    let mut input = HashingReader::new(file, emit_manifest);
 
     let config = super::resolve_build_config(args.config_file.as_deref(), args.config)?;
 
@@ -175,7 +133,7 @@ pub fn run(args: BuildArgs) -> Result<ExitCode> {
             return Ok(super::exit_code_for_lineprior_error(&err));
         }
     };
-    let input_sha256 = digest(input.hasher);
+    let input_sha256 = input.finish_sha256();
     for warning in &output.warnings {
         eprintln!("warning: {warning}");
     }
@@ -203,10 +161,7 @@ pub fn run(args: BuildArgs) -> Result<ExitCode> {
 
     let out_file =
         File::create(&args.out).with_context(|| format!("creating {}", args.out.display()))?;
-    let mut book_writer = HashingWriter {
-        inner: BufWriter::new(out_file),
-        hasher: emit_manifest.then(Sha256::new),
-    };
+    let mut book_writer = HashingWriter::new(BufWriter::new(out_file), emit_manifest);
     save_prior_book_with_config(&output.book, &config, &mut book_writer)
         .context("writing prior book")?;
     book_writer.flush().context("flushing prior book")?;
@@ -214,7 +169,9 @@ pub fn run(args: BuildArgs) -> Result<ExitCode> {
     if let Some(manifest_path) = args.artifact_manifest {
         let manifest = PriorArtifactManifestV1::new(
             input_sha256.expect("enabled alongside artifact manifest"),
-            digest(book_writer.hasher).expect("enabled alongside artifact manifest"),
+            book_writer
+                .finish_sha256()
+                .expect("enabled alongside artifact manifest"),
             PriorArtifactLineage {
                 dataset_id: args.dataset_id,
                 split: args.split,

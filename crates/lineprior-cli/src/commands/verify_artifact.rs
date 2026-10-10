@@ -1,9 +1,9 @@
+use super::hashing::HashingReader;
 use anyhow::Result;
 use clap::Args;
 use lineprior::{
     PriorArtifactBookCompatibility, PriorArtifactManifestV1, load_prior_book_with_metadata,
 };
-use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -27,17 +27,22 @@ fn open(path: &Path) -> std::io::Result<File> {
 }
 
 fn sha256(reader: impl Read) -> std::io::Result<String> {
-    let mut reader = BufReader::new(reader);
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = reader.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
+    let mut reader = HashingReader::new(BufReader::new(reader), true);
+    std::io::copy(&mut reader, &mut std::io::sink())?;
+    Ok(reader
+        .finish_sha256()
+        .expect("hashing is enabled for artifact verification"))
+}
+
+fn load_book_and_sha256(
+    reader: impl Read,
+) -> lineprior::Result<(lineprior::LoadedPriorBook, String)> {
+    let mut reader = HashingReader::new(reader, true);
+    let loaded = load_prior_book_with_metadata(&mut reader)?;
+    let digest = reader
+        .finish_sha256()
+        .expect("hashing is enabled for artifact verification");
+    Ok((loaded, digest))
 }
 
 pub fn run(args: VerifyArtifactArgs) -> Result<ExitCode> {
@@ -68,10 +73,20 @@ pub fn run(args: VerifyArtifactArgs) -> Result<ExitCode> {
             return Ok(ExitCode::from(3));
         }
     };
-    let book_sha256 = match open(&args.book).and_then(sha256) {
-        Ok(digest) => digest,
+    let book_file = match open(&args.book) {
+        Ok(file) => file,
         Err(error) => {
-            eprintln!("error: reading {}: {error}", args.book.display());
+            eprintln!("error: opening {}: {error}", args.book.display());
+            return Ok(ExitCode::from(3));
+        }
+    };
+    // Hash the same stream that the prior-book loader validates. Reopening
+    // between those operations would allow a path replacement to make the
+    // digest and parsed metadata refer to different file contents.
+    let (loaded, book_sha256) = match load_book_and_sha256(book_file) {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("error: validating {}: {error}", args.book.display());
             return Ok(ExitCode::from(3));
         }
     };
@@ -79,16 +94,6 @@ pub fn run(args: VerifyArtifactArgs) -> Result<ExitCode> {
         eprintln!("error: {error}");
         return Ok(super::exit_code_for_lineprior_error(&error));
     }
-
-    let loaded = match open(&args.book).and_then(|file| {
-        load_prior_book_with_metadata(BufReader::new(file)).map_err(std::io::Error::other)
-    }) {
-        Ok(loaded) => loaded,
-        Err(error) => {
-            eprintln!("error: validating {}: {error}", args.book.display());
-            return Ok(ExitCode::from(3));
-        }
-    };
     let compatibility = match manifest.verify_book_metadata(loaded.metadata.as_ref()) {
         Ok(compatibility) => compatibility,
         Err(error) => {
@@ -130,6 +135,18 @@ mod tests {
         assert_eq!(
             sha256(&b"abc"[..]).unwrap(),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn book_loader_hashes_the_same_stream_it_parses() {
+        let bytes = b"{\"state\":\"s\",\"actions\":[]}\n";
+        let (loaded, digest) = load_book_and_sha256(&bytes[..]).unwrap();
+
+        assert!(loaded.book.entries.contains_key("s"));
+        assert_eq!(
+            digest,
+            "528f7e0d9e0ff4234205c3ba590f1b16262e4612e601be861fb539afab057064"
         );
     }
 }

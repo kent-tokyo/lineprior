@@ -9,4 +9,4 @@ keywords = ["similarity", "nearest-neighbor", "action-ranking", "feature-vector"
 categories = ["algorithms", "artificial-intelligence"]
 
 [dependencies]
-lineprior = { path = "../lineprior", version = "0.12.3" }
+lineprior = { path = "../lineprior", version = "0.12.4" }

@@ -94,9 +94,13 @@ pub fn nearest_neighbors(
         let distance = query
             .iter()
             .zip(&candidate.features)
-            .map(|(left, right)| (left - right).powi(2))
-            .sum::<f64>()
-            .sqrt();
+            .fold(0.0_f64, |norm, (left, right)| norm.hypot(left - right));
+        // `hypot` avoids avoidable square/sum overflow. If the true distance
+        // still exceeds f64's range, omit that unusably distant candidate
+        // rather than exporting an invalid non-finite SimilarState.
+        if !distance.is_finite() {
+            continue;
+        }
         if config.max_distance.is_none_or(|max| distance <= max) {
             ranked.push((distance, candidate));
         }
@@ -233,6 +237,27 @@ mod tests {
             nearest_neighbors(&[f64::NAN], &[], Default::default()),
             Err(FeatureVectorError::NonFiniteValue { .. })
         ));
+    }
+
+    #[test]
+    fn distance_calculation_avoids_overflow_and_omits_unrepresentable_results() {
+        let large = nearest_neighbors(
+            &[0.0, 0.0],
+            &[candidate("large", &[1.0e200, 1.0e200], "fixture")],
+            Default::default(),
+        )
+        .unwrap();
+        assert_eq!(large.len(), 1);
+        assert!(large[0].distance.is_finite());
+        assert!((large[0].distance / 1.0e200 - 2.0_f64.sqrt()).abs() < 1e-12);
+
+        let unrepresentable = nearest_neighbors(
+            &[-f64::MAX],
+            &[candidate("overflow", &[f64::MAX], "fixture")],
+            Default::default(),
+        )
+        .unwrap();
+        assert!(unrepresentable.is_empty());
     }
 
     #[test]

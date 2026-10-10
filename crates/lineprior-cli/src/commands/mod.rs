@@ -2,6 +2,7 @@ pub mod binary;
 pub mod build;
 pub mod eval;
 pub mod gate;
+mod hashing;
 pub mod offpolicy;
 pub mod query;
 pub mod summary;

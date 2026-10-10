@@ -9,10 +9,24 @@ release may include Rust source-breaking changes; such changes are called out ex
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-10-11
+
 ### Added
 
 - Added a public prior-artifact verifier and `verify-artifact` CLI command for checking manifest
   semantics, exact input/book SHA-256 values, and schema-v1 book metadata.
+
+### Fixed
+
+- Hash and parse a verified prior book through the same file stream so a path replacement cannot
+  make `verify-artifact` compare one set of bytes while validating another.
+- Avoid NaN similarity candidates when distance weighting underflows to zero, and compute
+  Euclidean distances without avoidable intermediate overflow.
+
+### Compatibility
+
+- Prior-book schema v1, compact LPB v1, and optional artifact manifests remain compatible.
+- All five workspace crates and internal dependency requirements are version-locked at `0.12.4`.
 
 ## [0.12.3] - 2026-10-10
 
