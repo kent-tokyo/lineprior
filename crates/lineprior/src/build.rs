@@ -148,7 +148,7 @@ fn base_score(stat: &ActionStats, global_mean_score: Option<f64>, config: &Build
 /// Rejects a `BuildConfig` that can't be applied consistently, before any
 /// observation is folded in. Checked once per build/eval run, not per
 /// observation.
-fn validate_config(config: &BuildConfig) -> Result<()> {
+pub(crate) fn validate_config(config: &BuildConfig) -> Result<()> {
     if !config.min_weighted_count.is_finite() || config.min_weighted_count < 0.0 {
         return Err(Error::InvalidConfig {
             message: "min_weighted_count must be finite and non-negative".into(),

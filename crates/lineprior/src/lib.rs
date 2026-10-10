@@ -27,8 +27,8 @@ mod trie;
 mod tune;
 
 pub use artifact::{
-    PRIOR_ARTIFACT_MANIFEST_SCHEMA, PriorArtifactLineage, PriorArtifactManifestV1,
-    PriorArtifactSummary,
+    PRIOR_ARTIFACT_MANIFEST_SCHEMA, PriorArtifactBookCompatibility, PriorArtifactLineage,
+    PriorArtifactManifestV1, PriorArtifactSummary,
 };
 pub use binary::{load_prior_book_binary, save_prior_book_binary};
 pub use build::{BuildOutput, BuildStats, IncrementalPriorBuilder, build_prior_book};

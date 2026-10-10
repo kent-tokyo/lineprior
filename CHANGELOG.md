@@ -9,6 +9,11 @@ release may include Rust source-breaking changes; such changes are called out ex
 
 ## [Unreleased]
 
+### Added
+
+- Added a public prior-artifact verifier and `verify-artifact` CLI command for checking manifest
+  semantics, exact input/book SHA-256 values, and schema-v1 book metadata.
+
 ## [0.12.3] - 2026-10-10
 
 ### Added
