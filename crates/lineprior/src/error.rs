@@ -70,6 +70,37 @@ pub enum Error {
     #[error("{field} must be a lowercase SHA-256 digest, got `{value}`")]
     InvalidArtifactDigest { field: &'static str, value: String },
 
+    #[error("unsupported artifact manifest schema `{found}`; supported schema is `{supported}`")]
+    UnsupportedArtifactManifestSchema {
+        found: String,
+        supported: &'static str,
+    },
+
+    #[error("artifact manifest build_config is invalid: {source}")]
+    InvalidArtifactBuildConfig {
+        #[source]
+        source: serde_json::Error,
+    },
+
+    #[error(
+        "artifact manifest build_config fingerprint mismatch (expected {expected}, found {found})"
+    )]
+    ArtifactBuildConfigFingerprintMismatch { expected: u64, found: u64 },
+
+    #[error("artifact {field} mismatch (expected {expected}, found {found})")]
+    ArtifactDigestMismatch {
+        field: &'static str,
+        expected: String,
+        found: String,
+    },
+
+    #[error("prior-book metadata {field} mismatch (expected {expected}, found {found})")]
+    ArtifactBookMetadataMismatch {
+        field: &'static str,
+        expected: String,
+        found: String,
+    },
+
     /// Raised only when `BuildConfig::context_order > 0`: deriving a
     /// sequence's recent-action window while streaming requires that
     /// sequence's own rows be contiguous and in increasing `step` order.

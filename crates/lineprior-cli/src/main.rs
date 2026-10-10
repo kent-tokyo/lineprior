@@ -3,7 +3,9 @@
 mod commands;
 
 use clap::{Parser, Subcommand};
-use commands::{binary, build, eval, gate, offpolicy, query, summary, tune, validate};
+use commands::{
+    binary, build, eval, gate, offpolicy, query, summary, tune, validate, verify_artifact,
+};
 use std::process::ExitCode;
 
 #[derive(Parser)]
@@ -39,6 +41,8 @@ enum Commands {
     Tune(tune::TuneArgs),
     /// Validate a JSONL observation log without building a prior book.
     Validate(validate::ValidateArgs),
+    /// Verify a prior-artifact manifest against exact input and book bytes.
+    VerifyArtifact(verify_artifact::VerifyArtifactArgs),
 }
 
 fn main() -> ExitCode {
@@ -55,6 +59,7 @@ fn main() -> ExitCode {
         Commands::Summary(args) => summary::run(args),
         Commands::Tune(args) => tune::run(args),
         Commands::Validate(args) => validate::run(args),
+        Commands::VerifyArtifact(args) => verify_artifact::run(args),
     };
 
     match result {

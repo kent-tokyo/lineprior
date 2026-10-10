@@ -25,12 +25,15 @@ Use these commands for semantic checks that JSON Schema does not express:
 lineprior validate observations.jsonl
 lineprior validate offpolicy.jsonl --kind offpolicy
 lineprior validate gate-history.jsonl --kind gate
+lineprior verify-artifact --manifest prior.manifest.json --input observations.jsonl --book prior.jsonl
 python3 scripts/check_measurement_schemas.py
 sh scripts/check_candidate_contract.sh
 ```
 
-The repository validators also check numeric ranges, hashes, lineage equality, and fixed-version
-rules. Structural schema validation alone does not establish those properties.
+`verify-artifact` streams both files through SHA-256 and checks the embedded `BuildConfig`, its
+fingerprint, and schema-v1 book header. Legacy/headerless books remain readable but return a
+provenance warning. Repository validators also check numeric ranges, lineage equality, and
+fixed-version rules. Structural schema validation alone does not establish those properties.
 
 ## Operations and recipes
 

@@ -368,6 +368,76 @@ fn build_command_writes_a_content_linked_artifact_manifest() {
 }
 
 #[test]
+fn verify_artifact_checks_round_trip_bytes_and_book_metadata() {
+    let input = temp_path("verify_artifact_input.jsonl");
+    let out = temp_path("verify_artifact_book.jsonl");
+    let manifest = temp_path("verify_artifact_manifest.json");
+    let input_bytes = std::fs::read(fixture("mixed_outcomes.jsonl")).unwrap();
+    std::fs::write(&input, &input_bytes).unwrap();
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--artifact-manifest",
+            manifest.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let verify = || {
+        Command::cargo_bin("lineprior")
+            .unwrap()
+            .args([
+                "verify-artifact",
+                "--manifest",
+                manifest.to_str().unwrap(),
+                "--input",
+                input.to_str().unwrap(),
+                "--book",
+                out.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap()
+    };
+    let output = verify();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("schema-v1 book metadata"));
+
+    std::fs::write(&input, [input_bytes.as_slice(), b"\n"].concat()).unwrap();
+    let output = verify();
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("input_sha256 mismatch"));
+    std::fs::write(&input, &input_bytes).unwrap();
+
+    let book_bytes = std::fs::read(&out).unwrap();
+    std::fs::write(&out, [book_bytes.as_slice(), b"\n"].concat()).unwrap();
+    let output = verify();
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("prior_book_sha256 mismatch"));
+    std::fs::write(&out, &book_bytes).unwrap();
+
+    let mut manifest_value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+    manifest_value["producer_version"] = serde_json::json!("tampered");
+    std::fs::write(
+        &manifest,
+        serde_json::to_vec_pretty(&manifest_value).unwrap(),
+    )
+    .unwrap();
+    let output = verify();
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("producer_version mismatch"));
+
+    let _ = std::fs::remove_file(&input);
+    let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_file(&manifest);
+}
+
+#[test]
 fn build_command_rejects_artifact_manifest_path_collisions() {
     let out = temp_path("build_manifest_collision.jsonl");
     let _ = std::fs::remove_file(&out);

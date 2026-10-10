@@ -35,6 +35,7 @@ cargo install lineprior-cli
 ```bash
 lineprior validate observations.jsonl
 lineprior build observations.jsonl --out prior.jsonl --min-count 2
+lineprior verify-artifact --manifest manifest.json --input observations.jsonl --book prior.jsonl
 lineprior summary prior.jsonl
 lineprior query prior.jsonl --state state_a --top-k 5
 ```
@@ -71,7 +72,9 @@ fingerprintだけを持つ旧headerも読み込めます。`pack`と`unpack`でJ
 
 測定結果を保存する場合は`--artifact-manifest manifest.json`を指定します。sidecarは入力と
 bookのbyte列をSHA-256で結び、dataset、split、adapter、lineageをbook schemaとは別に記録
-します。artifact schemaと検証方法は[`docs/README.md`](./docs/README.md)にまとめています。
+します。`verify-artifact`はbyte hash、manifestの内容、schema-v1 book metadataを照合します。
+旧形式またはheaderless bookの場合はprovenance不足をwarningで返します。artifact schemaと
+検証方法は[`docs/README.md`](./docs/README.md)にまとめています。
 
 ## ranking、confidence、評価
 
@@ -108,6 +111,7 @@ ranking指標が良くてもdownstream改善の証明にはなりません。実
 | `query` | exact stateまたはcontext backoffで問い合わせ |
 | `summary` | coverage、confidence、entropy、context supportを要約 |
 | `validate` | observation、off-policy、gate-history JSONLを検証 |
+| `verify-artifact` | sidecarを入力byte列とprior-book metadataに照合 |
 | `eval` / `tune` | 固定splitでconfigを評価または調整 |
 | `pack` / `unpack` | JSONLとLPB v1を変換 |
 | `offpolicy` | IPS、SNIPS、DR、overlap、bootstrap intervalを計算 |

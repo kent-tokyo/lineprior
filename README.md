@@ -36,6 +36,7 @@ Then validate, build, inspect, and query the book:
 ```bash
 lineprior validate observations.jsonl
 lineprior build observations.jsonl --out prior.jsonl --min-count 2
+lineprior verify-artifact --manifest manifest.json --input observations.jsonl --book prior.jsonl
 lineprior summary prior.jsonl
 lineprior query prior.jsonl --state state_a --top-k 5
 ```
@@ -72,7 +73,9 @@ v1.
 
 For archived measurements, add `--artifact-manifest manifest.json`. The sidecar links the exact
 input and book bytes by SHA-256 and can record caller-owned dataset, split, adapter, and lineage
-fields without changing the book schema. Artifact schemas and validation commands are indexed in
+fields without changing the book schema. `verify-artifact` checks both byte hashes, manifest
+semantics, and schema-v1 book metadata. Legacy or headerless books return a provenance warning.
+Artifact schemas and validation commands are indexed in
 [`docs/README.md`](./docs/README.md).
 
 ## Ranking, confidence, and evaluation
@@ -111,6 +114,7 @@ the real decision loop.
 | `query` | Query an exact state or contextual backoff |
 | `summary` | Report coverage, confidence, entropy, and context support |
 | `validate` | Validate observation, off-policy, or gate-history JSONL |
+| `verify-artifact` | Verify a sidecar against input bytes and prior-book metadata |
 | `eval` / `tune` | Evaluate one config or tune it on a fixed split |
 | `pack` / `unpack` | Convert JSONL and LPB v1 |
 | `offpolicy` | Compute IPS, SNIPS, DR, overlap, and bootstrap intervals |

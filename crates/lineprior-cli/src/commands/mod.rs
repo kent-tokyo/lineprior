@@ -7,6 +7,7 @@ pub mod query;
 pub mod summary;
 pub mod tune;
 pub mod validate;
+pub mod verify_artifact;
 
 use anyhow::Context;
 use clap::{Args, ValueEnum};
