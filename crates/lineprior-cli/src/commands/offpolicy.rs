@@ -7,7 +7,7 @@ use lineprior::{
 };
 use serde::Serialize;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter};
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -36,7 +36,7 @@ pub struct OffPolicyArgs {
     #[arg(long)]
     doubly_robust: bool,
 
-    /// Number of deterministic bootstrap resamples. Omit to skip intervals.
+    /// Number of deterministic bootstrap resamples (maximum 1,000,000). Omit to skip intervals.
     #[arg(long)]
     bootstrap_resamples: Option<usize>,
 
@@ -129,7 +129,6 @@ pub fn run(args: OffPolicyArgs) -> Result<ExitCode> {
     };
     let out =
         File::create(&args.out).with_context(|| format!("creating {}", args.out.display()))?;
-    serde_json::to_writer_pretty(BufWriter::new(out), &output)
-        .context("writing off-policy report")?;
+    super::write_pretty_json(out, &output, false).context("writing off-policy report")?;
     Ok(ExitCode::from(0))
 }

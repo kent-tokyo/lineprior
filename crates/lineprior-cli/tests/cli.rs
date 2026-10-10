@@ -70,6 +70,34 @@ fn offpolicy_command_rejects_malformed_json_with_input_exit_code() {
 }
 
 #[test]
+fn offpolicy_command_rejects_excessive_bootstrap_resamples_before_output() {
+    let input = temp_path("offpolicy_excessive_bootstrap.jsonl");
+    let output = temp_path("offpolicy_excessive_bootstrap_report.json");
+    std::fs::write(
+        &input,
+        "{\"state\":\"s\",\"action\":\"a\",\"reward\":1.0,\"logging_propensity\":1.0,\"evaluation_probability\":1.0}\n",
+    )
+    .unwrap();
+    let excessive = (lineprior::MAX_BOOTSTRAP_RESAMPLES + 1).to_string();
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "offpolicy",
+            input.to_str().unwrap(),
+            "--out",
+            output.to_str().unwrap(),
+            "--bootstrap-resamples",
+            &excessive,
+        ])
+        .assert()
+        .code(3);
+    assert!(!output.exists());
+
+    let _ = std::fs::remove_file(&input);
+}
+
+#[test]
 fn gate_command_writes_verdict_and_acquisition_report() {
     let input = temp_path("gate_input.jsonl");
     let output = temp_path("gate_report.json");
@@ -169,6 +197,102 @@ fn sha256(path: &Path) -> String {
 }
 
 #[test]
+fn pack_command_rejects_malformed_input_without_creating_output() {
+    let input = temp_path("pack_malformed_input.jsonl");
+    let out = temp_path("pack_malformed_output.lpb");
+    let _ = std::fs::remove_file(&out);
+    std::fs::write(&input, "not-json\n").unwrap();
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "pack",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .code(3);
+
+    assert!(!out.exists());
+    std::fs::remove_file(&input).unwrap();
+}
+
+#[test]
+fn unpack_command_rejects_truncated_input_without_creating_output() {
+    let input = temp_path("unpack_truncated_input.lpb");
+    let out = temp_path("unpack_truncated_output.jsonl");
+    let _ = std::fs::remove_file(&out);
+    std::fs::write(&input, b"LPB\0").unwrap();
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "unpack",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .code(3);
+
+    assert!(!out.exists());
+    std::fs::remove_file(&input).unwrap();
+}
+
+#[test]
+fn pack_command_rejects_identical_input_and_output() {
+    let input = temp_path("pack_same_input_output.jsonl");
+    let contents = b"not parsed because paths collide\n";
+    std::fs::write(&input, contents).unwrap();
+
+    let output = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "pack",
+            input.to_str().unwrap(),
+            "--out",
+            input.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("input and --out"));
+    assert_eq!(std::fs::read(&input).unwrap(), contents);
+    std::fs::remove_file(&input).unwrap();
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn unpack_command_rejects_hard_linked_input_and_output() {
+    let input = temp_path("unpack_hard_link_input.lpb");
+    let out = temp_path("unpack_hard_link_output.jsonl");
+    let contents = b"not parsed because paths collide";
+    let _ = std::fs::remove_file(&input);
+    let _ = std::fs::remove_file(&out);
+    std::fs::write(&input, contents).unwrap();
+    std::fs::hard_link(&input, &out).unwrap();
+
+    let output = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "unpack",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("input and --out"));
+    assert_eq!(std::fs::read(&input).unwrap(), contents);
+    std::fs::remove_file(&out).unwrap();
+    std::fs::remove_file(&input).unwrap();
+}
+
+#[test]
 fn build_command_writes_a_prior_book() {
     let out = temp_path("build_writes.jsonl");
 
@@ -246,6 +370,7 @@ fn build_command_writes_a_content_linked_artifact_manifest() {
 #[test]
 fn build_command_rejects_artifact_manifest_path_collisions() {
     let out = temp_path("build_manifest_collision.jsonl");
+    let _ = std::fs::remove_file(&out);
     Command::cargo_bin("lineprior")
         .unwrap()
         .args([
@@ -259,6 +384,59 @@ fn build_command_rejects_artifact_manifest_path_collisions() {
         .assert()
         .code(3);
     assert!(!out.exists());
+}
+
+#[test]
+fn build_command_rejects_nonexistent_artifact_manifest_path_aliases() {
+    let out = temp_path("build_manifest_alias_collision.jsonl");
+    let alias_dir = temp_path("build_manifest_alias_parent");
+    let manifest_alias = alias_dir.join("..").join(out.file_name().unwrap());
+    let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_dir(&alias_dir);
+    std::fs::create_dir(&alias_dir).unwrap();
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            fixture("mixed_outcomes.jsonl").to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--artifact-manifest",
+            manifest_alias.to_str().unwrap(),
+        ])
+        .assert()
+        .code(3);
+
+    assert!(!out.exists());
+    std::fs::remove_dir(&alias_dir).unwrap();
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn build_command_rejects_hard_linked_input_and_output() {
+    let input = temp_path("build_hard_link_input.jsonl");
+    let out = temp_path("build_hard_link_output.jsonl");
+    let contents = std::fs::read(fixture("mixed_outcomes.jsonl")).unwrap();
+    let _ = std::fs::remove_file(&input);
+    let _ = std::fs::remove_file(&out);
+    std::fs::write(&input, &contents).unwrap();
+    std::fs::hard_link(&input, &out).unwrap();
+
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            input.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .code(3);
+
+    assert_eq!(std::fs::read(&input).unwrap(), contents);
+    std::fs::remove_file(&out).unwrap();
+    std::fs::remove_file(&input).unwrap();
 }
 
 #[test]

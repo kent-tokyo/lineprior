@@ -51,6 +51,9 @@ fn build_observation(raw: RawObservation, line: usize) -> Result<Observation> {
         field: "action",
     })?;
 
+    if sequence_id.is_empty() {
+        return Err(Error::EmptySequenceId { line });
+    }
     if state.is_empty() {
         return Err(Error::EmptyState { line });
     }
@@ -65,12 +68,12 @@ fn build_observation(raw: RawObservation, line: usize) -> Result<Observation> {
 
     let score = match raw.score {
         None => None,
-        Some(value) if value.is_nan() => return Err(Error::NanScore { line }),
+        Some(value) if !value.is_finite() => return Err(Error::NanScore { line }),
         Some(value) => Some(value),
     };
 
     let weight = raw.weight.unwrap_or(1.0);
-    if weight < 0.0 {
+    if !weight.is_finite() || weight < 0.0 {
         return Err(Error::NegativeWeight {
             line,
             value: weight,
@@ -251,6 +254,13 @@ mod tests {
     }
 
     #[test]
+    fn rejects_empty_sequence_id() {
+        let input = r#"{"sequence_id":"","step":0,"state":"s","action":"a"}"#;
+        let err = parse(input, true).unwrap_err();
+        assert!(matches!(err, Error::EmptySequenceId { line: 1 }));
+    }
+
+    #[test]
     fn accepts_zero_weight() {
         let input = r#"{"sequence_id":"c","step":0,"state":"s","action":"a","weight":0.0}"#;
         let outcome = parse(input, true).unwrap();
@@ -265,24 +275,43 @@ mod tests {
     }
 
     #[test]
-    fn rejects_nan_score_at_the_validation_layer() {
-        // NaN cannot be spelled in standard JSON text, so this exercises
+    fn rejects_non_finite_numbers_at_the_validation_layer() {
+        // Non-finite values cannot be spelled in standard JSON text, so this exercises
         // build_observation directly rather than round-tripping through
         // serde_json::from_str.
-        let raw = RawObservation {
-            sequence_id: Some("c".into()),
-            step: Some(0),
-            state: Some("s".into()),
-            action: Some("a".into()),
-            outcome: None,
-            score: Some(f64::NAN),
-            weight: None,
-            tags: None,
-            observed_at_unix_seconds: None,
-            source: None,
-        };
-        let err = build_observation(raw, 7).unwrap_err();
-        assert!(matches!(err, Error::NanScore { line: 7 }));
+        for score in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let raw = RawObservation {
+                sequence_id: Some("c".into()),
+                step: Some(0),
+                state: Some("s".into()),
+                action: Some("a".into()),
+                outcome: None,
+                score: Some(score),
+                weight: None,
+                tags: None,
+                observed_at_unix_seconds: None,
+                source: None,
+            };
+            let err = build_observation(raw, 7).unwrap_err();
+            assert!(matches!(err, Error::NanScore { line: 7 }));
+        }
+
+        for weight in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let raw = RawObservation {
+                sequence_id: Some("c".into()),
+                step: Some(0),
+                state: Some("s".into()),
+                action: Some("a".into()),
+                outcome: None,
+                score: None,
+                weight: Some(weight),
+                tags: None,
+                observed_at_unix_seconds: None,
+                source: None,
+            };
+            let err = build_observation(raw, 8).unwrap_err();
+            assert!(matches!(err, Error::NegativeWeight { line: 8, .. }));
+        }
     }
 
     #[test]

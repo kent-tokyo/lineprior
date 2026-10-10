@@ -56,7 +56,7 @@ pub fn build_macro_actions(
             .map_or(rows.len(), |n| start + n);
         for i in start..end {
             for len in config.min_length..=config.max_length {
-                if i + len > end {
+                if len > end - i {
                     break;
                 }
                 let actions = rows[i..i + len]
@@ -97,7 +97,7 @@ pub fn build_macro_actions(
         })
         .collect();
     kept.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-    let total = kept.iter().map(|x| x.2).sum::<u64>() as f64;
+    let total = kept.iter().map(|x| x.2 as f64).sum::<f64>();
     Ok(kept
         .into_iter()
         .map(|(state, actions, count, success_rate)| MacroAction {
@@ -126,4 +126,40 @@ pub fn macro_action_candidates(macros: &[MacroAction], state: &str) -> Vec<Prior
             confidence: 0.0,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn observation(step: u32, action: &str) -> Observation {
+        Observation {
+            sequence_id: "sequence".into(),
+            step,
+            state: format!("state-{step}"),
+            action: action.into(),
+            outcome: Outcome::Success,
+            score: None,
+            weight: 1.0,
+            tags: Vec::new(),
+            observed_at_unix_seconds: None,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn extreme_window_length_does_not_overflow() {
+        let observations = [observation(0, "a"), observation(1, "b")];
+        let macros = build_macro_actions(
+            &observations,
+            MacroActionConfig {
+                min_length: usize::MAX,
+                max_length: usize::MAX,
+                min_count: 1,
+            },
+        )
+        .unwrap();
+
+        assert!(macros.is_empty());
+    }
 }

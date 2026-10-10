@@ -44,14 +44,14 @@ An unseen state prints no candidates and exits successfully. The caller owns fal
 
 ## Data contract
 
-Every observation requires `sequence_id`, a non-negative `step`, and non-empty `state` and
-`action` strings. Optional fields are:
+Every observation requires non-empty `sequence_id`, `state`, and `action` strings plus a
+non-negative `step`. Optional fields are:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `outcome` | `"unknown"` | `success`, `failure`, `draw`, or `unknown` |
 | `score` | `null` | Finite caller-defined score |
-| `weight` | `1.0` | Non-negative observation weight |
+| `weight` | `1.0` | Finite, non-negative observation weight |
 | `tags` | `[]` | Caller-defined filters |
 | `observed_at_unix_seconds` | `null` | Used only with time decay |
 | `source` | `null` | Used by source reliability weights |
@@ -62,7 +62,7 @@ and reports warnings.
 `build` writes a schema-v1 metadata header followed by deterministically ordered state entries:
 
 ```text
-{"prior_book_schema_version":1,"producer_version":"0.12.2","build_config":{...},"build_config_fingerprint":7308171529403319118}
+{"prior_book_schema_version":1,"producer_version":"0.12.3","build_config":{...},"build_config_fingerprint":7308171529403319118}
 {"state":"state_a","actions":[{"action":"action_x","count":3,"weighted_count":3.0,"success_rate":0.667,"mean_score":0.633,"prior":0.557,"confidence":0.130}]}
 ```
 

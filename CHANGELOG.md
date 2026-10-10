@@ -9,14 +9,61 @@ release may include Rust source-breaking changes; such changes are called out ex
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-10-10
+
+### Added
+
+- Added a pinned Sekirei v0.3.68 `GateObservation` fixture regression that checks both JSON Schema
+  and collection-time semantics without treating the fixture as real gate-history evidence.
+
 ### Changed
 
 - Condensed `AGENTS.md` to repository-changing rules and moved usage, measurement, and release
   details back to their canonical documents.
 - Clarified that the Rust `lineprior-wasm` crate is published on crates.io while the generated web
   package is not published to the npm registry.
-- Updated Sekirei integration notes for the v0.3.67 manifest, decision-log, and gate-export
-  boundaries without rewriting the existing historical evidence.
+- Updated Sekirei integration notes for the v0.3.68 release, including its archived v0.3.67
+  paired book diagnostic and zero-row gate-readiness result, without rewriting older evidence.
+
+### Fixed
+
+- Prevented time-decay arithmetic from overflowing when valid input timestamps span the full
+  `i64` range.
+- Reject LPB v1 inputs with unknown header flags or duplicate state/context entries instead of
+  silently interpreting or overwriting them.
+- Avoid large up-front allocations when a truncated LPB input declares an extreme context or
+  action count.
+- Bound bootstrap resampling before allocation and reuse validated observation references instead
+  of cloning complete rows for every resample.
+- Make seeded bootstrap index generation consistent between wasm32 and 64-bit targets by reducing
+  the full `u64` generator state before conversion to an index.
+- Surface final buffered-write failures from `offpolicy` and `gate` report files instead of
+  silently losing them during writer destruction.
+- Reject prior-book and artifact-manifest path aliases, including hard links and aliases whose
+  output files do not exist yet, and surface final buffered-write failures from the prior-book
+  output.
+- Apply the same input/output collision protection to `pack` and `unpack`, and classify truncated
+  LPB data as invalid input instead of an internal I/O failure.
+- Reject duplicate state/context entries in JSONL prior books instead of silently making the last
+  duplicate replace earlier evidence.
+- Avoid integer overflow when a macro-action window limit is larger than the remaining sequence.
+- Return an error when multi-source action counts exceed `u64`, and saturate diagnostic context
+  totals instead of panicking on extreme caller-constructed books.
+- Validate state, context, action uniqueness, finite evidence, priors, and confidence at both JSONL
+  and LPB read/write boundaries so malformed books cannot propagate invalid rankings.
+- Apply prior-entry validation to caller-constructed merge sources and reject weighted merge
+  arithmetic that would produce non-finite evidence.
+- Reject empty typed observation identifiers, non-finite observation values, invalid numeric build
+  controls, and effective-weight products that cannot be represented safely.
+- Keep normalized priors finite and within `[0, 1]` for negative or extreme utilities, and avoid a
+  zero-strength Bayesian `0 / 0` when no outcome evidence exists.
+- Include terminal-outcome credit in Kish squared-weight totals and avoid intermediate overflow in
+  effective-sample-size calculations.
+
+### Compatibility
+
+- Prior-book schema v1, compact LPB v1, and existing readers remain compatible.
+- All five workspace crates and internal dependency requirements are version-locked at `0.12.3`.
 
 ## [0.12.2] - 2026-10-10
 

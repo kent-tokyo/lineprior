@@ -37,11 +37,18 @@ experimental, avoid splitting `lineprior-gate`, and make no acquisition-efficien
 
 ## Next validation
 
-[Sekirei v0.3.67](https://github.com/kent-tokyo/sekirei/releases/tag/v0.3.67) added a fail-closed
-exporter for independent gate observations. Exported rows still need a candidate ID, a predeclared
-group ID, one versioned numeric feature map captured before the outcome, Elo and uncertainty,
-terminal verdict, expected cost, and complete lineage. No v0.3.67 history artifact has been checked
-into this repository yet, so the 2026-10-03 result remains `not_computable`.
+[Sekirei v0.3.68](https://github.com/kent-tokyo/sekirei/releases/tag/v0.3.68) retains the
+fail-closed exporter and archives a
+[v0.3.67 readiness bundle](https://github.com/kent-tokyo/sekirei/blob/v0.3.68/docs/experiments/gate_model_readiness_v0.3.67.json).
+Its only terminal strength-gate manifest lacked the required pre-gate declaration, so the exporter
+admitted zero rows and quarantined one. The zero-row artifact preserves the source hash and blocker
+instead of presenting the old result as model-ready. GateModel fitting, verdict calibration, and
+acquisition therefore remain `not_computable`.
+
+The repository pins Sekirei's v0.3.68 `gate_observation_v1.jsonl` fixture as a schema and semantic
+regression. The upstream tag resolves to `6b00f0eaea9b3bc1153c25f4b6ddcd33a0cfdbc7`; the source fixture
+SHA-256 is `64cbdd9f9c7d1ba76e7aab8a1155756c6030d5d232cd8e931e42f1d5f606075c`. This proves format
+compatibility only, not that real history is model-ready.
 
 The next step is to export several independent groups, validate the JSONL with `lineprior validate
 --kind gate`, and archive the admitted/rejected counts and hashes before fitting. Do not reconstruct

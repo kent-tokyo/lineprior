@@ -1,5 +1,5 @@
 use crate::error::{Error, Result};
-use crate::model::{BuildConfig, PriorAction, PriorBook, PriorEntry};
+use crate::model::{BuildConfig, PriorAction, PriorBook, PriorEntry, validate_prior_entry};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -11,10 +11,15 @@ type ContextEntries = HashMap<(Vec<String>, String), Vec<PriorAction>>;
 
 /// Deserializes one line of a saved prior book.
 fn parse_entry_line(line: &str, line_no: usize) -> Result<PriorEntry> {
-    serde_json::from_str(line).map_err(|source| Error::Json {
+    let entry = serde_json::from_str(line).map_err(|source| Error::Json {
         line: line_no,
         source,
-    })
+    })?;
+    validate_prior_entry(&entry).map_err(|message| Error::InvalidPriorBookEntry {
+        line: line_no,
+        message,
+    })?;
+    Ok(entry)
 }
 
 /// Current schema version for the self-describing JSONL prior-book header.
@@ -70,12 +75,23 @@ struct BookHeaderSchemaProbe {
 /// Routes one parsed [`PriorEntry`] into `entries` (order-0, `context`
 /// empty) or `context_entries` (order `1..=k`, `context` non-empty) --
 /// shared by both branches of [`load_entries`]'s line loop.
-fn insert_entry(entries: &mut Entries, context_entries: &mut ContextEntries, entry: PriorEntry) {
-    if entry.context.is_empty() {
-        entries.insert(entry.state, entry.actions);
+fn insert_entry(
+    entries: &mut Entries,
+    context_entries: &mut ContextEntries,
+    entry: PriorEntry,
+    line: usize,
+) -> Result<()> {
+    let replaced = if entry.context.is_empty() {
+        entries.insert(entry.state, entry.actions).is_some()
     } else {
-        context_entries.insert((entry.context, entry.state), entry.actions);
+        context_entries
+            .insert((entry.context, entry.state), entry.actions)
+            .is_some()
+    };
+    if replaced {
+        return Err(Error::DuplicatePriorBookEntry { line });
     }
+    Ok(())
 }
 
 /// Shared by all JSONL loaders: reads every line, transparently skipping a
@@ -118,7 +134,7 @@ fn load_entries(reader: impl Read) -> Result<(Entries, ContextEntries, Option<Pr
                         });
                     } else {
                         let entry = parse_entry_line(&line, index + 1)?;
-                        insert_entry(&mut entries, &mut context_entries, entry);
+                        insert_entry(&mut entries, &mut context_entries, entry, index + 1)?;
                     }
                 }
             }
@@ -131,7 +147,7 @@ fn load_entries(reader: impl Read) -> Result<(Entries, ContextEntries, Option<Pr
             continue;
         }
         let entry = parse_entry_line(&line, index + 1)?;
-        insert_entry(&mut entries, &mut context_entries, entry);
+        insert_entry(&mut entries, &mut context_entries, entry, index + 1)?;
     }
 
     Ok((entries, context_entries, metadata))
@@ -171,18 +187,33 @@ pub fn load_prior_book_with_metadata(reader: impl Read) -> Result<LoadedPriorBoo
 ///
 /// Flushes before returning -- a buffered writer's `Drop` swallows flush
 /// errors, so a late write failure (e.g. a full disk) must surface here.
-pub fn save_prior_book(book: &PriorBook, mut writer: impl Write) -> Result<()> {
-    for entry in book
+fn validated_entries(book: &PriorBook) -> Result<Vec<PriorEntry>> {
+    let entries: Vec<PriorEntry> = book
         .entries_sorted()
         .into_iter()
         .chain(book.context_entries_sorted())
-    {
+        .collect();
+    for (index, entry) in entries.iter().enumerate() {
+        validate_prior_entry(entry).map_err(|message| Error::InvalidPriorBookEntry {
+            line: index + 1,
+            message,
+        })?;
+    }
+    Ok(entries)
+}
+
+fn write_entries(entries: Vec<PriorEntry>, mut writer: impl Write) -> Result<()> {
+    for entry in entries {
         serde_json::to_writer(&mut writer, &entry)
             .map_err(|e| Error::Io(std::io::Error::other(e)))?;
         writer.write_all(b"\n")?;
     }
     writer.flush()?;
     Ok(())
+}
+
+pub fn save_prior_book(book: &PriorBook, writer: impl Write) -> Result<()> {
+    write_entries(validated_entries(book)?, writer)
 }
 
 /// Deterministic fingerprint of a [`BuildConfig`], stable *within a given
@@ -206,6 +237,7 @@ pub fn save_prior_book_with_config(
     config: &BuildConfig,
     mut writer: impl Write,
 ) -> Result<()> {
+    let entries = validated_entries(book)?;
     let header = PriorBookMetadataV1 {
         schema_version: PRIOR_BOOK_SCHEMA_VERSION,
         producer_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -215,7 +247,7 @@ pub fn save_prior_book_with_config(
     };
     serde_json::to_writer(&mut writer, &header).map_err(|e| Error::Io(std::io::Error::other(e)))?;
     writer.write_all(b"\n")?;
-    save_prior_book(book, writer)
+    write_entries(entries, writer)
 }
 
 /// Like [`load_prior_book`], but also checks the file's embedded
@@ -337,6 +369,24 @@ mod tests {
     }
 
     #[test]
+    fn loader_rejects_duplicate_order_zero_entries() {
+        let entry = r#"{"state":"s","actions":[]}"#;
+        let jsonl = format!("{entry}\n{entry}\n");
+
+        let error = load_prior_book(jsonl.as_bytes()).unwrap_err();
+        assert!(matches!(error, Error::DuplicatePriorBookEntry { line: 2 }));
+    }
+
+    #[test]
+    fn loader_rejects_duplicate_context_entries() {
+        let entry = r#"{"state":"s","context":["a"],"actions":[]}"#;
+        let jsonl = format!("{entry}\n{entry}\n");
+
+        let error = load_prior_book(jsonl.as_bytes()).unwrap_err();
+        assert!(matches!(error, Error::DuplicatePriorBookEntry { line: 2 }));
+    }
+
+    #[test]
     fn build_config_fingerprint_is_deterministic() {
         let config = BuildConfig::default();
         assert_eq!(
@@ -448,6 +498,47 @@ mod tests {
                 supported
             } if found == PRIOR_BOOK_SCHEMA_VERSION + 1 && supported == PRIOR_BOOK_SCHEMA_VERSION
         ));
+    }
+
+    #[test]
+    fn loader_rejects_invalid_action_values_and_duplicate_actions() {
+        let invalid_confidence = concat!(
+            r#"{"state":"s","actions":[{"action":"a","count":1,"weighted_count":1.0,"success_rate":null,"mean_score":null,"prior":1.0,"confidence":1.1}]}"#,
+            "\n"
+        );
+        let error = load_prior_book(invalid_confidence.as_bytes()).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::InvalidPriorBookEntry { line: 1, .. }
+        ));
+        assert!(error.to_string().contains("confidence"));
+
+        let duplicate_actions = concat!(
+            r#"{"state":"s","actions":[{"action":"a","count":1,"weighted_count":1.0,"success_rate":null,"mean_score":null,"prior":0.5,"confidence":0.1},{"action":"a","count":1,"weighted_count":1.0,"success_rate":null,"mean_score":null,"prior":0.5,"confidence":0.1}]}"#,
+            "\n"
+        );
+        let error = load_prior_book(duplicate_actions.as_bytes()).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::InvalidPriorBookEntry { line: 1, .. }
+        ));
+        assert!(error.to_string().contains("unique"));
+    }
+
+    #[test]
+    fn saver_validates_all_entries_before_writing() {
+        let mut book = sample_book();
+        book.entries.get_mut("s").unwrap()[0].prior = f64::NAN;
+        let mut output = Vec::new();
+
+        let error =
+            save_prior_book_with_config(&book, &BuildConfig::default(), &mut output).unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::InvalidPriorBookEntry { line: 1, .. }
+        ));
+        assert!(output.is_empty());
     }
 
     #[test]

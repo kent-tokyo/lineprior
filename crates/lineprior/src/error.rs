@@ -19,17 +19,26 @@ pub enum Error {
     #[error("line {line}: missing required field `{field}`")]
     MissingField { line: usize, field: &'static str },
 
+    #[error("line {line}: sequence_id must not be empty")]
+    EmptySequenceId { line: usize },
+
     #[error("line {line}: state must not be empty")]
     EmptyState { line: usize },
 
     #[error("line {line}: action must not be empty")]
     EmptyAction { line: usize },
 
-    #[error("line {line}: weight must not be negative, got {value}")]
+    #[error("line {line}: weight must be finite and non-negative, got {value}")]
     NegativeWeight { line: usize, value: f64 },
 
-    #[error("line {line}: score must not be NaN")]
+    #[error("line {line}: score must be finite")]
     NanScore { line: usize },
+
+    #[error("invalid observation `{sequence_id}`: {message}")]
+    InvalidObservation {
+        sequence_id: String,
+        message: String,
+    },
 
     #[error("line {line}: unsupported outcome value `{value}`")]
     UnsupportedOutcome { line: usize, value: String },
@@ -51,6 +60,12 @@ pub enum Error {
 
     #[error("invalid compact prior book: {message}")]
     InvalidBinary { message: String },
+
+    #[error("line {line}: duplicate prior-book state/context entry")]
+    DuplicatePriorBookEntry { line: usize },
+
+    #[error("line {line}: invalid prior-book entry: {message}")]
+    InvalidPriorBookEntry { line: usize, message: String },
 
     #[error("{field} must be a lowercase SHA-256 digest, got `{value}`")]
     InvalidArtifactDigest { field: &'static str, value: String },

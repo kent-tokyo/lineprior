@@ -47,11 +47,15 @@ pub struct OffPolicyConfig {
 /// Reproducible percentile-bootstrap controls for IPS estimates.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BootstrapConfig {
+    /// Must be in `1..=MAX_BOOTSTRAP_RESAMPLES`.
     pub resamples: usize,
     pub seed: u64,
     /// Must be strictly between 0 and 1, e.g. `0.95`.
     pub confidence_level: f64,
 }
+
+/// Resource-safety limit for [`BootstrapConfig::resamples`].
+pub const MAX_BOOTSTRAP_RESAMPLES: usize = 1_000_000;
 
 impl Default for BootstrapConfig {
     fn default() -> Self {
@@ -92,7 +96,7 @@ pub enum OffPolicyError {
     EmptyAction { index: usize },
     #[error("observation {index} is missing {field} required for doubly robust evaluation")]
     MissingRewardModelValue { index: usize, field: &'static str },
-    #[error("bootstrap resamples must be > 0 and confidence_level must be in (0, 1)")]
+    #[error("bootstrap resamples must be in 1..=1000000 and confidence_level must be in (0, 1)")]
     InvalidBootstrapConfig,
 }
 
@@ -228,6 +232,21 @@ pub fn evaluate_self_normalized_ips(
     }
     validate_offpolicy_observations(observations)?;
 
+    Ok(evaluate_validated_ips(
+        observations.iter(),
+        observations.len(),
+        config,
+    ))
+}
+
+/// Shared arithmetic for validated original rows and bootstrap references.
+/// Keeping resamples as references avoids cloning caller-owned strings and
+/// metadata while preserving the exact sampling order and formulas.
+fn evaluate_validated_ips<'a>(
+    observations: impl IntoIterator<Item = &'a OffPolicyObservation>,
+    num_observations: usize,
+    config: &OffPolicyConfig,
+) -> OffPolicyReport {
     let mut weighted_reward_sum = 0.0;
     let mut importance_sum = 0.0;
     let mut importance_squared_sum = 0.0;
@@ -259,10 +278,10 @@ pub fn evaluate_self_normalized_ips(
         weighted_reward_sum += importance_weight * observation.reward;
     }
 
-    let ips = if observations.is_empty() {
+    let ips = if num_observations == 0 {
         None
     } else if supported_observations > 0 {
-        Some(weighted_reward_sum / observations.len() as f64)
+        Some(weighted_reward_sum / num_observations as f64)
     } else {
         None
     };
@@ -271,22 +290,22 @@ pub fn evaluate_self_normalized_ips(
     let effective_sample_size = (importance_squared_sum > 0.0)
         .then_some(importance_sum * importance_sum / importance_squared_sum);
 
-    Ok(OffPolicyReport {
+    OffPolicyReport {
         policy_name: config.policy_name.clone(),
         policy_version: config.policy_version.clone(),
-        num_observations: observations.len(),
+        num_observations,
         supported_observations,
         overlap_failure_count,
-        support_fraction: if observations.is_empty() {
+        support_fraction: if num_observations == 0 {
             0.0
         } else {
-            supported_observations as f64 / observations.len() as f64
+            supported_observations as f64 / num_observations as f64
         },
         ips,
         self_normalized_ips,
         effective_sample_size,
         max_observed_importance_weight,
-    })
+    }
 }
 
 /// Estimate percentile-bootstrap intervals for the two IPS statistics.
@@ -302,6 +321,7 @@ pub fn bootstrap_self_normalized_ips(
     bootstrap_config: BootstrapConfig,
 ) -> Result<OffPolicyBootstrapReport, OffPolicyError> {
     if bootstrap_config.resamples == 0
+        || bootstrap_config.resamples > MAX_BOOTSTRAP_RESAMPLES
         || !bootstrap_config.confidence_level.is_finite()
         || !(0.0..1.0).contains(&bootstrap_config.confidence_level)
     {
@@ -324,11 +344,9 @@ pub fn bootstrap_self_normalized_ips(
     let mut ips_values = Vec::with_capacity(bootstrap_config.resamples);
     let mut self_normalized_values = Vec::with_capacity(bootstrap_config.resamples);
     for _ in 0..bootstrap_config.resamples {
-        let mut sample = Vec::with_capacity(observations.len());
-        for _ in observations {
-            sample.push(observations[next_index(&mut rng, observations.len())].clone());
-        }
-        let report = evaluate_self_normalized_ips(&sample, policy_config)?;
+        let sample = (0..observations.len())
+            .map(|_| &observations[next_index(&mut rng, observations.len())]);
+        let report = evaluate_validated_ips(sample, observations.len(), policy_config);
         if let Some(value) = report.ips {
             ips_values.push(value);
         }
@@ -361,7 +379,9 @@ fn next_index(state: &mut u64, length: usize) -> usize {
     *state = state
         .wrapping_mul(6_364_136_223_846_793_005)
         .wrapping_add(1);
-    (*state as usize) % length
+    // Reduce the full 64-bit state before narrowing so a fixed seed produces
+    // the same index stream on wasm32 and 64-bit native targets.
+    (*state % length as u64) as usize
 }
 
 fn percentile_interval(
@@ -645,6 +665,18 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_index_uses_the_full_u64_state_before_narrowing() {
+        let mut state = u64::from(u32::MAX);
+        let expected_state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1);
+        let expected_index = (expected_state % 7) as usize;
+
+        assert_eq!(next_index(&mut state, 7), expected_index);
+        assert_eq!(state, expected_state);
+    }
+
+    #[test]
     fn bootstrap_rejects_invalid_controls_and_counts_no_support() {
         assert!(matches!(
             bootstrap_self_normalized_ips(
@@ -652,6 +684,17 @@ mod tests {
                 &Default::default(),
                 BootstrapConfig {
                     resamples: 0,
+                    ..Default::default()
+                }
+            ),
+            Err(OffPolicyError::InvalidBootstrapConfig)
+        ));
+        assert!(matches!(
+            bootstrap_self_normalized_ips(
+                &[],
+                &Default::default(),
+                BootstrapConfig {
+                    resamples: MAX_BOOTSTRAP_RESAMPLES + 1,
                     ..Default::default()
                 }
             ),

@@ -1,4 +1,4 @@
-use super::BuildConfigArgs;
+use super::{BuildConfigArgs, same_path};
 use anyhow::{Context, Result};
 use clap::Args;
 use lineprior::{
@@ -209,6 +209,7 @@ pub fn run(args: BuildArgs) -> Result<ExitCode> {
     };
     save_prior_book_with_config(&output.book, &config, &mut book_writer)
         .context("writing prior book")?;
+    book_writer.flush().context("flushing prior book")?;
 
     if let Some(manifest_path) = args.artifact_manifest {
         let manifest = PriorArtifactManifestV1::new(
@@ -241,12 +242,4 @@ pub fn run(args: BuildArgs) -> Result<ExitCode> {
         return Ok(ExitCode::from(1));
     }
     Ok(ExitCode::from(0))
-}
-
-fn same_path(left: &std::path::Path, right: &std::path::Path) -> bool {
-    left == right
-        || match (left.canonicalize(), right.canonicalize()) {
-            (Ok(left), Ok(right)) => left == right,
-            _ => false,
-        }
 }

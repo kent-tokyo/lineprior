@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Git tag to publish from (e.g. v0.12.2)"
+        description: "Git tag to publish from (e.g. v0.12.3)"
         required: true
-        default: "v0.12.2"
+        default: "v0.12.3"
       crate:
         description: "Crate to publish"
         required: true

@@ -11,8 +11,80 @@ pub mod validate;
 use anyhow::Context;
 use clap::{Args, ValueEnum};
 use lineprior::BuildConfig;
-use std::path::Path;
+use serde::Serialize;
+use std::io::{BufWriter, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+
+/// Writes one pretty JSON document and surfaces a buffered writer's final
+/// flush error instead of leaving it to `Drop`, which cannot report failure.
+pub(crate) fn write_pretty_json(
+    writer: impl Write,
+    value: &impl Serialize,
+    trailing_newline: bool,
+) -> anyhow::Result<()> {
+    let mut writer = BufWriter::new(writer);
+    serde_json::to_writer_pretty(&mut writer, value).context("serializing JSON output")?;
+    if trailing_newline {
+        writer.write_all(b"\n").context("finishing JSON output")?;
+    }
+    writer.flush().context("flushing JSON output")
+}
+
+fn comparable_path(path: &Path) -> Option<PathBuf> {
+    path.canonicalize().ok().or_else(|| {
+        let file_name = path.file_name()?;
+        let parent = match path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent,
+            _ => Path::new("."),
+        };
+        parent
+            .canonicalize()
+            .ok()
+            .map(|parent| parent.join(file_name))
+    })
+}
+
+fn same_existing_file(left: &Path, right: &Path) -> bool {
+    let (Ok(left), Ok(right)) = (left.metadata(), right.metadata()) else {
+        return false;
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        left.dev() == right.dev() && left.ino() == right.ino()
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        matches!(
+            (
+                left.volume_serial_number(),
+                left.file_index(),
+                right.volume_serial_number(),
+                right.file_index(),
+            ),
+            (Some(left_volume), Some(left_index), Some(right_volume), Some(right_index))
+                if left_volume == right_volume && left_index == right_index
+        )
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        false
+    }
+}
+
+/// Returns true when two paths already name the same file or, for an
+/// uncreated leaf, resolve to the same existing parent plus file name.
+pub(crate) fn same_path(left: &Path, right: &Path) -> bool {
+    left == right
+        || same_existing_file(left, right)
+        || matches!(
+            (comparable_path(left), comparable_path(right)),
+            (Some(left), Some(right)) if left == right
+        )
+}
 
 /// Maps a lineprior parse/build error to its documented exit code:
 /// `NoObservations` is "no usable data" (2); a bare I/O fault reading an
@@ -133,11 +205,11 @@ pub struct BuildConfigArgs {
     #[arg(long, default_value_t = 1)]
     pub min_count: u64,
 
-    /// Minimum weighted count for an action to appear in the output.
+    /// Finite, non-negative weighted count for an action to appear in the output.
     #[arg(long, default_value_t = 0.0)]
     pub min_weighted_count: f64,
 
-    /// Minimum confidence (see --confidence-k) for an action to appear in the output.
+    /// Minimum confidence in 0..=1 (see --confidence-k).
     #[arg(long, default_value_t = 0.0)]
     pub min_confidence: f64,
 
@@ -145,8 +217,8 @@ pub struct BuildConfigArgs {
     #[arg(long)]
     pub max_step: Option<u32>,
 
-    /// Smoothing strength: higher values pull low-sample rates further
-    /// toward the dataset-wide rate.
+    /// Finite, non-negative smoothing strength: higher values pull low-sample
+    /// rates further toward the dataset-wide rate.
     #[arg(long, default_value_t = 5.0)]
     pub smoothing_alpha: f64,
 
@@ -154,7 +226,7 @@ pub struct BuildConfigArgs {
     #[arg(long)]
     pub max_actions_per_state: Option<usize>,
 
-    /// Confidence half-life `k` in `confidence = weighted_count / (weighted_count + k)`.
+    /// Positive confidence half-life `k` in `confidence = weighted_count / (weighted_count + k)`.
     #[arg(long, default_value_t = lineprior::DEFAULT_CONFIDENCE_K)]
     pub confidence_k: f64,
 
@@ -164,7 +236,7 @@ pub struct BuildConfigArgs {
     #[arg(long, value_enum, default_value_t = ConfidenceModeArg::Heuristic)]
     pub confidence_mode: ConfidenceModeArg,
 
-    /// z-score for the Wilson lower bound used by `--confidence-mode
+    /// Non-negative z-score for the Wilson lower bound used by `--confidence-mode
     /// wilson-lower-bound`/`hybrid`. Ignored under `heuristic`.
     #[arg(long, default_value_t = lineprior::DEFAULT_CONFIDENCE_Z)]
     pub confidence_z: f64,
@@ -342,5 +414,29 @@ impl BuildConfigArgs {
             success_weight: self.success_weight,
             score_weight: self.score_weight,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FlushFails;
+
+    impl Write for FlushFails {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("simulated flush failure"))
+        }
+    }
+
+    #[test]
+    fn pretty_json_writer_surfaces_final_flush_failure() {
+        let error = write_pretty_json(FlushFails, &serde_json::json!({"ok": true}), true)
+            .expect_err("flush failure must be reported");
+        assert!(error.to_string().contains("flushing JSON output"));
     }
 }

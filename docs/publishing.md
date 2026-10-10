@@ -3,7 +3,7 @@
 The workspace publishes five version-locked crates through
 [`publish.yml`](../.github/workflows/publish.yml). GitHub Actions OIDC is the normal crates.io
 authentication path. Version `0.12.0` completed the one-time bootstrap for every current crate.
-Version `0.12.2` is the current workspace release.
+Version `0.12.3` is the current workspace release.
 
 ## Release checklist
 

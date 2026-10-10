@@ -6,8 +6,8 @@
 //! doesn't promise to keep stable isn't safe to build on.
 
 pub(crate) fn fnv1a(bytes: &[u8]) -> u64 {
-    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-    const PRIME: u64 = 0x100000001b3;
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0100_0000_01b3;
     bytes.iter().fold(OFFSET_BASIS, |hash, &byte| {
         (hash ^ byte as u64).wrapping_mul(PRIME)
     })

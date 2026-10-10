@@ -43,14 +43,14 @@ lineprior query prior.jsonl --state state_a --top-k 5
 
 ## データ契約
 
-各観測には`sequence_id`、0以上の`step`、空でない`state`と`action`が必要です。次の
+各観測には空でない`sequence_id`、`state`、`action`と、0以上の`step`が必要です。次の
 フィールドは省略できます。
 
 | フィールド | 既定値 | 意味 |
 | --- | --- | --- |
 | `outcome` | `"unknown"` | `success`、`failure`、`draw`、`unknown` |
 | `score` | `null` | 利用側が定義する有限値 |
-| `weight` | `1.0` | 0以上の観測weight |
+| `weight` | `1.0` | 有限かつ0以上の観測weight |
 | `tags` | `[]` | 利用側が定義するfilter |
 | `observed_at_unix_seconds` | `null` | time decayを有効にした場合だけ使用 |
 | `source` | `null` | source reliability weightに使用 |
@@ -61,7 +61,7 @@ warningを返します。
 `build`はschema-v1 metadata headerの後に、決定的に並べたstate entryを書きます。
 
 ```text
-{"prior_book_schema_version":1,"producer_version":"0.12.2","build_config":{...},"build_config_fingerprint":7308171529403319118}
+{"prior_book_schema_version":1,"producer_version":"0.12.3","build_config":{...},"build_config_fingerprint":7308171529403319118}
 {"state":"state_a","actions":[{"action":"action_x","count":3,"weighted_count":3.0,"success_rate":0.667,"mean_score":0.633,"prior":0.557,"confidence":0.130}]}
 ```
 

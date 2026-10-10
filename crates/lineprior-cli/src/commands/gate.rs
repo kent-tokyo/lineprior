@@ -7,7 +7,7 @@ use lineprior::{
 };
 use serde::Serialize;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter};
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -140,17 +140,16 @@ pub fn run(args: GateArgs) -> Result<ExitCode> {
         verdict,
         acquisition,
     };
-    let json = serde_json::to_string_pretty(&output).context("serializing gate report")?;
     match args.out {
         Some(path) => {
             let file =
                 File::create(&path).with_context(|| format!("creating {}", path.display()))?;
-            use std::io::Write;
-            let mut writer = BufWriter::new(file);
-            writer.write_all(json.as_bytes())?;
-            writer.write_all(b"\n")?;
+            super::write_pretty_json(file, &output, true).context("writing gate report")?;
         }
-        None => println!("{json}"),
+        None => {
+            let json = serde_json::to_string_pretty(&output).context("serializing gate report")?;
+            println!("{json}");
+        }
     }
     Ok(ExitCode::from(0))
 }

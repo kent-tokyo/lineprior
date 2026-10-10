@@ -54,10 +54,10 @@ pub use model::{
     PriorAction, PriorBook, PriorEntry, ScoringStrategy, SequencePriorScore, StepScore,
 };
 pub use offpolicy::{
-    BootstrapConfig, BootstrapInterval, DoublyRobustReport, OffPolicyBootstrapReport,
-    OffPolicyConfig, OffPolicyError, OffPolicyObservation, OffPolicyReport,
-    bootstrap_self_normalized_ips, evaluate_doubly_robust, evaluate_self_normalized_ips,
-    validate_offpolicy_observations,
+    BootstrapConfig, BootstrapInterval, DoublyRobustReport, MAX_BOOTSTRAP_RESAMPLES,
+    OffPolicyBootstrapReport, OffPolicyConfig, OffPolicyError, OffPolicyObservation,
+    OffPolicyReport, bootstrap_self_normalized_ips, evaluate_doubly_robust,
+    evaluate_self_normalized_ips, validate_offpolicy_observations,
 };
 pub use query::{
     LoadedPriorBook, PRIOR_BOOK_SCHEMA_VERSION, PriorBookMetadata, PriorBookMetadataV1,

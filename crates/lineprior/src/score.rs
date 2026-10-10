@@ -44,17 +44,68 @@ pub fn raw_score(
 
 /// Normalizes raw scores into a probability-like prior distribution.
 ///
-/// Falls back to a uniform distribution when every raw score is zero
-/// (e.g. all weights configured to zero) so callers never divide by zero.
+/// Negative utilities are shifted by the smallest finite value before
+/// normalization, preserving their order without emitting negative priors.
+/// Scaling by the largest adjusted value keeps the sum finite even when
+/// callers use very large (but finite) utilities. Non-finite input falls
+/// back conservatively: positive infinities share all mass, while NaN or an
+/// all-negative-infinity vector becomes uniform.
 pub fn normalize(raw_scores: &[f64]) -> Vec<f64> {
-    let sum: f64 = raw_scores.iter().sum();
-    if sum > 0.0 {
-        raw_scores.iter().map(|s| s / sum).collect()
-    } else if raw_scores.is_empty() {
-        Vec::new()
-    } else {
-        vec![1.0 / raw_scores.len() as f64; raw_scores.len()]
+    if raw_scores.is_empty() {
+        return Vec::new();
     }
+    let uniform = || vec![1.0 / raw_scores.len() as f64; raw_scores.len()];
+    if raw_scores.iter().any(|score| score.is_nan()) {
+        return uniform();
+    }
+
+    let positive_infinities = raw_scores
+        .iter()
+        .filter(|score| **score == f64::INFINITY)
+        .count();
+    if positive_infinities > 0 {
+        let mass = 1.0 / positive_infinities as f64;
+        return raw_scores
+            .iter()
+            .map(|score| if *score == f64::INFINITY { mass } else { 0.0 })
+            .collect();
+    }
+
+    let finite_min = raw_scores
+        .iter()
+        .copied()
+        .filter(|score| score.is_finite())
+        .reduce(f64::min);
+    let Some(finite_min) = finite_min else {
+        return uniform();
+    };
+    let finite_max = raw_scores
+        .iter()
+        .copied()
+        .filter(|score| score.is_finite())
+        .fold(f64::NEG_INFINITY, f64::max);
+    let scale = finite_min.abs().max(finite_max.abs());
+    if scale == 0.0 {
+        return uniform();
+    }
+    let scaled_min = (finite_min / scale).min(0.0);
+    let adjusted: Vec<f64> = raw_scores
+        .iter()
+        .map(|score| {
+            if score.is_finite() {
+                score / scale - scaled_min
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    let max = adjusted.iter().copied().fold(0.0, f64::max);
+    if max == 0.0 || !max.is_finite() {
+        return uniform();
+    }
+    let scaled: Vec<f64> = adjusted.iter().map(|score| score / max).collect();
+    let sum: f64 = scaled.iter().sum();
+    scaled.into_iter().map(|score| score / sum).collect()
 }
 
 /// Stable softmax; subtracting the largest utility prevents overflow while
@@ -63,10 +114,26 @@ pub fn softmax(raw_scores: &[f64], temperature: f64) -> Vec<f64> {
     if raw_scores.is_empty() {
         return Vec::new();
     }
-    let max = raw_scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if raw_scores.iter().any(|score| score.is_nan()) || raw_scores.contains(&f64::INFINITY) {
+        return normalize(raw_scores);
+    }
+    let Some(max) = raw_scores
+        .iter()
+        .copied()
+        .filter(|score| score.is_finite())
+        .reduce(f64::max)
+    else {
+        return normalize(raw_scores);
+    };
     let values: Vec<f64> = raw_scores
         .iter()
-        .map(|s| ((s - max) / temperature).exp())
+        .map(|score| {
+            if score.is_finite() {
+                ((score - max) / temperature).exp()
+            } else {
+                0.0
+            }
+        })
         .collect();
     normalize(&values)
 }
@@ -98,7 +165,12 @@ pub fn confidence(weighted_count: f64, k: f64) -> f64 {
 /// spread evenly across many trials.
 pub fn effective_sample_size(sum_weights: f64, sum_weights_squared: f64) -> f64 {
     if sum_weights_squared > 0.0 {
-        sum_weights * sum_weights / sum_weights_squared
+        if sum_weights.abs() <= f64::MAX.sqrt() {
+            sum_weights * sum_weights / sum_weights_squared
+        } else {
+            let scaled = sum_weights / sum_weights_squared.sqrt();
+            scaled * scaled
+        }
     } else {
         0.0
     }
@@ -183,11 +255,38 @@ mod tests {
     }
 
     #[test]
+    fn normalize_shifts_negative_utilities_without_emitting_negative_priors() {
+        let priors = normalize(&[-1.0, 2.0]);
+        assert_eq!(priors, vec![0.0, 1.0]);
+    }
+
+    #[test]
+    fn normalize_handles_extreme_and_non_finite_utilities() {
+        let huge = normalize(&[f64::MAX, f64::MAX]);
+        assert_eq!(huge, vec![0.5, 0.5]);
+
+        let opposite_extremes = normalize(&[f64::MIN, f64::MAX]);
+        assert_eq!(opposite_extremes, vec![0.0, 1.0]);
+
+        let infinite = normalize(&[1.0, f64::INFINITY, f64::INFINITY]);
+        assert_eq!(infinite, vec![0.0, 0.5, 0.5]);
+
+        let nan = normalize(&[1.0, f64::NAN]);
+        assert_eq!(nan, vec![0.5, 0.5]);
+    }
+
+    #[test]
     fn softmax_is_normalized_and_temperature_sensitive() {
         let sharp = softmax(&[1.0, 2.0], 0.1);
         let flat = softmax(&[1.0, 2.0], 10.0);
         assert!((sharp.iter().sum::<f64>() - 1.0).abs() < 1e-9);
         assert!(sharp[1] > flat[1]);
+    }
+
+    #[test]
+    fn softmax_preserves_positive_infinity_as_dominant() {
+        assert_eq!(softmax(&[1.0, f64::INFINITY], 1.0), vec![0.0, 1.0]);
+        assert_eq!(softmax(&[f64::NEG_INFINITY; 2], 1.0), vec![0.5, 0.5]);
     }
 
     #[test]
@@ -241,6 +340,12 @@ mod tests {
     #[test]
     fn effective_sample_size_zero_weight_is_zero() {
         assert_eq!(effective_sample_size(0.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn effective_sample_size_avoids_intermediate_square_overflow() {
+        let got = effective_sample_size(1e200, 1e300);
+        assert!((got / 1e100 - 1.0).abs() < 1e-12);
     }
 
     #[test]

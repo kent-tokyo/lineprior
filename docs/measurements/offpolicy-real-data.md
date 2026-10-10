@@ -66,9 +66,13 @@ Do not reconstruct propensities from search scores, PV rank, or a post-hoc softm
 decision is `not_estimable`: no causal or downstream on/off claim is permitted until a randomized
 or otherwise known logging policy records its probability at decision time.
 
-[Sekirei v0.3.67](https://github.com/kent-tokyo/sekirei/releases/tag/v0.3.67) added optional
-structured opening-book decision logs and terminal-outcome linkage.
-Those logs can support paired on/off analysis, but they contain propensities only when Sekirei uses
-an explicitly randomized policy with a known decision-time distribution. No v0.3.67 real-log
-artifact has been checked into this repository yet, so the 2026-10-03 IPS/DR result remains
-`not_estimable`.
+[Sekirei v0.3.68](https://github.com/kent-tokyo/sekirei/releases/tag/v0.3.68) archives a
+[hash-verified v0.3.67 deterministic ON/OFF bundle](https://github.com/kent-tokyo/sekirei/blob/v0.3.68/docs/experiments/book_ab_v0.3.67/report.json).
+Each arm recorded 128 decisions over four games; the ON arm selected the book twice (1.5625%
+coverage), and all games were draws. The score delta was zero with an approximate 95% Elo interval
+of [-340.49, +340.49]. The bundle verifies decision-to-terminal joins and fallback accounting, but
+its policy recorded no propensities and its game budget is not a downstream-improvement gate. The
+2026-10-03 IPS/DR result remains `not_estimable`.
+
+Future logs support IPS/DR only when Sekirei uses an explicitly randomized policy with a known
+decision-time distribution. Deterministic paired runs remain useful non-causal diagnostics.

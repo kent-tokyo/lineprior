@@ -1,6 +1,15 @@
 use jsonschema::validator_for;
+use lineprior::{GateObservation, validate_gate_observations};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::fs;
+use std::path::{Path, PathBuf};
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures")
+        .join(name)
+}
 
 fn schema(name: &str) -> Value {
     let path = format!("../../docs/measurements/{name}");
@@ -100,7 +109,7 @@ fn gate_observation() -> Value {
 fn prior_artifact_manifest() -> Value {
     json!({
         "schema": "lineprior.prior-artifact-manifest.v1",
-        "producer_version": "0.12.2",
+        "producer_version": "0.12.3",
         "input_sha256": "0".repeat(64),
         "prior_book_sha256": "1".repeat(64),
         "build_config": {},
@@ -194,6 +203,36 @@ fn raw_observation_schemas_accept_representative_rows() {
 
     let gate = validator_for(&schema("gate-observation-v1.schema.json")).unwrap();
     assert!(gate.is_valid(&gate_observation()));
+}
+
+#[test]
+fn sekirei_v0_3_68_gate_fixture_matches_schema_and_semantics() {
+    // This mirrors the fixture shipped at Sekirei v0.3.68. Keeping the
+    // downstream shape here catches contract drift before real gate history
+    // reaches model fitting.
+    let bytes = fs::read(fixture("sekirei_v0_3_68_gate_observation.jsonl"))
+        .expect("Sekirei fixture should be readable");
+    assert_eq!(
+        format!("{:x}", Sha256::digest(&bytes)),
+        "64cbdd9f9c7d1ba76e7aab8a1155756c6030d5d232cd8e931e42f1d5f606075c"
+    );
+    let input = String::from_utf8(bytes).expect("Sekirei fixture should be UTF-8");
+    let validator = validator_for(&schema("gate-observation-v1.schema.json")).unwrap();
+    let observations = input
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let value: Value =
+                serde_json::from_str(line).expect("fixture row should be valid JSON");
+            assert!(validator.is_valid(&value));
+            serde_json::from_value::<GateObservation>(value)
+                .expect("fixture row should deserialize as GateObservation")
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(observations.len(), 1);
+    validate_gate_observations(&observations)
+        .expect("Sekirei fixture should pass collection-time semantics");
 }
 
 #[test]

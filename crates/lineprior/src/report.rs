@@ -102,7 +102,9 @@ fn context_order_summary(book: &PriorBook) -> Vec<ContextOrderSummary> {
             context,
             state,
             actions.len(),
-            actions.iter().map(|action| action.count).sum(),
+            actions
+                .iter()
+                .fold(0_u64, |total, action| total.saturating_add(action.count)),
         ));
     }
 
@@ -110,7 +112,9 @@ fn context_order_summary(book: &PriorBook) -> Vec<ContextOrderSummary> {
         .into_iter()
         .map(|(order, entries)| {
             let prefixes: HashSet<&Vec<String>> = entries.iter().map(|(c, _, _, _)| *c).collect();
-            let total_count = entries.iter().map(|(_, _, _, count)| count).sum();
+            let total_count = entries.iter().fold(0_u64, |total, (_, _, _, count)| {
+                total.saturating_add(*count)
+            });
             ContextOrderSummary {
                 order,
                 num_prefixes: prefixes.len(),
@@ -213,5 +217,23 @@ mod tests {
         assert_eq!(summary.context_orders[0].num_action_entries, 2);
         assert_eq!(summary.context_orders[0].total_count, 20);
         assert_eq!(summary.context_orders[1].num_prefixes, 1);
+    }
+
+    #[test]
+    fn context_summary_saturates_extreme_counts_instead_of_panicking() {
+        let mut book = PriorBook::default();
+        book.context_entries.insert(
+            (vec!["previous".into()], "s".into()),
+            vec![
+                action("a", 0.5, 0.1),
+                PriorAction {
+                    count: u64::MAX,
+                    ..action("b", 0.5, 0.1)
+                },
+            ],
+        );
+
+        let summary = summarize(&book);
+        assert_eq!(summary.context_orders[0].total_count, u64::MAX);
     }
 }

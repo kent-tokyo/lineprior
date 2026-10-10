@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// One recorded step: from `state`, `action` was taken, with `outcome`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -126,11 +126,11 @@ pub enum ScoringStrategy {
 #[serde(default)]
 pub struct BuildConfig {
     pub min_count: u64,
-    /// Minimum weighted count for an action to appear in the output.
+    /// Finite, non-negative weighted-count floor for an action to appear in the output.
     /// `0.0` means no filtering beyond `min_count`.
     pub min_weighted_count: f64,
-    /// Minimum confidence (see [`DEFAULT_CONFIDENCE_K`]) for an action to
-    /// appear in the output. `0.0` means no filtering.
+    /// Finite confidence floor in `[0, 1]` for an action to appear in the
+    /// output. `0.0` means no filtering.
     ///
     /// Which confidence this filters on depends on `confidence_mode`: under
     /// `Heuristic` it's a pure sample-size floor, blind to outcome. Under
@@ -141,11 +141,13 @@ pub struct BuildConfig {
     /// additive one.
     pub min_confidence: f64,
     pub max_step: Option<u32>,
+    /// Finite, non-negative smoothing strength.
     pub smoothing_alpha: f64,
     pub score_weight: f64,
     pub success_weight: f64,
     pub count_weight: f64,
     pub max_actions_per_state: Option<usize>,
+    /// Finite, positive half-life for heuristic confidence.
     pub confidence_k: f64,
     /// How `confidence` is computed. Defaults to [`ConfidenceMode::Heuristic`]
     /// for backward compatibility and for score-only datasets with no
@@ -156,6 +158,7 @@ pub struct BuildConfig {
     /// [`crate::build_config_fingerprint`] -- changing it (or upgrading to a
     /// lineprior version that adds it) changes the fingerprint even when the
     /// resulting `confidence` values don't, which is expected.
+    /// Finite, non-negative Wilson z-score.
     pub confidence_z: f64,
     /// Success credit given to a `Draw` outcome, between 0.0 (scores like
     /// a failure) and 1.0 (scores like a win).
@@ -281,6 +284,44 @@ pub struct PriorEntry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context: Vec<String>,
     pub actions: Vec<PriorAction>,
+}
+
+pub(crate) fn validate_prior_entry(entry: &PriorEntry) -> std::result::Result<(), String> {
+    if entry.state.is_empty() {
+        return Err("state must not be empty".into());
+    }
+    if entry.context.iter().any(String::is_empty) {
+        return Err("context actions must not be empty".into());
+    }
+
+    let mut action_names = HashSet::new();
+    for action in &entry.actions {
+        if action.action.is_empty() {
+            return Err("action must not be empty".into());
+        }
+        if !action_names.insert(action.action.as_str()) {
+            return Err("actions must be unique within an entry".into());
+        }
+        if !action.weighted_count.is_finite() || action.weighted_count < 0.0 {
+            return Err("weighted_count must be finite and non-negative".into());
+        }
+        if action
+            .success_rate
+            .is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value))
+        {
+            return Err("success_rate must be null or finite and between 0 and 1".into());
+        }
+        if action.mean_score.is_some_and(|value| !value.is_finite()) {
+            return Err("mean_score must be null or finite".into());
+        }
+        if !action.prior.is_finite() || !(0.0..=1.0).contains(&action.prior) {
+            return Err("prior must be finite and between 0 and 1".into());
+        }
+        if !action.confidence.is_finite() || !(0.0..=1.0).contains(&action.confidence) {
+            return Err("confidence must be finite and between 0 and 1".into());
+        }
+    }
+    Ok(())
 }
 
 /// In-memory prior book: state -> ranked candidate actions.

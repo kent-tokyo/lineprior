@@ -1,8 +1,10 @@
+use crate::model::validate_prior_entry;
 use crate::{Error, PriorAction, PriorBook, PriorEntry, Result};
 use std::io::{Read, Write};
 
 const MAGIC: &[u8; 4] = b"LPB\0";
 const FORMAT_VERSION: u16 = 1;
+const SUPPORTED_FLAGS: u16 = 0;
 const MAX_ITEMS: u32 = 10_000_000;
 const MAX_BYTES: u32 = 16 * 1024 * 1024;
 
@@ -47,7 +49,7 @@ fn put_action(mut w: impl Write, a: &PriorAction) -> Result<()> {
     w.write_all(&a.count.to_le_bytes())?;
     w.write_all(&a.weighted_count.to_le_bytes())?;
     for value in [a.success_rate, a.mean_score] {
-        w.write_all(&[value.is_some() as u8])?;
+        w.write_all(&[u8::from(value.is_some())])?;
         if let Some(v) = value {
             w.write_all(&v.to_le_bytes())?;
         }
@@ -82,15 +84,18 @@ fn get_action(mut r: impl Read) -> Result<PriorAction> {
 
 /// Writes deterministic compact binary format LPB v1, including context entries.
 pub fn save_prior_book_binary(book: &PriorBook, mut writer: impl Write) -> Result<()> {
-    writer.write_all(MAGIC)?;
-    writer.write_all(&FORMAT_VERSION.to_le_bytes())?;
-    writer.write_all(&0u16.to_le_bytes())?;
     let all: Vec<PriorEntry> = book
         .entries_sorted()
         .into_iter()
         .chain(book.context_entries_sorted())
         .collect();
+    for entry in &all {
+        validate_prior_entry(entry).map_err(invalid)?;
+    }
     let n = u32::try_from(all.len()).map_err(|_| invalid("too many entries"))?;
+    writer.write_all(MAGIC)?;
+    writer.write_all(&FORMAT_VERSION.to_le_bytes())?;
+    writer.write_all(&SUPPORTED_FLAGS.to_le_bytes())?;
     writer.write_all(&n.to_le_bytes())?;
     for entry in all {
         put_string(&mut writer, &entry.state)?;
@@ -110,8 +115,18 @@ pub fn save_prior_book_binary(book: &PriorBook, mut writer: impl Write) -> Resul
     Ok(())
 }
 
-/// Reads LPB v1 with allocation caps; trailing bytes are rejected for corruption detection.
-pub fn load_prior_book_binary(mut reader: impl Read) -> Result<PriorBook> {
+/// Reads LPB v1 with allocation caps; collections grow only as their elements
+/// are read, and trailing bytes are rejected for corruption detection.
+pub fn load_prior_book_binary(reader: impl Read) -> Result<PriorBook> {
+    match load_prior_book_binary_inner(reader) {
+        Err(Error::Io(source)) if source.kind() == std::io::ErrorKind::UnexpectedEof => {
+            Err(invalid("truncated input"))
+        }
+        result => result,
+    }
+}
+
+fn load_prior_book_binary_inner(mut reader: impl Read) -> Result<PriorBook> {
     let mut magic = [0; 4];
     reader.read_exact(&mut magic)?;
     if &magic != MAGIC {
@@ -123,6 +138,10 @@ pub fn load_prior_book_binary(mut reader: impl Read) -> Result<PriorBook> {
         return Err(invalid("unsupported format version"));
     }
     reader.read_exact(&mut b2)?;
+    let flags = u16::from_le_bytes(b2);
+    if flags != SUPPORTED_FLAGS {
+        return Err(invalid(format!("unsupported flags: 0x{flags:04x}")));
+    }
     let mut b4 = [0; 4];
     reader.read_exact(&mut b4)?;
     let n = u32::from_le_bytes(b4);
@@ -137,7 +156,9 @@ pub fn load_prior_book_binary(mut reader: impl Read) -> Result<PriorBook> {
         if c > MAX_ITEMS {
             return Err(invalid("too much context"));
         }
-        let mut context = Vec::with_capacity(c as usize);
+        // Do not reserve from an untrusted count before reading any elements:
+        // a tiny truncated input could otherwise force a very large allocation.
+        let mut context = Vec::new();
         for _ in 0..c {
             context.push(get_string(&mut reader)?);
         }
@@ -146,14 +167,25 @@ pub fn load_prior_book_binary(mut reader: impl Read) -> Result<PriorBook> {
         if a > MAX_ITEMS {
             return Err(invalid("too many actions"));
         }
-        let mut actions = Vec::with_capacity(a as usize);
+        let mut actions = Vec::new();
         for _ in 0..a {
             actions.push(get_action(&mut reader)?);
         }
-        if context.is_empty() {
-            book.entries.insert(state, actions);
+        let entry = PriorEntry {
+            state,
+            context,
+            actions,
+        };
+        validate_prior_entry(&entry).map_err(invalid)?;
+        let replaced = if entry.context.is_empty() {
+            book.entries.insert(entry.state, entry.actions).is_some()
         } else {
-            book.context_entries.insert((context, state), actions);
+            book.context_entries
+                .insert((entry.context, entry.state), entry.actions)
+                .is_some()
+        };
+        if replaced {
+            return Err(invalid("duplicate state/context entry"));
         }
     }
     let mut extra = [0; 1];
@@ -196,5 +228,129 @@ mod tests {
             load_prior_book_binary(bytes.as_slice()),
             Err(Error::InvalidBinary { .. })
         ));
+    }
+
+    #[test]
+    fn binary_rejects_unknown_header_flags() {
+        let mut bytes = Vec::new();
+        save_prior_book_binary(&PriorBook::default(), &mut bytes).unwrap();
+        bytes[6..8].copy_from_slice(&1u16.to_le_bytes());
+
+        let error = load_prior_book_binary(bytes.as_slice()).unwrap_err();
+        assert!(matches!(error, Error::InvalidBinary { .. }));
+        assert_eq!(
+            error.to_string(),
+            "invalid compact prior book: unsupported flags: 0x0001"
+        );
+    }
+
+    #[test]
+    fn binary_rejects_duplicate_entries() {
+        let json = concat!(
+            r#"{"state":"s","actions":[{"action":"a","count":1,"weighted_count":1.0,"success_rate":null,"mean_score":null,"prior":1.0,"confidence":0.1}]}"#,
+            "\n"
+        );
+        let book = load_prior_book(json.as_bytes()).unwrap();
+        let mut bytes = Vec::new();
+        save_prior_book_binary(&book, &mut bytes).unwrap();
+
+        let duplicate = bytes[12..].to_vec();
+        bytes[8..12].copy_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&duplicate);
+
+        let error = load_prior_book_binary(bytes.as_slice()).unwrap_err();
+        assert!(matches!(error, Error::InvalidBinary { .. }));
+        assert_eq!(
+            error.to_string(),
+            "invalid compact prior book: duplicate state/context entry"
+        );
+    }
+
+    #[test]
+    fn binary_rejects_non_finite_action_values() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&SUPPORTED_FLAGS.to_le_bytes());
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        put_string(&mut bytes, "s").unwrap();
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        put_action(
+            &mut bytes,
+            &PriorAction {
+                action: "a".into(),
+                count: 1,
+                weighted_count: f64::INFINITY,
+                success_rate: None,
+                mean_score: None,
+                prior: 1.0,
+                confidence: 0.1,
+            },
+        )
+        .unwrap();
+
+        let error = load_prior_book_binary(bytes.as_slice()).unwrap_err();
+        assert!(matches!(error, Error::InvalidBinary { .. }));
+        assert!(error.to_string().contains("weighted_count"));
+    }
+
+    #[test]
+    fn binary_saver_validates_before_writing() {
+        let mut book = PriorBook::default();
+        book.entries.insert(
+            "s".into(),
+            vec![PriorAction {
+                action: "a".into(),
+                count: 1,
+                weighted_count: 1.0,
+                success_rate: None,
+                mean_score: None,
+                prior: f64::NAN,
+                confidence: 0.1,
+            }],
+        );
+        let mut output = Vec::new();
+
+        let error = save_prior_book_binary(&book, &mut output).unwrap_err();
+        assert!(matches!(error, Error::InvalidBinary { .. }));
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn truncated_large_context_count_does_not_require_preallocation() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&SUPPORTED_FLAGS.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        put_string(&mut bytes, "s").unwrap();
+        bytes.extend_from_slice(&MAX_ITEMS.to_le_bytes());
+
+        let error = load_prior_book_binary(bytes.as_slice()).unwrap_err();
+        assert!(matches!(error, Error::InvalidBinary { .. }));
+        assert_eq!(
+            error.to_string(),
+            "invalid compact prior book: truncated input"
+        );
+    }
+
+    #[test]
+    fn truncated_large_action_count_does_not_require_preallocation() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&SUPPORTED_FLAGS.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        put_string(&mut bytes, "s").unwrap();
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&MAX_ITEMS.to_le_bytes());
+
+        let error = load_prior_book_binary(bytes.as_slice()).unwrap_err();
+        assert!(matches!(error, Error::InvalidBinary { .. }));
+        assert_eq!(
+            error.to_string(),
+            "invalid compact prior book: truncated input"
+        );
     }
 }

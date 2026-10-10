@@ -41,6 +41,8 @@ adoption gate needs a held-out opening corpus, production time control, and a ma
 interval. The machine-readable evidence is
 [`sekirei-opening-book-2026-10-03.json`](sekirei-opening-book-2026-10-03.json).
 
-[Sekirei v0.3.67](https://github.com/kent-tokyo/sekirei/releases/tag/v0.3.67) can now emit
-reproducible book manifests and optional structured decision logs. That improves future provenance
-and pairing, but it does not change this historical result or add a playing-strength claim.
+[Sekirei v0.3.68](https://github.com/kent-tokyo/sekirei/releases/tag/v0.3.68) archives a separate
+v0.3.67 diagnostic using reproducible book manifests and structured decision logs. Both four-game
+arms drew all games; the ON arm used the book for only 2 of 128 decisions. That archive verifies
+lineage, terminal joins, and fallback accounting, but its game budget and coverage do not establish
+a playing-strength improvement or change this historical 40-game result.

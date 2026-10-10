@@ -149,6 +149,47 @@ fn base_score(stat: &ActionStats, global_mean_score: Option<f64>, config: &Build
 /// observation is folded in. Checked once per build/eval run, not per
 /// observation.
 fn validate_config(config: &BuildConfig) -> Result<()> {
+    if !config.min_weighted_count.is_finite() || config.min_weighted_count < 0.0 {
+        return Err(Error::InvalidConfig {
+            message: "min_weighted_count must be finite and non-negative".into(),
+        });
+    }
+    if !config.min_confidence.is_finite() || !(0.0..=1.0).contains(&config.min_confidence) {
+        return Err(Error::InvalidConfig {
+            message: "min_confidence must be finite and between 0 and 1".into(),
+        });
+    }
+    if !config.smoothing_alpha.is_finite() || config.smoothing_alpha < 0.0 {
+        return Err(Error::InvalidConfig {
+            message: "smoothing_alpha must be finite and non-negative".into(),
+        });
+    }
+    for (name, value) in [
+        ("count_weight", config.count_weight),
+        ("success_weight", config.success_weight),
+        ("score_weight", config.score_weight),
+    ] {
+        if !value.is_finite() {
+            return Err(Error::InvalidConfig {
+                message: format!("{name} must be finite"),
+            });
+        }
+    }
+    if !config.confidence_k.is_finite() || config.confidence_k <= 0.0 {
+        return Err(Error::InvalidConfig {
+            message: "confidence_k must be finite and positive".into(),
+        });
+    }
+    if !config.confidence_z.is_finite() || config.confidence_z < 0.0 {
+        return Err(Error::InvalidConfig {
+            message: "confidence_z must be finite and non-negative".into(),
+        });
+    }
+    if !config.draw_value.is_finite() || !(0.0..=1.0).contains(&config.draw_value) {
+        return Err(Error::InvalidConfig {
+            message: "draw_value must be finite and between 0 and 1".into(),
+        });
+    }
     if !config.terminal_credit_weight.is_finite()
         || !(0.0..=1.0).contains(&config.terminal_credit_weight)
     {
@@ -197,10 +238,56 @@ fn validate_config(config: &BuildConfig) -> Result<()> {
     Ok(())
 }
 
+fn invalid_observation(obs: &Observation, message: impl Into<String>) -> Error {
+    Error::InvalidObservation {
+        sequence_id: obs.sequence_id.clone(),
+        message: message.into(),
+    }
+}
+
+fn checked_evidence_add(
+    obs: &Observation,
+    current: f64,
+    delta: f64,
+    field: &'static str,
+) -> Result<f64> {
+    let value = current + delta;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(invalid_observation(
+            obs,
+            format!("aggregated {field} must remain finite"),
+        ))
+    }
+}
+
+fn validate_observation(obs: &Observation) -> Result<()> {
+    if obs.sequence_id.is_empty() {
+        return Err(invalid_observation(obs, "sequence_id must not be empty"));
+    }
+    if obs.state.is_empty() {
+        return Err(invalid_observation(obs, "state must not be empty"));
+    }
+    if obs.action.is_empty() {
+        return Err(invalid_observation(obs, "action must not be empty"));
+    }
+    if !obs.weight.is_finite() || obs.weight < 0.0 {
+        return Err(invalid_observation(
+            obs,
+            "weight must be finite and non-negative",
+        ));
+    }
+    if obs.score.is_some_and(|score| !score.is_finite()) {
+        return Err(invalid_observation(obs, "score must be null or finite"));
+    }
+    Ok(())
+}
+
 /// `obs.weight` after time-decay and source-reliability multipliers, or
 /// `None` if `obs` should be dropped entirely (missing timestamp under
 /// `MissingTimestampPolicy::Drop`, with time decay enabled).
-fn effective_weight(obs: &Observation, config: &BuildConfig) -> Option<f64> {
+fn effective_weight(obs: &Observation, config: &BuildConfig) -> Result<Option<f64>> {
     let mut weight = obs.weight;
 
     if let Some(half_life_days) = config.time_decay_half_life_days {
@@ -209,12 +296,16 @@ fn effective_weight(obs: &Observation, config: &BuildConfig) -> Option<f64> {
             .expect("validate_config requires this whenever time_decay_half_life_days is set");
         match obs.observed_at_unix_seconds {
             Some(observed_at) => {
-                let age_days = ((reference - observed_at) as f64 / 86_400.0).max(0.0);
+                // Subtract in a wider type before converting to days: both
+                // timestamps are caller input, so their difference can exceed
+                // the i64 range even though each value is valid on its own.
+                let age_seconds = i128::from(reference) - i128::from(observed_at);
+                let age_days = (age_seconds.max(0) as f64) / 86_400.0;
                 weight *= time_decay_multiplier(age_days, half_life_days);
             }
             None => match config.missing_timestamp_policy {
                 MissingTimestampPolicy::KeepBaseWeight => {}
-                MissingTimestampPolicy::Drop => return None,
+                MissingTimestampPolicy::Drop => return Ok(None),
             },
         }
     }
@@ -226,8 +317,14 @@ fn effective_weight(obs: &Observation, config: &BuildConfig) -> Option<f64> {
         .copied()
         .unwrap_or(config.default_source_weight);
     weight *= source_multiplier;
+    if !weight.is_finite() {
+        return Err(invalid_observation(
+            obs,
+            "weight multiplied by decay/source reliability must remain finite",
+        ));
+    }
 
-    Some(weight)
+    Ok(Some(weight))
 }
 
 /// What a build actually did to the input, independent of the resulting
@@ -372,6 +469,7 @@ impl PriorAccumulator {
                 .entry(action)
                 .or_default();
             stat.weighted_trials += credit_weight;
+            stat.weighted_trial_weight_sq_sum += credit_weight * credit_weight;
             stat.weighted_successes += terminal_outcome * credit_weight;
             self.global_weighted_trials += credit_weight;
             self.global_weighted_successes += terminal_outcome * credit_weight;
@@ -379,6 +477,7 @@ impl PriorAccumulator {
     }
 
     pub(crate) fn observe(&mut self, obs: &Observation) -> Result<()> {
+        validate_observation(obs)?;
         if self.config.terminal_credit_weight > 0.0
             && self.terminal_sequence_id.as_deref() != Some(obs.sequence_id.as_str())
         {
@@ -403,10 +502,27 @@ impl PriorAccumulator {
             self.observations_dropped_by_step_or_tag_filter += 1;
             return Ok(());
         }
-        let Some(effective_weight) = effective_weight(obs, &self.config) else {
+        let Some(effective_weight) = effective_weight(obs, &self.config)? else {
             self.observations_dropped_by_missing_timestamp += 1;
             return Ok(());
         };
+        if (obs.outcome != Outcome::Unknown || self.config.terminal_credit_weight > 0.0)
+            && !(effective_weight * effective_weight).is_finite()
+        {
+            return Err(invalid_observation(
+                obs,
+                "effective weight is too large for weighted outcome statistics",
+            ));
+        }
+        if obs
+            .score
+            .is_some_and(|score| !(effective_weight * score).is_finite())
+        {
+            return Err(invalid_observation(
+                obs,
+                "effective weight multiplied by score must remain finite",
+            ));
+        }
         self.observations_kept += 1;
         if self.config.terminal_credit_weight > 0.0 {
             let terminal_credit = outcome_credit(obs.outcome, self.config.draw_value);
@@ -424,27 +540,80 @@ impl PriorAccumulator {
             .or_default()
             .entry(obs.action.clone())
             .or_default();
-        entry.count += 1;
-        entry.weighted_count += effective_weight;
+        entry.count = entry
+            .count
+            .checked_add(1)
+            .ok_or_else(|| invalid_observation(obs, "observation count exceeds u64"))?;
+        entry.weighted_count = checked_evidence_add(
+            obs,
+            entry.weighted_count,
+            effective_weight,
+            "weighted_count",
+        )?;
 
         if obs.outcome != Outcome::Unknown {
-            entry.weighted_trials += effective_weight;
-            entry.weighted_trial_weight_sq_sum += effective_weight * effective_weight;
-            self.global_weighted_trials += effective_weight;
+            entry.weighted_trials = checked_evidence_add(
+                obs,
+                entry.weighted_trials,
+                effective_weight,
+                "weighted_trials",
+            )?;
+            entry.weighted_trial_weight_sq_sum = checked_evidence_add(
+                obs,
+                entry.weighted_trial_weight_sq_sum,
+                effective_weight * effective_weight,
+                "weighted_trial_weight_sq_sum",
+            )?;
+            self.global_weighted_trials = checked_evidence_add(
+                obs,
+                self.global_weighted_trials,
+                effective_weight,
+                "global_weighted_trials",
+            )?;
             // A draw earns partial credit rather than scoring like a loss;
             // both the per-action and dataset-wide totals must move
             // together since the latter is the smoothing target the
             // former shrinks toward.
             let success_credit = outcome_credit(obs.outcome, self.config.draw_value);
-            entry.weighted_successes += success_credit * effective_weight;
-            self.global_weighted_successes += success_credit * effective_weight;
+            entry.weighted_successes = checked_evidence_add(
+                obs,
+                entry.weighted_successes,
+                success_credit * effective_weight,
+                "weighted_successes",
+            )?;
+            self.global_weighted_successes = checked_evidence_add(
+                obs,
+                self.global_weighted_successes,
+                success_credit * effective_weight,
+                "global_weighted_successes",
+            )?;
         }
 
         if let Some(score) = obs.score {
-            entry.weighted_score_sum += effective_weight * score;
-            entry.weighted_score_count += effective_weight;
-            self.global_weighted_score_sum += effective_weight * score;
-            self.global_weighted_score_count += effective_weight;
+            entry.weighted_score_sum = checked_evidence_add(
+                obs,
+                entry.weighted_score_sum,
+                effective_weight * score,
+                "weighted_score_sum",
+            )?;
+            entry.weighted_score_count = checked_evidence_add(
+                obs,
+                entry.weighted_score_count,
+                effective_weight,
+                "weighted_score_count",
+            )?;
+            self.global_weighted_score_sum = checked_evidence_add(
+                obs,
+                self.global_weighted_score_sum,
+                effective_weight * score,
+                "global_weighted_score_sum",
+            )?;
+            self.global_weighted_score_count = checked_evidence_add(
+                obs,
+                self.global_weighted_score_count,
+                effective_weight,
+                "global_weighted_score_count",
+            )?;
         }
 
         // Order 1..=window.len() (already bounded to config.context_order by
@@ -460,19 +629,52 @@ impl PriorAccumulator {
                 .or_default()
                 .entry(obs.action.clone())
                 .or_default();
-            entry.count += 1;
-            entry.weighted_count += effective_weight;
+            entry.count = entry
+                .count
+                .checked_add(1)
+                .ok_or_else(|| invalid_observation(obs, "context observation count exceeds u64"))?;
+            entry.weighted_count = checked_evidence_add(
+                obs,
+                entry.weighted_count,
+                effective_weight,
+                "context weighted_count",
+            )?;
 
             if obs.outcome != Outcome::Unknown {
-                entry.weighted_trials += effective_weight;
-                entry.weighted_trial_weight_sq_sum += effective_weight * effective_weight;
+                entry.weighted_trials = checked_evidence_add(
+                    obs,
+                    entry.weighted_trials,
+                    effective_weight,
+                    "context weighted_trials",
+                )?;
+                entry.weighted_trial_weight_sq_sum = checked_evidence_add(
+                    obs,
+                    entry.weighted_trial_weight_sq_sum,
+                    effective_weight * effective_weight,
+                    "context weighted_trial_weight_sq_sum",
+                )?;
                 let success_credit = outcome_credit(obs.outcome, self.config.draw_value);
-                entry.weighted_successes += success_credit * effective_weight;
+                entry.weighted_successes = checked_evidence_add(
+                    obs,
+                    entry.weighted_successes,
+                    success_credit * effective_weight,
+                    "context weighted_successes",
+                )?;
             }
 
             if let Some(score) = obs.score {
-                entry.weighted_score_sum += effective_weight * score;
-                entry.weighted_score_count += effective_weight;
+                entry.weighted_score_sum = checked_evidence_add(
+                    obs,
+                    entry.weighted_score_sum,
+                    effective_weight * score,
+                    "context weighted_score_sum",
+                )?;
+                entry.weighted_score_count = checked_evidence_add(
+                    obs,
+                    entry.weighted_score_count,
+                    effective_weight,
+                    "context weighted_score_count",
+                )?;
             }
         }
 
@@ -703,9 +905,13 @@ fn finalize_actions(
                 | crate::model::ScoringStrategy::Softmax => base,
                 crate::model::ScoringStrategy::Bayesian => {
                     let global = global_success_rate.unwrap_or(0.5);
-                    let posterior = (stat.weighted_successes
-                        + config.bayesian_prior_strength * global)
-                        / (stat.weighted_trials + config.bayesian_prior_strength);
+                    let posterior_weight = stat.weighted_trials + config.bayesian_prior_strength;
+                    let posterior = if posterior_weight > 0.0 {
+                        (stat.weighted_successes + config.bayesian_prior_strength * global)
+                            / posterior_weight
+                    } else {
+                        global
+                    };
                     config.count_weight * (1.0 + stat.weighted_count).ln()
                         + config.success_weight * posterior
                         + base_score(stat, global_mean_score, config)
@@ -1191,7 +1397,7 @@ mod tests {
     }
 
     #[test]
-    fn action_confidence_does_not_produce_nan_when_draw_value_exceeds_one() {
+    fn validate_config_rejects_draw_value_outside_probability_range() {
         let observations = vec![
             obs("d1", 0, "s", "a", Outcome::Draw, None, 1.0, vec![]),
             obs("d2", 0, "s", "a", Outcome::Draw, None, 1.0, vec![]),
@@ -1201,10 +1407,8 @@ mod tests {
             confidence_mode: ConfidenceMode::WilsonLowerBound,
             ..Default::default()
         };
-        let book = build_prior_book(&observations, &config).unwrap();
-        let got = action(&book, "s", "a").confidence;
-        assert!(got.is_finite());
-        assert!((0.0..=1.0).contains(&got));
+        let err = build_prior_book(&observations, &config).unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig { .. }));
     }
 
     #[test]
@@ -1669,6 +1873,30 @@ mod tests {
     }
 
     #[test]
+    fn extreme_old_timestamp_does_not_overflow() {
+        let observations = vec![Observation {
+            observed_at_unix_seconds: Some(i64::MIN),
+            ..obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])
+        }];
+        let config = decay_config(10.0, i64::MAX);
+        let book = build_prior_book(&observations, &config).unwrap();
+        let weighted_count = action(&book, "s", "a").weighted_count;
+        assert!(weighted_count.is_finite());
+        assert_eq!(weighted_count, 0.0);
+    }
+
+    #[test]
+    fn extreme_future_timestamp_clamps_to_full_weight_without_overflow() {
+        let observations = vec![Observation {
+            observed_at_unix_seconds: Some(i64::MAX),
+            ..obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])
+        }];
+        let config = decay_config(10.0, i64::MIN);
+        let book = build_prior_book(&observations, &config).unwrap();
+        assert_eq!(action(&book, "s", "a").weighted_count, 1.0);
+    }
+
+    #[test]
     fn missing_timestamp_keep_base_weight_keeps_observation_at_full_weight() {
         // observed_at_unix_seconds is None on this observation; default
         // MissingTimestampPolicy::KeepBaseWeight should score it as current.
@@ -1900,6 +2128,126 @@ mod tests {
         };
         let err = build_prior_book(&observations, &config).unwrap_err();
         assert!(matches!(err, Error::InvalidConfig { .. }));
+    }
+
+    #[test]
+    fn validate_config_rejects_invalid_core_numeric_controls() {
+        let observations = vec![obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![])];
+        let invalid = vec![
+            BuildConfig {
+                min_weighted_count: -1.0,
+                ..Default::default()
+            },
+            BuildConfig {
+                min_confidence: 1.1,
+                ..Default::default()
+            },
+            BuildConfig {
+                smoothing_alpha: -1.0,
+                ..Default::default()
+            },
+            BuildConfig {
+                count_weight: f64::INFINITY,
+                ..Default::default()
+            },
+            BuildConfig {
+                success_weight: f64::NAN,
+                ..Default::default()
+            },
+            BuildConfig {
+                score_weight: f64::NEG_INFINITY,
+                ..Default::default()
+            },
+            BuildConfig {
+                confidence_k: 0.0,
+                ..Default::default()
+            },
+            BuildConfig {
+                confidence_z: -1.0,
+                ..Default::default()
+            },
+        ];
+        for config in invalid {
+            let err = build_prior_book(&observations, &config).unwrap_err();
+            assert!(matches!(err, Error::InvalidConfig { .. }));
+        }
+    }
+
+    #[test]
+    fn typed_observations_reject_invalid_keys_and_non_finite_numbers() {
+        let invalid = vec![
+            obs("", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![]),
+            obs("c", 0, "", "a", Outcome::Unknown, None, 1.0, vec![]),
+            obs("c", 0, "s", "", Outcome::Unknown, None, 1.0, vec![]),
+            obs("c", 0, "s", "a", Outcome::Unknown, None, f64::NAN, vec![]),
+            obs(
+                "c",
+                0,
+                "s",
+                "a",
+                Outcome::Unknown,
+                Some(f64::INFINITY),
+                1.0,
+                vec![],
+            ),
+        ];
+        for observation in invalid {
+            let err = build_prior_book(&[observation], &BuildConfig::default()).unwrap_err();
+            assert!(matches!(err, Error::InvalidObservation { .. }));
+        }
+    }
+
+    #[test]
+    fn effective_weight_and_score_products_must_remain_finite() {
+        let weighted = Observation {
+            source: Some("extreme".into()),
+            ..obs("c", 0, "s", "a", Outcome::Unknown, None, 2.0, vec![])
+        };
+        let config = BuildConfig {
+            source_weights: std::collections::BTreeMap::from([("extreme".to_string(), f64::MAX)]),
+            ..Default::default()
+        };
+        let err = build_prior_book(&[weighted], &config).unwrap_err();
+        assert!(matches!(err, Error::InvalidObservation { .. }));
+
+        let scored = obs(
+            "c",
+            0,
+            "s",
+            "a",
+            Outcome::Unknown,
+            Some(2.0),
+            f64::MAX,
+            vec![],
+        );
+        let err = build_prior_book(&[scored], &BuildConfig::default()).unwrap_err();
+        assert!(matches!(err, Error::InvalidObservation { .. }));
+
+        let repeated = vec![
+            obs("c1", 0, "s", "a", Outcome::Unknown, None, f64::MAX, vec![]),
+            obs("c2", 0, "s", "a", Outcome::Unknown, None, f64::MAX, vec![]),
+        ];
+        let err = build_prior_book(&repeated, &BuildConfig::default()).unwrap_err();
+        assert!(matches!(err, Error::InvalidObservation { .. }));
+    }
+
+    #[test]
+    fn zero_strength_bayesian_without_outcomes_stays_finite() {
+        let observations = vec![
+            obs("c1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![]),
+            obs("c2", 0, "s", "b", Outcome::Unknown, None, 1.0, vec![]),
+        ];
+        let config = BuildConfig {
+            scoring_strategy: crate::model::ScoringStrategy::Bayesian,
+            bayesian_prior_strength: 0.0,
+            ..Default::default()
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+        assert!(
+            book.entries["s"]
+                .iter()
+                .all(|action| { action.prior.is_finite() && (0.0..=1.0).contains(&action.prior) })
+        );
     }
 
     #[test]
@@ -2168,5 +2516,21 @@ mod tests {
         .unwrap();
         assert_eq!(without.entries["early"][0].success_rate, Some(1.0));
         assert_eq!(with.entries["early"][0].success_rate, Some(0.5));
+    }
+
+    #[test]
+    fn terminal_credit_contributes_to_wilson_effective_sample_size() {
+        let observations = vec![
+            obs("g1", 0, "s", "a", Outcome::Unknown, None, 1.0, vec![]),
+            obs("g1", 1, "s", "a", Outcome::Success, None, 1.0, vec![]),
+        ];
+        let config = BuildConfig {
+            terminal_credit_weight: 1.0,
+            confidence_mode: ConfidenceMode::WilsonLowerBound,
+            ..Default::default()
+        };
+        let book = build_prior_book(&observations, &config).unwrap();
+        let expected = wilson_lower_bound(3.0, 3.0, config.confidence_z).unwrap();
+        assert!((action(&book, "s", "a").confidence - expected).abs() < 1e-12);
     }
 }
