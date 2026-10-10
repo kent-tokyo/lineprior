@@ -56,6 +56,10 @@ pub fn run(args: VerifyArtifactArgs) -> Result<ExitCode> {
                 return Ok(ExitCode::from(3));
             }
         };
+    if let Err(error) = manifest.validate() {
+        eprintln!("error: {error}");
+        return Ok(super::exit_code_for_lineprior_error(&error));
+    }
 
     let input_sha256 = match open(&args.input).and_then(sha256) {
         Ok(digest) => digest,

@@ -307,6 +307,71 @@ mod tests {
     }
 
     #[test]
+    fn validation_rejects_deserialized_invalid_digest_and_build_config() {
+        let config = BuildConfig::default();
+        let manifest = PriorArtifactManifestV1::new(
+            "0".repeat(64),
+            "a".repeat(64),
+            PriorArtifactLineage::default(),
+            &PriorBook::default(),
+            &config,
+            BuildStats::default(),
+            0,
+        )
+        .unwrap();
+
+        let mut invalid_digest = manifest.clone();
+        invalid_digest.input_sha256 = "A".repeat(64);
+        assert!(matches!(
+            invalid_digest.validate(),
+            Err(Error::InvalidArtifactDigest {
+                field: "input_sha256",
+                ..
+            })
+        ));
+
+        let mut malformed_config = manifest.clone();
+        malformed_config.build_config = serde_json::json!({"min_count": "one"});
+        assert!(matches!(
+            malformed_config.validate(),
+            Err(Error::InvalidArtifactBuildConfig { .. })
+        ));
+
+        let invalid_config = BuildConfig {
+            min_confidence: 2.0,
+            ..config
+        };
+        let mut semantically_invalid = manifest;
+        semantically_invalid.build_config = serde_json::to_value(&invalid_config).unwrap();
+        semantically_invalid.build_config_fingerprint = build_config_fingerprint(&invalid_config);
+        assert!(matches!(
+            semantically_invalid.validate(),
+            Err(Error::InvalidConfig { .. })
+        ));
+    }
+
+    #[test]
+    fn validation_rejects_changed_build_config_with_stale_fingerprint() {
+        let config = BuildConfig::default();
+        let mut manifest = PriorArtifactManifestV1::new(
+            "0".repeat(64),
+            "a".repeat(64),
+            PriorArtifactLineage::default(),
+            &PriorBook::default(),
+            &config,
+            BuildStats::default(),
+            0,
+        )
+        .unwrap();
+
+        manifest.build_config["min_count"] = serde_json::json!(config.min_count + 1);
+        assert!(matches!(
+            manifest.validate(),
+            Err(Error::ArtifactBuildConfigFingerprintMismatch { .. })
+        ));
+    }
+
+    #[test]
     fn verification_rejects_changed_bytes_and_header() {
         let config = BuildConfig::default();
         let manifest = PriorArtifactManifestV1::new(

@@ -422,6 +422,32 @@ fn verify_artifact_checks_round_trip_bytes_and_book_metadata() {
 
     let mut manifest_value: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+    let original_manifest_value = manifest_value.clone();
+
+    manifest_value["schema"] = serde_json::json!("lineprior.prior-artifact-manifest.v2");
+    std::fs::write(
+        &manifest,
+        serde_json::to_vec_pretty(&manifest_value).unwrap(),
+    )
+    .unwrap();
+    let output = verify();
+    assert_eq!(output.status.code(), Some(3));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unsupported artifact manifest schema")
+    );
+
+    manifest_value = original_manifest_value.clone();
+    manifest_value["input_sha256"] = serde_json::json!("A".repeat(64));
+    std::fs::write(
+        &manifest,
+        serde_json::to_vec_pretty(&manifest_value).unwrap(),
+    )
+    .unwrap();
+    let output = verify();
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("must be a lowercase SHA-256 digest"));
+
+    manifest_value = original_manifest_value;
     manifest_value["producer_version"] = serde_json::json!("tampered");
     std::fs::write(
         &manifest,
