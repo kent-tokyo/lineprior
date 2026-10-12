@@ -121,6 +121,8 @@ ranking指標が良くてもdownstream改善の証明にはなりません。実
 
 ## 追加機能
 
+- `PriorBook::query_borrowed`は、再利用可能な`QueryScratch` index bufferを使い、ranked
+  `&PriorAction`を返します。既存のowned `query` APIは変更しません。
 - core libraryは、可変長context、sequence scoring、`PriorTrie`、bounded macro-action、
   terminal credit、source weight付きmulti-source mergeを提供します。
 - `lineprior-similarity`は、利用側が用意した有限feature vectorを検索します。actionや

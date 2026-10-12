@@ -49,9 +49,10 @@ pub use macro_action::{
 };
 pub use merge::{PriorBookSource, merge_prior_books};
 pub use model::{
-    BuildConfig, ConfidenceMode, ContextQueryResult, DEFAULT_CONFIDENCE_K, DEFAULT_CONFIDENCE_Z,
-    DEFAULT_DRAW_VALUE, DEFAULT_SOURCE_WEIGHT, MissingTimestampPolicy, Observation, Outcome,
-    PriorAction, PriorBook, PriorEntry, ScoringStrategy, SequencePriorScore, StepScore,
+    BorrowedQuery, BuildConfig, ConfidenceMode, ContextQueryResult, DEFAULT_CONFIDENCE_K,
+    DEFAULT_CONFIDENCE_Z, DEFAULT_DRAW_VALUE, DEFAULT_SOURCE_WEIGHT, MissingTimestampPolicy,
+    Observation, Outcome, PriorAction, PriorBook, PriorEntry, QueryScratch, ScoringStrategy,
+    SequencePriorScore, StepScore,
 };
 pub use offpolicy::{
     BootstrapConfig, BootstrapInterval, DoublyRobustReport, MAX_BOOTSTRAP_RESAMPLES,

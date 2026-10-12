@@ -340,6 +340,66 @@ pub struct PriorBook {
     pub context_entries: HashMap<(Vec<String>, String), Vec<PriorAction>>,
 }
 
+/// Reusable index storage for [`PriorBook::query_borrowed`].
+///
+/// The first query may grow the internal buffer to the number of actions in
+/// the requested state. Later queries reuse that allocation. The scratch
+/// value contains no action data and can be reused across books and states.
+#[derive(Debug, Default)]
+pub struct QueryScratch {
+    indices: Vec<usize>,
+}
+
+impl QueryScratch {
+    /// Creates an empty scratch buffer.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates a scratch buffer sized for at least `capacity` candidates.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            indices: Vec::with_capacity(capacity),
+        }
+    }
+
+    /// Current reusable index capacity.
+    pub fn capacity(&self) -> usize {
+        self.indices.capacity()
+    }
+}
+
+/// Ranked borrowed candidates returned by [`PriorBook::query_borrowed`].
+///
+/// Each item points into the queried [`PriorBook`]; action strings and
+/// metadata are not cloned. The iterator keeps the supplied
+/// [`QueryScratch`] borrowed until it is dropped.
+#[derive(Debug)]
+pub struct BorrowedQuery<'book, 'scratch> {
+    actions: &'book [PriorAction],
+    indices: std::slice::Iter<'scratch, usize>,
+}
+
+impl<'book> Iterator for BorrowedQuery<'book, '_> {
+    type Item = &'book PriorAction;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.indices.next().map(|index| &self.actions[*index])
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.indices.size_hint()
+    }
+}
+
+impl DoubleEndedIterator for BorrowedQuery<'_, '_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.indices.next_back().map(|index| &self.actions[*index])
+    }
+}
+
+impl ExactSizeIterator for BorrowedQuery<'_, '_> {}
+
 /// Result of [`PriorBook::query_with_context`]: which depth of context
 /// backoff actually landed on `candidates`, alongside the candidates
 /// themselves -- the same "how much evidence backs this" transparency
@@ -389,14 +449,17 @@ pub struct SequencePriorScore {
 }
 
 /// Deterministic action ordering: descending prior, tie-broken by action
-/// string. Shared by build (emit) and query so both agree on ranking.
+/// string. Shared by owned and borrowed queries so their rankings cannot
+/// drift apart.
+fn compare_actions(a: &PriorAction, b: &PriorAction) -> Ordering {
+    b.prior
+        .partial_cmp(&a.prior)
+        .unwrap_or(Ordering::Equal)
+        .then_with(|| a.action.cmp(&b.action))
+}
+
 fn sort_actions(actions: &mut [PriorAction]) {
-    actions.sort_by(|a, b| {
-        b.prior
-            .partial_cmp(&a.prior)
-            .unwrap_or(Ordering::Equal)
-            .then_with(|| a.action.cmp(&b.action))
-    });
+    actions.sort_by(compare_actions);
 }
 
 impl PriorBook {
@@ -459,6 +522,42 @@ impl PriorBook {
             actions.truncate(k);
         }
         actions
+    }
+
+    /// Ranked read-only candidates for `state`, using caller-owned reusable
+    /// index storage instead of cloning [`PriorAction`] values.
+    ///
+    /// Ordering, tie-breaking, `top_k`, and unseen-state behavior are exactly
+    /// the same as [`Self::query`]. The first call may allocate indices up to
+    /// the number of actions in the state; repeated calls reuse
+    /// [`QueryScratch`]'s capacity. The iterator borrows both this book and
+    /// the scratch value until it is dropped.
+    ///
+    /// Use the owned `query` API when candidates must outlive the book or be
+    /// modified. Use this method for repeated read-only adapter lookups.
+    pub fn query_borrowed<'book, 'scratch>(
+        &'book self,
+        state: &str,
+        top_k: Option<usize>,
+        scratch: &'scratch mut QueryScratch,
+    ) -> BorrowedQuery<'book, 'scratch> {
+        scratch.indices.clear();
+        let actions = self.entries.get(state).map_or(&[][..], Vec::as_slice);
+
+        if top_k != Some(0) {
+            scratch.indices.extend(0..actions.len());
+            scratch
+                .indices
+                .sort_by(|left, right| compare_actions(&actions[*left], &actions[*right]));
+            if let Some(k) = top_k {
+                scratch.indices.truncate(k);
+            }
+        }
+
+        BorrowedQuery {
+            actions,
+            indices: scratch.indices.iter(),
+        }
     }
 
     /// Context-aware candidates for `state`, given `recent_actions` (a
@@ -615,6 +714,75 @@ mod tests {
         assert_eq!(
             book.candidates()[0],
             ("s1".to_string(), action("x", 5, 1.0, 0.5))
+        );
+    }
+
+    #[test]
+    fn borrowed_query_matches_owned_order_ties_and_top_k() {
+        let book = PriorBook {
+            entries: HashMap::from([(
+                "s".to_string(),
+                vec![
+                    action("b", 2, 0.5, 0.2),
+                    action("d", 4, 0.9, 0.4),
+                    action("a", 1, 0.5, 0.1),
+                    action("c", 3, 0.9, 0.3),
+                ],
+            )]),
+            ..Default::default()
+        };
+        let expected = book.query("s", Some(3));
+        let mut scratch = QueryScratch::new();
+        let actual = book
+            .query_borrowed("s", Some(3), &mut scratch)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual
+                .iter()
+                .map(|candidate| candidate.action.as_str())
+                .collect::<Vec<_>>(),
+            ["c", "d", "a"]
+        );
+    }
+
+    #[test]
+    fn borrowed_query_returns_book_references_and_reuses_scratch() {
+        let book = PriorBook {
+            entries: HashMap::from([(
+                "s".to_string(),
+                vec![action("b", 2, 0.4, 0.2), action("a", 3, 0.6, 0.3)],
+            )]),
+            ..Default::default()
+        };
+        let mut scratch = QueryScratch::with_capacity(2);
+        let borrowed = book
+            .query_borrowed("s", None, &mut scratch)
+            .collect::<Vec<_>>();
+        assert!(borrowed.iter().all(|candidate| {
+            book.entries["s"]
+                .iter()
+                .any(|stored| std::ptr::eq(*candidate, stored))
+        }));
+        drop(borrowed);
+
+        let capacity = scratch.capacity();
+        assert_eq!(book.query_borrowed("s", Some(0), &mut scratch).len(), 0);
+        assert_eq!(scratch.capacity(), capacity);
+    }
+
+    #[test]
+    fn borrowed_query_unseen_state_matches_owned_empty_result() {
+        let book = PriorBook::default();
+        let mut scratch = QueryScratch::new();
+
+        assert!(book.query("missing", None).is_empty());
+        assert!(
+            book.query_borrowed("missing", None, &mut scratch)
+                .next()
+                .is_none()
         );
     }
 
