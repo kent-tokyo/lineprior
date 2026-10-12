@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 readme.workspace = true
 description = "Explainable action ranking from historical sequences, with confidence, context backoff, evaluation, and tuning."
-keywords = ["decision-making", "action-selection", "action-ranking", "selective-prediction", "opening-book"]
+keywords = ["decision-making", "action-selection", "action-ranking", "selective-prediction", "history"]
 categories = ["algorithms", "artificial-intelligence"]
 
 [dependencies]

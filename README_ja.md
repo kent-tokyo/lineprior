@@ -7,15 +7,20 @@
 
 日本語 / [English](./README.md)
 
-`lineprior`は、過去のaction sequenceから再現可能なpriorを構築するRustライブラリ／CLIです。
+`lineprior`は、過去のaction sequenceから再現可能なpriorを構築する、独立したRustライブラリ／CLIです。
 
 ```text
 state -> ranked candidate actions
 ```
 
-利用側が最初に調べるactionを選ぶための候補順を返します。最善手を決めるoracleではなく、
-online search、rule、evaluation、verificationを置き換えません。stateとactionはopaqueなkey
-として扱い、未知stateや証拠の乏しいstateでは候補を返しません。
+利用側が最初に調べる、観測済みactionの候補順を返します。最善手を決めるoracleではなく、
+online search、rule、evaluation、execution、verificationを置き換えません。stateとactionは
+opaqueなkeyとして扱い、未知stateや証拠の乏しいstateでは候補を返しません。legality、fallback、
+最終決定は利用側の責務です。
+
+`lineprior`は、最終検証器または探索手順がすでにあり、候補評価を減らす価値があり、関連する
+履歴sequenceを利用できるシステムに適します。action generator、planner、solver、game engine、
+online learner、domain parserではありません。
 
 ## 最初のprior bookを作る
 
@@ -127,16 +132,16 @@ ranking指標が良くてもdownstream改善の証明にはなりません。実
   terminal credit、source weight付きmulti-source mergeを提供します。
 - `lineprior-similarity`は、利用側が用意した有限feature vectorを検索します。actionや
   embeddingは生成しません。
-- `lineprior-adapters`は、Sekirei、UI automation、LLM agent、retrosynthesis向けのtypedな
-  変換境界です。parse、legality、実行、chemical validationはdownstream側で行います。
+- `lineprior-adapters`は、構造化record、UI automation、tool-using agent、scientific workflow向けの
+  typedな変換境界です。parse、legality、実行、domain validationはdownstream側で行います。
 - `lineprior-wasm`は、初期化後にJSON入出力のbuild/queryを提供します。Rust crateはworkspace
   と同時に公開し、CIではweb targetのtarballを空の環境へinstallしてChromiumで検証します。
   web packageはnpm registryには公開しておらず、Python bindingも提供していません。
 - GateModelとoff-policy評価はdiagnosticです。欠けたfeature、support、propensity、outcomeは
   補えません。
 
-coreはSFEN、CSA、FEN、PGN、prompt、UI tree、moleculeをparseしません。JSONL fixtureと
-Python、Node.js、browserのround-trip例は[`examples/`](./examples/)にあります。
+coreはdomain format、prompt、UI tree、moleculeをparseしません。JSONL fixtureとPython、Node.js、
+browserのround-trip例は[`examples/`](./examples/)にあります。
 
 ## 証拠と制約
 
@@ -146,9 +151,9 @@ Python、Node.js、browserのround-trip例は[`examples/`](./examples/)にあり
 - 因果推論やcounterfactual action generationは行いません。
 - synthetic fixtureは契約を検証しますが、decision qualityを証明しません。過去のbenchmarkも
   別machineでの性能を保証しません。
-- Sekireiのholdoutでは現行similarity adapterを不採用としました。既存logではIPS/DRと
-  GateModelの検証に必要な情報が不足しています。Trieとmacro-actionのdownstream改善も
-  未検証です。
+- あるreference integrationのholdoutでは現行similarity configurationを不採用としました。
+  既存logではIPS/DRとGateModelの検証に必要な情報が不足しています。exact matchとabstainを
+  既定とし、Trieとmacro-actionのdownstream改善も未検証です。
 
 streaming buildのmemoryは、uniqueなstate/action pair数と、有効時のcontext tuple数に比例
 します。測定手順、実測結果、公開手順、example、schemaは[文書索引](./docs/README.md)から

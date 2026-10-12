@@ -47,11 +47,9 @@ false recommendations or calibration, keep exact-match plus abstention as
 the default. Synthetic fixtures and the checked-in unseen-state test verify
 the contract only; they are not real-data evidence.
 
-## Sekirei 2023-2025 result
+## Current decision
 
-The checked-in [Sekirei artifact](similarity-sekirei-2026-10-03.json) uses 2023-2024 Floodgate
-records for training and 2025 records for holdout (210 query states). The current SFEN one-hot
-adapter increased coverage from 0.548 to 0.743, but reduced all-query top-1 from 0.505 to 0.148 and
-MRR from 0.525 to 0.323. Among covered queries, its false-recommendation rate was 0.801 versus
-0.078 for exact match. It therefore fails the declared error and MRR budgets: keep exact match plus
-abstention and do not adopt this similarity adapter.
+The checked-in reference evaluation rejected its current finite-vector similarity configuration:
+it increased coverage but exceeded the declared false-recommendation budget and reduced MRR. It is
+not a general performance result. Keep exact match plus abstention as the default until a new
+held-out evaluation passes the declared quality, latency, and memory budgets.

@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 readme.workspace = true
 description = "CLI for building, evaluating, tuning, and querying explainable action-ranking prior books."
-keywords = ["cli", "action-ranking", "action-selection", "decision-making", "opening-book"]
+keywords = ["cli", "action-ranking", "action-selection", "decision-making", "history"]
 categories = ["command-line-utilities", "algorithms", "artificial-intelligence"]
 
 [[bin]]

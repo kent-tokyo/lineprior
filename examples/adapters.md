@@ -1,11 +1,12 @@
 # Typed adapter boundaries
 
-`lineprior-adapters` converts four domain records into generic observations:
+`lineprior-adapters` keeps typed conversion at the boundary between a domain application and generic
+observations. Typical shapes include:
 
-- `sekirei::Record`: SFEN to USI action
-- `ui_automation::Record`: screen state to UI action
-- `llm_agent::Record`: task state to tool call
-- `retrosynthesis::Record`: intermediate to reaction template
+- a structured position/move record
+- a screen state to UI action record
+- a task state to tool-call record
+- an intermediate to transformation-template record
 
-Values remain opaque to the core. Parsing, legality, execution, and chemical validation stay in
-the owning application. Each conversion adds a stable `source` and tag for source weighting.
+Values remain opaque to the core. Parsing, legality, execution, and domain validation stay in the
+owning application. Each conversion adds a stable `source` and tag for source weighting.

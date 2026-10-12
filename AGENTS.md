@@ -20,8 +20,7 @@ focused on rules for changing the repository.
 
 - Treat `state` and `action` as opaque keys in the core.
 - Use generic names such as state, action, sequence, outcome, score, prior, and confidence.
-- Keep SFEN, CSA, USI, FEN, prompts, UI trees, molecules, and other domain formats in adapters or
-  downstream projects.
+- Keep domain formats and domain-specific concepts in adapters or downstream projects.
 - Return no candidates for unseen states or when every candidate fails thresholds. Never invent an
   action.
 - Describe rankings and confidence as evidence from observed data, not guarantees of future
@@ -35,7 +34,7 @@ Dependency direction is always:
 downstream application -> lineprior
 ```
 
-The core must not depend on Sekirei or any other downstream project.
+The core must not depend on a downstream project.
 
 ## Workspace ownership
 

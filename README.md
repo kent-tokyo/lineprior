@@ -7,16 +7,21 @@
 
 [日本語](./README_ja.md) / English
 
-`lineprior` is a Rust library and CLI for building reproducible action priors from historical
-sequences:
+`lineprior` is an independent Rust library and CLI for building reproducible action priors from
+historical sequences:
 
 ```text
 state -> ranked candidate actions
 ```
 
-It suggests which action a caller may examine first. It does not choose the best action, explore
-online, or replace search, rules, evaluation, or verification. State and action values are opaque
-keys; sparse or unseen states return no candidates.
+It ranks observed candidate actions that a caller may examine first. It does not choose the best
+action, explore online, or replace search, rules, evaluation, execution, or verification. State
+and action values are opaque keys; sparse or unseen states return no candidates. The caller owns
+legality, fallback behavior, and every final decision.
+
+Use `lineprior` when a system already has a final verifier or search procedure, candidate evaluation
+is worth reducing, and relevant historical sequences are available. It is not an action generator,
+planner, solver, game engine, online learner, or domain parser.
 
 ## Quick start
 
@@ -131,17 +136,17 @@ Run `lineprior <command> --help` for all options.
   and weighted multi-source book merging are available in the core library.
 - `lineprior-similarity` searches caller-supplied finite feature vectors. It does not generate
   actions or embeddings.
-- `lineprior-adapters` provides typed conversion boundaries for Sekirei, UI automation, LLM
-  agents, and retrosynthesis. Parsing, legality, execution, and chemical validation remain with
-  the downstream application.
+- `lineprior-adapters` provides typed conversion boundaries for structured records, UI automation,
+  tool-using agents, and scientific workflows. Parsing, legality, execution, and domain validation
+  remain with the downstream application.
 - `lineprior-wasm` exposes initialized JSON-in/JSON-out build and query functions. Its Rust crate
   is released with the workspace; CI also verifies a clean-installed web-target tarball in
   Chromium. That web package is not published to the npm registry, and there is no Python binding.
 - GateModel and off-policy evaluation are diagnostic tools. They cannot repair missing features,
   support, propensities, or outcomes.
 
-The core does not parse SFEN, CSA, FEN, PGN, prompts, UI trees, or molecules. Example JSONL and
-Python, Node.js, and browser round trips are under [`examples/`](./examples/).
+The core does not parse domain formats, prompts, UI trees, or molecules. Example JSONL and Python,
+Node.js, and browser round trips are under [`examples/`](./examples/).
 
 ## Evidence and limitations
 
@@ -152,8 +157,9 @@ Python, Node.js, and browser round trips are under [`examples/`](./examples/).
 - The project does not perform causal inference or counterfactual action generation.
 - Synthetic fixtures verify contracts, not decision quality. Historical benchmarks do not
   establish cross-machine performance.
-- A Sekirei holdout rejected the current similarity adapter. Existing logs lacked the information
-  needed to estimate IPS/DR or validate GateModel. Trie and macro-action downstream gains remain
+- A held-out reference integration rejected its current similarity configuration. Existing logs
+  also lacked the information needed to estimate IPS/DR or validate GateModel. Exact match plus
+  abstention remains the supported default; Trie and macro-action downstream gains remain
   unverified.
 
 Streaming build memory is proportional to unique state/action pairs, plus context tuples when

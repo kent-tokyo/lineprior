@@ -9,6 +9,15 @@ release may include Rust source-breaking changes; such changes are called out ex
 
 ## [Unreleased]
 
+### Changed
+
+- Clarified the public product boundary: `lineprior` is an independent, domain-agnostic
+  candidate-ordering component. It ranks observed candidates or abstains; downstream applications
+  own parsing, execution, verification, search, and final decisions.
+- Replaced downstream-specific public examples and case-study wording with a generic paired
+  candidate-ordering integration guide. Historical machine-readable evidence remains a record of
+  its original producer and is not a general performance claim.
+
 ## [0.12.5] - 2026-10-13
 
 ### Added
@@ -53,8 +62,8 @@ release may include Rust source-breaking changes; such changes are called out ex
 
 ### Added
 
-- Added a pinned Sekirei v0.3.68 `GateObservation` fixture regression that checks both JSON Schema
-  and collection-time semantics without treating the fixture as real gate-history evidence.
+- Added a pinned downstream `GateObservation` fixture regression that checks both JSON Schema and
+  collection-time semantics without treating the fixture as real gate-history evidence.
 
 ### Changed
 
@@ -62,8 +71,8 @@ release may include Rust source-breaking changes; such changes are called out ex
   details back to their canonical documents.
 - Clarified that the Rust `lineprior-wasm` crate is published on crates.io while the generated web
   package is not published to the npm registry.
-- Updated Sekirei integration notes for the v0.3.68 release, including its archived v0.3.67
-  paired book diagnostic and zero-row gate-readiness result, without rewriting older evidence.
+- Updated downstream integration notes with an archived paired-prior diagnostic and zero-row
+  gate-readiness result, without rewriting older evidence.
 
 ### Fixed
 
@@ -144,16 +153,16 @@ release may include Rust source-breaking changes; such changes are called out ex
 - Added a formal web-target `lineprior-wasm` package contract. CI now packs the npm tarball,
   installs it into an empty consumer, and checks browser build/query, deterministic output, and the
   malformed-config error shape. npm registry publication and Python bindings remain out of scope.
-- Added a reproducible Sekirei opening-book case study. The book was used for all 20 eligible
+- Added a reproducible downstream candidate-ordering case study. The prior was used for all 20 eligible
   initial turns, while the 40-game on/off result was exactly 50% with a wide interval, so the
   integration stays optional and no downstream improvement is claimed.
-- Added the first real held-out similarity decision artifact. The tested Sekirei feature adapter
+- Added the first real held-out similarity decision artifact. The tested downstream feature adapter
   raised coverage but sharply worsened MRR and covered-query false recommendations, so exact match
   plus abstention remains the supported decision.
-- Added a real-log IPS/DR readiness audit. Six Sekirei analysis logs contained 183 decisions but no
+- Added a real-log IPS/DR readiness audit. Six downstream analysis logs contained 183 decisions but no
   decision-time propensities or declared rewards, so overlap, ESS, bootstrap, and causal effects are
   explicitly recorded as not estimable rather than fabricated.
-- Added a GateModel real-history readiness audit. Twenty-three aggregate Sekirei result files had
+- Added a GateModel real-history readiness audit. Twenty-three aggregate downstream result files had
   no shared pre-gate feature map or group IDs, so baseline/model/calibration/OOD/acquisition
   comparisons are recorded as not computable and the experimental scope remains frozen.
 
@@ -208,7 +217,8 @@ release may include Rust source-breaking changes; such changes are called out ex
 - Added opt-in Bayesian, UCB, and Softmax scoring while retaining weighted-sum as the default.
 - Added LPB v1 persistence and `pack`/`unpack`.
 - Added bounded macro-actions, weighted multi-source merge, terminal credit, and `PriorTrie`.
-- Added `lineprior-adapters` for Sekirei, UI automation, LLM agents, and retrosynthesis.
+- Added `lineprior-adapters` for structured records, UI automation, tool-using agents, and
+  retrosynthesis.
 - Added a reproducible veridict prior on/off protocol. No downstream result was claimed.
 - Added wasm-pack and headless Chromium smoke; npm publication was not included.
 
