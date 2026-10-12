@@ -6,6 +6,7 @@
 //! historical prior builder. Estimates are therefore only meaningful when
 //! the caller can establish overlap and a valid logging policy.
 
+use crate::score::effective_sample_size;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -84,6 +85,8 @@ pub enum OffPolicyError {
     InvalidMaxImportanceWeight,
     #[error("observation {index} has a non-finite {field}")]
     NonFiniteValue { index: usize, field: &'static str },
+    #[error("observation {index} produces a non-finite {field}")]
+    NonFiniteDerivedValue { index: usize, field: &'static str },
     #[error("observation {index} has logging_propensity <= 0: {value}")]
     NonPositiveLoggingPropensity { index: usize, value: f64 },
     #[error("observation {index} has logging_propensity > 1: {value}")]
@@ -232,11 +235,83 @@ pub fn evaluate_self_normalized_ips(
     }
     validate_offpolicy_observations(observations)?;
 
-    Ok(evaluate_validated_ips(
-        observations.iter(),
-        observations.len(),
-        config,
-    ))
+    evaluate_validated_ips(observations.iter(), observations.len(), config)
+}
+
+#[derive(Debug, Default)]
+struct StableMean {
+    value: f64,
+    count: usize,
+}
+
+impl StableMean {
+    fn observe(&mut self, value: f64) {
+        self.count += 1;
+        let alpha = 1.0 / self.count as f64;
+        self.value = convex_combination(self.value, value, alpha);
+    }
+
+    fn value(&self) -> Option<f64> {
+        (self.count > 0).then_some(self.value)
+    }
+}
+
+/// Scale-free sums for Kish ESS. Keeping every weight relative to the
+/// largest observed supported weight avoids overflowing `weight * weight`
+/// while preserving the exact ESS ratio.
+#[derive(Debug, Default)]
+struct StableImportanceStats {
+    max_weight: f64,
+    scaled_weight_sum: f64,
+    scaled_weight_squared_sum: f64,
+}
+
+impl StableImportanceStats {
+    /// Adds one positive finite weight and returns its normalized share of
+    /// the new total. That share can update a weighted mean without ever
+    /// materializing the potentially overflowing raw weight sum.
+    fn observe(&mut self, weight: f64) -> f64 {
+        if self.scaled_weight_sum == 0.0 {
+            self.max_weight = weight;
+            self.scaled_weight_sum = 1.0;
+            self.scaled_weight_squared_sum = 1.0;
+            return 1.0;
+        }
+
+        if weight > self.max_weight {
+            let scale = self.max_weight / weight;
+            self.scaled_weight_sum *= scale;
+            self.scaled_weight_squared_sum *= scale * scale;
+            self.max_weight = weight;
+        }
+        let scaled_weight = weight / self.max_weight;
+        let new_sum = self.scaled_weight_sum + scaled_weight;
+        let share = scaled_weight / new_sum;
+        self.scaled_weight_sum = new_sum;
+        self.scaled_weight_squared_sum += scaled_weight * scaled_weight;
+        share
+    }
+
+    fn effective_sample_size(&self) -> Option<f64> {
+        (self.scaled_weight_squared_sum > 0.0)
+            .then(|| effective_sample_size(self.scaled_weight_sum, self.scaled_weight_squared_sum))
+    }
+}
+
+fn convex_combination(current: f64, next: f64, next_share: f64) -> f64 {
+    if current == 0.0 || current.is_sign_positive() == next.is_sign_positive() {
+        current + next_share * (next - current)
+    } else {
+        current * (1.0 - next_share) + next * next_share
+    }
+}
+
+fn finite_derived(index: usize, value: f64, field: &'static str) -> Result<f64, OffPolicyError> {
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(OffPolicyError::NonFiniteDerivedValue { index, field })
+    }
 }
 
 /// Shared arithmetic for validated original rows and bootstrap references.
@@ -246,51 +321,59 @@ fn evaluate_validated_ips<'a>(
     observations: impl IntoIterator<Item = &'a OffPolicyObservation>,
     num_observations: usize,
     config: &OffPolicyConfig,
-) -> OffPolicyReport {
-    let mut weighted_reward_sum = 0.0;
-    let mut importance_sum = 0.0;
-    let mut importance_squared_sum = 0.0;
+) -> Result<OffPolicyReport, OffPolicyError> {
+    let mut ips_mean = StableMean::default();
+    let mut importance_stats = StableImportanceStats::default();
+    let mut self_normalized_ips = None;
     let mut supported_observations = 0;
     let mut overlap_failure_count = 0;
     let mut max_observed_importance_weight: Option<f64> = None;
 
-    for observation in observations {
+    for (index, observation) in observations.into_iter().enumerate() {
+        let mut ips_contribution = 0.0;
         if observation.evaluation_probability == 0.0 {
             overlap_failure_count += 1;
-            continue;
+        } else {
+            let importance_weight = finite_derived(
+                index,
+                observation.evaluation_probability / observation.logging_propensity,
+                "importance weight",
+            )?;
+            max_observed_importance_weight = Some(
+                max_observed_importance_weight
+                    .map_or(importance_weight, |max| max.max(importance_weight)),
+            );
+            if config
+                .max_importance_weight
+                .is_some_and(|max| importance_weight > max)
+            {
+                overlap_failure_count += 1;
+            } else {
+                supported_observations += 1;
+                ips_contribution = finite_derived(
+                    index,
+                    importance_weight * observation.reward,
+                    "importance-weighted reward",
+                )?;
+                let share = importance_stats.observe(importance_weight);
+                self_normalized_ips = Some(match self_normalized_ips {
+                    Some(current) => convex_combination(current, observation.reward, share),
+                    None => observation.reward,
+                });
+            }
         }
-
-        let importance_weight = observation.evaluation_probability / observation.logging_propensity;
-        max_observed_importance_weight = Some(
-            max_observed_importance_weight
-                .map_or(importance_weight, |max| max.max(importance_weight)),
-        );
-        if config
-            .max_importance_weight
-            .is_some_and(|max| importance_weight > max)
-        {
-            overlap_failure_count += 1;
-            continue;
-        }
-        supported_observations += 1;
-        importance_sum += importance_weight;
-        importance_squared_sum += importance_weight * importance_weight;
-        weighted_reward_sum += importance_weight * observation.reward;
+        ips_mean.observe(ips_contribution);
     }
 
     let ips = if num_observations == 0 {
         None
     } else if supported_observations > 0 {
-        Some(weighted_reward_sum / num_observations as f64)
+        ips_mean.value()
     } else {
         None
     };
-    let self_normalized_ips =
-        (importance_sum > 0.0).then_some(weighted_reward_sum / importance_sum);
-    let effective_sample_size = (importance_squared_sum > 0.0)
-        .then_some(importance_sum * importance_sum / importance_squared_sum);
 
-    OffPolicyReport {
+    Ok(OffPolicyReport {
         policy_name: config.policy_name.clone(),
         policy_version: config.policy_version.clone(),
         num_observations,
@@ -303,9 +386,9 @@ fn evaluate_validated_ips<'a>(
         },
         ips,
         self_normalized_ips,
-        effective_sample_size,
+        effective_sample_size: importance_stats.effective_sample_size(),
         max_observed_importance_weight,
-    }
+    })
 }
 
 /// Estimate percentile-bootstrap intervals for the two IPS statistics.
@@ -346,7 +429,7 @@ pub fn bootstrap_self_normalized_ips(
     for _ in 0..bootstrap_config.resamples {
         let sample = (0..observations.len())
             .map(|_| &observations[next_index(&mut rng, observations.len())]);
-        let report = evaluate_validated_ips(sample, observations.len(), policy_config);
+        let report = evaluate_validated_ips(sample, observations.len(), policy_config)?;
         if let Some(value) = report.ips {
             ips_values.push(value);
         }
@@ -429,9 +512,8 @@ pub fn evaluate_doubly_robust(
         return Err(OffPolicyError::InvalidMaxImportanceWeight);
     }
     validate_offpolicy_observations(observations)?;
-    let mut estimate_sum = 0.0;
-    let mut importance_sum = 0.0;
-    let mut importance_squared_sum = 0.0;
+    let mut estimate_mean = StableMean::default();
+    let mut importance_stats = StableImportanceStats::default();
     let mut supported_observations = 0;
     let mut overlap_failure_count = 0;
     let mut max_observed_importance_weight: Option<f64> = None;
@@ -452,10 +534,13 @@ pub fn evaluate_doubly_robust(
 
         let correction = if observation.evaluation_probability == 0.0 {
             overlap_failure_count += 1;
-            0.0
+            None
         } else {
-            let importance_weight =
-                observation.evaluation_probability / observation.logging_propensity;
+            let importance_weight = finite_derived(
+                index,
+                observation.evaluation_probability / observation.logging_propensity,
+                "importance weight",
+            )?;
             max_observed_importance_weight = Some(
                 max_observed_importance_weight
                     .map_or(importance_weight, |max| max.max(importance_weight)),
@@ -465,17 +550,30 @@ pub fn evaluate_doubly_robust(
                 .is_some_and(|max| importance_weight > max)
             {
                 overlap_failure_count += 1;
-                0.0
+                None
             } else {
                 supported_observations += 1;
-                importance_sum += importance_weight;
-                importance_squared_sum += importance_weight * importance_weight;
-                importance_weight
+                importance_stats.observe(importance_weight);
+                Some(importance_weight)
             }
         };
-        let doubly_robust_value =
-            model_policy_value + correction * (observation.reward - model_logged_action);
-        estimate_sum += doubly_robust_value;
+        let doubly_robust_value = if let Some(correction) = correction {
+            let residual = finite_derived(
+                index,
+                observation.reward - model_logged_action,
+                "reward-model residual",
+            )?;
+            let correction =
+                finite_derived(index, correction * residual, "doubly robust correction")?;
+            finite_derived(
+                index,
+                model_policy_value + correction,
+                "doubly robust value",
+            )?
+        } else {
+            model_policy_value
+        };
+        estimate_mean.observe(doubly_robust_value);
     }
 
     Ok(DoublyRobustReport {
@@ -489,9 +587,8 @@ pub fn evaluate_doubly_robust(
         } else {
             supported_observations as f64 / observations.len() as f64
         },
-        estimate: (!observations.is_empty()).then_some(estimate_sum / observations.len() as f64),
-        effective_sample_size: (importance_squared_sum > 0.0)
-            .then_some(importance_sum * importance_sum / importance_squared_sum),
+        estimate: estimate_mean.value(),
+        effective_sample_size: importance_stats.effective_sample_size(),
         max_observed_importance_weight,
     })
 }
@@ -568,6 +665,42 @@ mod tests {
     }
 
     #[test]
+    fn extreme_finite_ips_inputs_keep_report_values_finite() {
+        let repeated_max = evaluate_self_normalized_ips(
+            &[
+                observation(f64::MAX, 1.0, 1.0),
+                observation(f64::MAX, 1.0, 1.0),
+            ],
+            &Default::default(),
+        )
+        .unwrap();
+        assert_eq!(repeated_max.ips, Some(f64::MAX));
+        assert_eq!(repeated_max.self_normalized_ips, Some(f64::MAX));
+        assert_eq!(repeated_max.effective_sample_size, Some(2.0));
+
+        let large_weight =
+            evaluate_self_normalized_ips(&[observation(1e-200, 1e-200, 1.0)], &Default::default())
+                .unwrap();
+        assert!(large_weight.ips.unwrap().is_finite());
+        assert_eq!(large_weight.self_normalized_ips, Some(1e-200));
+        assert_eq!(large_weight.effective_sample_size, Some(1.0));
+    }
+
+    #[test]
+    fn unrepresentable_importance_weight_is_rejected() {
+        assert!(matches!(
+            evaluate_self_normalized_ips(
+                &[observation(1.0, f64::from_bits(1), 1.0)],
+                &Default::default()
+            ),
+            Err(OffPolicyError::NonFiniteDerivedValue {
+                field: "importance weight",
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn malformed_propensities_are_rejected() {
         assert!(matches!(
             evaluate_self_normalized_ips(&[observation(0.0, 0.0, 1.0)], &Default::default()),
@@ -625,6 +758,19 @@ mod tests {
         let report = evaluate_doubly_robust(&[first], &Default::default()).unwrap();
         assert_eq!(report.estimate, Some(1.0));
         assert_eq!(report.supported_observations, 1);
+    }
+
+    #[test]
+    fn unsupported_extreme_dr_rows_do_not_form_zero_times_infinity() {
+        let mut row = observation(f64::MAX, 1.0, 0.0);
+        row.reward_model_policy_value = Some(f64::MAX);
+        row.reward_model_logged_action = Some(-f64::MAX);
+        let report = evaluate_doubly_robust(&[row.clone(), row], &Default::default()).unwrap();
+
+        assert_eq!(report.estimate, Some(f64::MAX));
+        assert_eq!(report.supported_observations, 0);
+        assert_eq!(report.overlap_failure_count, 2);
+        assert_eq!(report.effective_sample_size, None);
     }
 
     #[test]

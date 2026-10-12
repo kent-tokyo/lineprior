@@ -98,6 +98,34 @@ fn offpolicy_command_rejects_excessive_bootstrap_resamples_before_output() {
 }
 
 #[test]
+fn offpolicy_command_rejects_unrepresentable_importance_weight_before_output() {
+    let input = temp_path("offpolicy_unrepresentable_weight.jsonl");
+    let output = temp_path("offpolicy_unrepresentable_weight_report.json");
+    std::fs::write(
+        &input,
+        "{\"state\":\"s\",\"action\":\"a\",\"reward\":1.0,\"logging_propensity\":5e-324,\"evaluation_probability\":1.0}\n",
+    )
+    .unwrap();
+
+    let result = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "offpolicy",
+            input.to_str().unwrap(),
+            "--out",
+            output.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(result.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("non-finite importance weight"));
+    assert!(!output.exists());
+
+    let _ = std::fs::remove_file(&input);
+}
+
+#[test]
 fn gate_command_writes_verdict_and_acquisition_report() {
     let input = temp_path("gate_input.jsonl");
     let output = temp_path("gate_report.json");

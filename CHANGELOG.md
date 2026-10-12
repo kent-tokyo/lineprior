@@ -9,11 +9,26 @@ release may include Rust source-breaking changes; such changes are called out ex
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-10-13
+
 ### Added
 
 - Added `PriorBook::query_borrowed` with reusable `QueryScratch` index storage for ranked
   read-only lookup without cloning action strings or metadata. The existing owned `query` API and
   ranking semantics remain unchanged.
+
+### Fixed
+
+- Keep IPS, self-normalized IPS, doubly robust means, and Kish effective sample size finite for
+  representable extreme inputs, and reject derived importance weights or corrections that exceed
+  the numeric representation instead of emitting `NaN` or infinity.
+
+### Compatibility
+
+- Prior-book schema v1, compact LPB v1, and optional artifact manifests remain compatible.
+- `OffPolicyError` gains `NonFiniteDerivedValue`; exhaustive Rust matches must handle the new
+  variant.
+- All five workspace crates and internal dependency requirements are version-locked at `0.12.5`.
 
 ## [0.12.4] - 2026-10-11
 

@@ -12,7 +12,10 @@ Before estimation, validate raw rows against
 [`offpolicy-observation-v1.schema.json`](offpolicy-observation-v1.schema.json) and run
 `lineprior validate heldout.jsonl --kind offpolicy`. This checks finite rewards, non-empty opaque
 keys, logging propensity in `(0, 1]`, and evaluation probability in `[0, 1]`; it does not prove
-that the logged propensity was generated correctly.
+that the logged propensity was generated correctly. Estimation also rejects finite input values
+whose derived importance ratio or DR correction is not representable as a finite `f64`; lower the
+declared importance-weight cap or repair the logging policy rather than interpreting a non-finite
+estimate.
 
 ## Required log fields
 
