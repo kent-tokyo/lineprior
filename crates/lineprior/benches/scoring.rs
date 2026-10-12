@@ -1,6 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use lineprior::{
-    BuildConfig, MacroActionConfig, Observation, Outcome, PriorAction, PriorBook,
+    BuildConfig, MacroActionConfig, Observation, Outcome, PriorAction, PriorBook, QueryScratch,
     build_macro_actions, build_prior_book, build_prior_book_from_reader,
 };
 use std::collections::HashMap;
@@ -176,6 +176,48 @@ fn bench_macro_action_extraction(c: &mut Criterion) {
     });
 }
 
+fn ranked_query_book(actions_per_state: usize) -> PriorBook {
+    let actions = (0..actions_per_state)
+        .rev()
+        .map(|index| PriorAction {
+            action: format!("action_{index:03}"),
+            count: index as u64 + 1,
+            weighted_count: index as f64 + 1.0,
+            success_rate: None,
+            mean_score: None,
+            prior: (index % 8) as f64 / 8.0,
+            confidence: 0.5,
+        })
+        .collect();
+    PriorBook {
+        entries: HashMap::from([("query-state".to_string(), actions)]),
+        ..Default::default()
+    }
+}
+
+/// Compares the existing owned query with the reusable borrowed path. Both
+/// sort the same unsorted 64-action state and return the same top eight; the
+/// borrowed case reuses its index allocation and does not clone actions.
+fn bench_ranked_query(c: &mut Criterion) {
+    let book = ranked_query_book(64);
+    let mut group = c.benchmark_group("ranked_query_64_actions_top8");
+    group.bench_function("owned_clone_sort", |b| {
+        b.iter(|| black_box(book.query("query-state", Some(8))))
+    });
+
+    let mut scratch = QueryScratch::with_capacity(64);
+    group.bench_function("borrowed_reused_indices", |b| {
+        b.iter(|| {
+            let prior_sum = book
+                .query_borrowed("query-state", Some(8), &mut scratch)
+                .map(|candidate| candidate.prior)
+                .sum::<f64>();
+            black_box(prior_sum)
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_build_small,
@@ -185,6 +227,7 @@ criterion_group!(
     bench_trie_materialize,
     bench_flat_context_query,
     bench_trie_context_query,
-    bench_macro_action_extraction
+    bench_macro_action_extraction,
+    bench_ranked_query
 );
 criterion_main!(benches);

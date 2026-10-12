@@ -9,6 +9,12 @@ release may include Rust source-breaking changes; such changes are called out ex
 
 ## [Unreleased]
 
+### Added
+
+- Added `PriorBook::query_borrowed` with reusable `QueryScratch` index storage for ranked
+  read-only lookup without cloning action strings or metadata. The existing owned `query` API and
+  ranking semantics remain unchanged.
+
 ## [0.12.4] - 2026-10-11
 
 ### Added

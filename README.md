@@ -124,6 +124,9 @@ Run `lineprior <command> --help` for all options.
 
 ## Optional capabilities
 
+- `PriorBook::query_borrowed` returns ranked `&PriorAction` values through a reusable
+  `QueryScratch` index buffer for repeated read-only lookups. The existing owned `query` API
+  remains unchanged.
 - Variable-order context, sequence scoring, `PriorTrie`, bounded macro-actions, terminal credit,
   and weighted multi-source book merging are available in the core library.
 - `lineprior-similarity` searches caller-supplied finite feature vectors. It does not generate
