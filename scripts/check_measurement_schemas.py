@@ -11,12 +11,24 @@ EXPECTED = {
         "root_required": {"protocol", "num_queries", "measurement", "arms"},
         "measurement_required": {"dataset_id", "split", "feature_version", "lineprior_version", "input_sha256", "prior_config_fingerprint"},
         "defs": {"digest", "unit", "arm", "measurement"},
+        "arm_required": {"coverage", "abstention_rate", "top1_hit_rate", "mrr", "calibration_brier"},
     },
     "offpolicy-integrated-arms-v1.schema.json": {
         "protocol": "offpolicy-integrated-arms-v1",
         "root_required": {"protocol", "measurement", "arms", "paired"},
         "measurement_required": {"dataset_id", "split", "lineprior_version", "input_sha256"},
         "defs": {"digest", "measurement", "estimate", "arm", "paired"},
+        "arm_required": {"ips", "doubly_robust", "bootstrap"},
+    },
+    "candidate-ordering-evaluation-v1.schema.json": {
+        "protocol": "candidate-ordering-evaluation-v1",
+        "root_required": {"protocol", "measurement", "preregistration", "preflight", "arms", "decision"},
+        "measurement_required": {
+            "dataset_id", "split", "lineprior_version", "prior_config_fingerprint",
+            "downstream_commit", "toolchain", "hardware", "seed", "input_sha256",
+        },
+        "defs": {"digest", "unit", "interval", "measurement", "preregistration", "usage", "arm", "decision"},
+        "arm_required": {"cases", "quality_estimate", "quality_interval", "cost_estimate", "cost_interval"},
     },
 }
 
@@ -57,8 +69,7 @@ def main():
         if filename.startswith("similarity") and (unit.get("type") != ["number", "null"] or unit.get("minimum") != 0 or unit.get("maximum") != 1):
             raise ValueError(f"{filename}: unit interval constraint is incomplete")
         arm_required = definitions.get("arm", {}).get("required", [])
-        expected_arm = {"coverage", "abstention_rate", "top1_hit_rate", "mrr", "calibration_brier"} if filename.startswith("similarity") else {"ips", "doubly_robust", "bootstrap"}
-        if set(arm_required) != expected_arm:
+        if set(arm_required) != expected["arm_required"]:
             raise ValueError(f"{filename}: arm required fields changed unexpectedly")
 
     for filename, required in ROW_SCHEMAS.items():

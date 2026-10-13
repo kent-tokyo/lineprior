@@ -1,0 +1,48 @@
+{
+  "protocol": "candidate-ordering-evaluation-v1",
+  "measurement": {
+    "dataset_id": "synthetic-contract-v1",
+    "split": "heldout",
+    "lineprior_version": "0.12.6",
+    "prior_config_fingerprint": 123,
+    "downstream_commit": "fixture-commit",
+    "toolchain": "stable-fixture",
+    "hardware": "fixture-host",
+    "seed": 7,
+    "input_sha256": {
+      "observations": "0000000000000000000000000000000000000000000000000000000000000000",
+      "heldout_cases": "1111111111111111111111111111111111111111111111111111111111111111",
+      "prior_book": "2222222222222222222222222222222222222222222222222222222222222222",
+      "off_results": null,
+      "on_results": null
+    }
+  },
+  "preregistration": {
+    "quality_metric": "caller_quality",
+    "quality_direction": "higher",
+    "quality_noninferiority_margin": 0.0,
+    "cost_metric": "candidate_evaluations",
+    "cost_direction": "lower",
+    "minimum_prior_selections": 2,
+    "minimum_prior_selection_rate": 0.2,
+    "maximum_case_budget": 100,
+    "uncertainty_method": "paired-bootstrap",
+    "decision_rule": "quality noninferiority and lower candidate-evaluation cost"
+  },
+  "preflight": {
+    "eligible_decisions": 10,
+    "prior_selections": 0,
+    "prior_abstentions": 10,
+    "unavailable_fallbacks": 0,
+    "selection_rate": 0.0,
+    "fallback_reasons": {"unseen_state": 10},
+    "passed_coverage_gate": false
+  },
+  "arms": {"off": null, "on": null},
+  "decision": {
+    "status": "NOT_READY",
+    "quality_noninferiority_met": null,
+    "cost_improvement_met": null,
+    "rationale": "coverage preflight failed; paired evaluation was not run"
+  }
+}

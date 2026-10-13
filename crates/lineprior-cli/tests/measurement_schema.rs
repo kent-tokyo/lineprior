@@ -140,6 +140,14 @@ fn prior_artifact_manifest() -> Value {
     })
 }
 
+fn candidate_ordering_artifact() -> Value {
+    serde_json::from_str(
+        &fs::read_to_string(fixture("candidate_ordering_not_ready.json"))
+            .expect("candidate-ordering fixture should be readable"),
+    )
+    .expect("candidate-ordering fixture should be valid JSON")
+}
+
 #[test]
 fn similarity_schema_accepts_a_representative_artifact() {
     let validator = validator_for(&schema("similarity-real-data-v1.schema.json")).unwrap();
@@ -194,6 +202,78 @@ fn offpolicy_schema_leaves_cross_artifact_semantics_to_the_semantic_validator() 
     let mut invalid_support_fraction = offpolicy_artifact();
     invalid_support_fraction["arms"]["off"]["ips"]["support_fraction"] = json!(1.5);
     assert!(validator.is_valid(&invalid_support_fraction));
+}
+
+#[test]
+fn candidate_ordering_schema_accepts_a_not_ready_artifact() {
+    let validator = validator_for(&schema("candidate-ordering-evaluation-v1.schema.json")).unwrap();
+    assert!(validator.is_valid(&candidate_ordering_artifact()));
+}
+
+#[test]
+fn candidate_ordering_schema_accepts_a_completed_paired_artifact() {
+    let validator = validator_for(&schema("candidate-ordering-evaluation-v1.schema.json")).unwrap();
+    let mut artifact = candidate_ordering_artifact();
+    artifact["measurement"]["input_sha256"]["off_results"] = json!("3".repeat(64));
+    artifact["measurement"]["input_sha256"]["on_results"] = json!("4".repeat(64));
+    let usage = json!({
+        "eligible_decisions": 10,
+        "prior_selections": 2,
+        "prior_abstentions": 8,
+        "unavailable_fallbacks": 0,
+        "selection_rate": 0.2,
+        "fallback_reasons": {"unseen_state": 8},
+        "passed_coverage_gate": true
+    });
+    artifact["preflight"] = usage.clone();
+    artifact["arms"] = json!({
+        "off": {
+            "cases": 10,
+            "quality_estimate": 1.0,
+            "quality_interval": {"lower": 0.9, "upper": 1.1},
+            "cost_estimate": 100.0,
+            "cost_interval": {"lower": 90.0, "upper": 110.0}
+        },
+        "on": {
+            "cases": 10,
+            "quality_estimate": 1.0,
+            "quality_interval": {"lower": 0.9, "upper": 1.1},
+            "cost_estimate": 90.0,
+            "cost_interval": {"lower": 80.0, "upper": 100.0},
+            "usage": usage
+        }
+    });
+    artifact["decision"] = json!({
+        "status": "PASS",
+        "quality_noninferiority_met": true,
+        "cost_improvement_met": true,
+        "rationale": "both preregistered gates passed"
+    });
+
+    assert!(validator.is_valid(&artifact));
+}
+
+#[test]
+fn candidate_ordering_schema_rejects_protocol_drift_and_missing_preregistration() {
+    let validator = validator_for(&schema("candidate-ordering-evaluation-v1.schema.json")).unwrap();
+    let mut wrong_protocol = candidate_ordering_artifact();
+    wrong_protocol["protocol"] = json!("candidate-ordering-evaluation-v0");
+    assert!(!validator.is_valid(&wrong_protocol));
+
+    let mut missing_preregistration = candidate_ordering_artifact();
+    missing_preregistration
+        .as_object_mut()
+        .unwrap()
+        .remove("preregistration");
+    assert!(!validator.is_valid(&missing_preregistration));
+}
+
+#[test]
+fn candidate_ordering_schema_leaves_count_semantics_to_the_semantic_validator() {
+    let validator = validator_for(&schema("candidate-ordering-evaluation-v1.schema.json")).unwrap();
+    let mut inconsistent = candidate_ordering_artifact();
+    inconsistent["preflight"]["selection_rate"] = json!(0.5);
+    assert!(validator.is_valid(&inconsistent));
 }
 
 #[test]

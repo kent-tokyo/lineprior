@@ -1,14 +1,13 @@
 use crate::error::{Error, Result, Warning};
 use crate::model::{
     BuildConfig, ConfidenceMode, MissingTimestampPolicy, Observation, Outcome, PriorAction,
-    PriorBook, outcome_credit,
+    PriorBook, outcome_credit, sort_actions,
 };
 use crate::score::{
     confidence, effective_sample_size, normalize_for_strategy, ratio, raw_score, shrink_toward,
     time_decay_multiplier, wilson_lower_bound,
 };
 use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
 
 /// Running totals for one `(state, action)` pair.
@@ -954,13 +953,11 @@ fn finalize_actions(
         })
         .collect();
 
+    // Store the canonical ranking once so repeated queries do not pay the
+    // same O(actions log actions) sort cost. Public fields still permit an
+    // ad-hoc unsorted book; query APIs detect and normalize that case.
+    sort_actions(&mut actions_out);
     if let Some(max_actions) = config.max_actions_per_state {
-        actions_out.sort_by(|a, b| {
-            b.prior
-                .partial_cmp(&a.prior)
-                .unwrap_or(Ordering::Equal)
-                .then_with(|| a.action.cmp(&b.action))
-        });
         if actions_out.len() > max_actions {
             counters.candidates_dropped_by_max_actions_per_state +=
                 (actions_out.len() - max_actions) as u64;
@@ -1043,6 +1040,19 @@ mod tests {
         let a = action(&book, "s", "a");
         assert_eq!(a.count, 2);
         assert_eq!(a.weighted_count, 3.5);
+    }
+
+    #[test]
+    fn built_book_stores_actions_in_canonical_query_order() {
+        let observations = vec![
+            obs("c1", 0, "s", "low", Outcome::Unknown, None, 1.0, vec![]),
+            obs("c2", 0, "s", "best", Outcome::Unknown, None, 1.0, vec![]),
+            obs("c3", 0, "s", "best", Outcome::Unknown, None, 1.0, vec![]),
+        ];
+        let book = build_prior_book(&observations, &BuildConfig::default()).unwrap();
+
+        assert!(crate::model::actions_are_sorted(&book.entries["s"]));
+        assert_eq!(book.entries["s"], book.query("s", None));
     }
 
     #[test]

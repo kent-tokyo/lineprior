@@ -53,6 +53,30 @@ class OffpolicyValidatorMessageTests(unittest.TestCase):
             "offpolicy.arms.off.ips.support_fraction must be finite and in [0, 1]",
         )
 
+    def test_boolean_support_fraction_is_not_accepted_as_one(self):
+        report = artifact()
+        report["arms"]["off"]["ips"]["support_fraction"] = True
+        self.assert_message(
+            report,
+            "offpolicy.arms.off.ips.support_fraction must be finite and in [0, 1]",
+        )
+
+    def test_numeric_string_estimate_is_rejected(self):
+        report = artifact()
+        report["arms"]["off"]["doubly_robust"]["estimate"] = "0.4"
+        self.assert_message(
+            report,
+            "offpolicy.arms.off.doubly_robust.estimate must be finite",
+        )
+
+    def test_malformed_effective_sample_size_has_a_stable_error(self):
+        report = artifact()
+        report["arms"]["off"]["ips"]["effective_sample_size"] = {"bad": 1}
+        self.assert_message(
+            report,
+            "offpolicy.arms.off.ips.effective_sample_size must be finite and non-negative",
+        )
+
     def test_paired_lineage_message_is_stable(self):
         report = artifact()
         report["paired"]["measurement"]["dataset_id"] = "other-fixture"
@@ -72,6 +96,15 @@ class OffpolicyValidatorMessageTests(unittest.TestCase):
     def test_explicit_policy_lineage_message_is_stable(self):
         report = artifact()
         report["measurement"]["policy_version"] = "unspecified"
+        self.assert_message(
+            report,
+            "offpolicy.measurement.policy_version must be explicit when required",
+            require_explicit=True,
+        )
+
+    def test_whitespace_padded_unspecified_lineage_is_rejected(self):
+        report = artifact()
+        report["measurement"]["policy_version"] = " unspecified "
         self.assert_message(
             report,
             "offpolicy.measurement.policy_version must be explicit when required",

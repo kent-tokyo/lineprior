@@ -9,14 +9,36 @@ release may include Rust source-breaking changes; such changes are called out ex
 
 ## [Unreleased]
 
+## [0.12.6] - 2026-10-14
+
+### Added
+
+- Added a domain-neutral candidate-ordering evaluation artifact contract with preregistered
+  quality/cost gates, a coverage preflight, paired ON/OFF results, lineage hashes, explicit
+  `NOT_READY`/`PASS`/`FAIL`/`INCONCLUSIVE` decisions, and structural plus semantic regressions.
+
 ### Changed
 
+- Canonically ranked built books now avoid repeated query-time sorting, and `PriorTrie` normalizes
+  ad-hoc unsorted books before applying `top_k`, preserving ranking semantics while reducing
+  repeated lookup work.
 - Clarified the public product boundary: `lineprior` is an independent, domain-agnostic
   candidate-ordering component. It ranks observed candidates or abstains; downstream applications
   own parsing, execution, verification, search, and final decisions.
 - Replaced downstream-specific public examples and case-study wording with a generic paired
   candidate-ordering integration guide. Historical machine-readable evidence remains a record of
   its original producer and is not a general performance claim.
+
+### Fixed
+
+- Measurement semantic validation now rejects booleans in probability fields, numeric strings or
+  malformed values in off-policy estimates, and placeholder fingerprints in explicit lineage
+  instead of accepting type-coerced data or exposing a Python traceback.
+
+### Compatibility
+
+- Prior-book schema v1, compact LPB v1, and optional artifact manifests remain compatible.
+- All five workspace crates and internal dependency requirements are version-locked at `0.12.6`.
 
 ## [0.12.5] - 2026-10-13
 

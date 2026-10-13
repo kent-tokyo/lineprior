@@ -67,7 +67,7 @@ warningを返します。
 `build`はschema-v1 metadata headerの後に、決定的に並べたstate entryを書きます。
 
 ```text
-{"prior_book_schema_version":1,"producer_version":"0.12.5","build_config":{...},"build_config_fingerprint":7308171529403319118}
+{"prior_book_schema_version":1,"producer_version":"0.12.6","build_config":{...},"build_config_fingerprint":7308171529403319118}
 {"state":"state_a","actions":[{"action":"action_x","count":3,"weighted_count":3.0,"success_rate":0.667,"mean_score":0.633,"prior":0.557,"confidence":0.130}]}
 ```
 
@@ -127,7 +127,8 @@ ranking指標が良くてもdownstream改善の証明にはなりません。実
 ## 追加機能
 
 - `PriorBook::query_borrowed`は、再利用可能な`QueryScratch` index bufferを使い、ranked
-  `&PriorAction`を返します。既存のowned `query` APIは変更しません。
+  `&PriorAction`を返します。既存のowned `query` APIは変更しません。通常のbuildで作ったbookは
+  保存済みrankingを再利用し、手作りの未整列bookはquery境界で正規化します。
 - core libraryは、可変長context、sequence scoring、`PriorTrie`、bounded macro-action、
   terminal credit、source weight付きmulti-source mergeを提供します。
 - `lineprior-similarity`は、利用側が用意した有限feature vectorを検索します。actionや

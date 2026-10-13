@@ -46,6 +46,10 @@ class VersionContractTests(unittest.TestCase):
         header = json.dumps({"producer_version": version}) + "\n"
         for name in ("prior.jsonl", "shogi_prior.jsonl"):
             (self.root / "examples" / name).write_text(header)
+        (self.root / "tests" / "fixtures").mkdir(parents=True)
+        (self.root / "tests" / "fixtures" / "candidate_ordering_not_ready.json").write_text(
+            json.dumps({"measurement": {"lineprior_version": version}})
+        )
 
     def test_schema_drift_is_rejected(self):
         self.write_schema("similarity-real-data-v1.schema.json")
@@ -61,9 +65,19 @@ class VersionContractTests(unittest.TestCase):
     def test_matching_schemas_and_fixtures_pass(self):
         self.write_schema("similarity-real-data-v1.schema.json")
         self.write_schema("offpolicy-integrated-arms-v1.schema.json")
+        self.write_schema("candidate-ordering-evaluation-v1.schema.json")
         self.write_fixtures()
         check_schema_versions(self.root)
         check_fixture_versions(VERSION, self.root)
+
+    def test_candidate_ordering_fixture_drift_is_rejected(self):
+        self.write_fixtures()
+        path = self.root / "tests" / "fixtures" / "candidate_ordering_not_ready.json"
+        value = json.loads(path.read_text())
+        value["measurement"]["lineprior_version"] = STALE_VERSION
+        path.write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError, "candidate-ordering fixture"):
+            check_fixture_versions(VERSION, self.root)
 
 
 if __name__ == "__main__":

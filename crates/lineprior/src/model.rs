@@ -451,15 +451,37 @@ pub struct SequencePriorScore {
 /// Deterministic action ordering: descending prior, tie-broken by action
 /// string. Shared by owned and borrowed queries so their rankings cannot
 /// drift apart.
-fn compare_actions(a: &PriorAction, b: &PriorAction) -> Ordering {
+pub(crate) fn compare_actions(a: &PriorAction, b: &PriorAction) -> Ordering {
     b.prior
         .partial_cmp(&a.prior)
         .unwrap_or(Ordering::Equal)
         .then_with(|| a.action.cmp(&b.action))
 }
 
-fn sort_actions(actions: &mut [PriorAction]) {
-    actions.sort_by(compare_actions);
+pub(crate) fn actions_are_sorted(actions: &[PriorAction]) -> bool {
+    actions
+        .windows(2)
+        .all(|pair| compare_actions(&pair[0], &pair[1]) != Ordering::Greater)
+}
+
+pub(crate) fn sort_actions(actions: &mut [PriorAction]) {
+    if !actions_are_sorted(actions) {
+        actions.sort_by(compare_actions);
+    }
+}
+
+fn clone_ranked_actions(actions: &[PriorAction], top_k: Option<usize>) -> Vec<PriorAction> {
+    if actions_are_sorted(actions) {
+        let len = top_k.unwrap_or(actions.len()).min(actions.len());
+        return actions[..len].to_vec();
+    }
+
+    let mut ranked = actions.to_vec();
+    ranked.sort_by(compare_actions);
+    if let Some(k) = top_k {
+        ranked.truncate(k);
+    }
+    ranked
 }
 
 impl PriorBook {
@@ -516,22 +538,18 @@ impl PriorBook {
         let Some(actions) = self.entries.get(state) else {
             return Vec::new();
         };
-        let mut actions = actions.clone();
-        sort_actions(&mut actions);
-        if let Some(k) = top_k {
-            actions.truncate(k);
-        }
-        actions
+        clone_ranked_actions(actions, top_k)
     }
 
     /// Ranked read-only candidates for `state`, using caller-owned reusable
     /// index storage instead of cloning [`PriorAction`] values.
     ///
     /// Ordering, tie-breaking, `top_k`, and unseen-state behavior are exactly
-    /// the same as [`Self::query`]. The first call may allocate indices up to
-    /// the number of actions in the state; repeated calls reuse
-    /// [`QueryScratch`]'s capacity. The iterator borrows both this book and
-    /// the scratch value until it is dropped.
+    /// the same as [`Self::query`]. Canonically ranked books allocate indices
+    /// only up to `top_k`; an ad-hoc unsorted book may require indices for
+    /// every action so it can be ranked without mutating caller-owned data.
+    /// Repeated calls reuse [`QueryScratch`]'s capacity. The iterator borrows
+    /// both this book and the scratch value until it is dropped.
     ///
     /// Use the owned `query` API when candidates must outlive the book or be
     /// modified. Use this method for repeated read-only adapter lookups.
@@ -544,14 +562,15 @@ impl PriorBook {
         scratch.indices.clear();
         let actions = self.entries.get(state).map_or(&[][..], Vec::as_slice);
 
-        if top_k != Some(0) {
+        if actions_are_sorted(actions) {
+            let len = top_k.unwrap_or(actions.len()).min(actions.len());
+            scratch.indices.extend(0..len);
+        } else if top_k != Some(0) {
             scratch.indices.extend(0..actions.len());
             scratch
                 .indices
                 .sort_by(|left, right| compare_actions(&actions[*left], &actions[*right]));
-            if let Some(k) = top_k {
-                scratch.indices.truncate(k);
-            }
+            scratch.indices.truncate(top_k.unwrap_or(actions.len()));
         }
 
         BorrowedQuery {
@@ -579,14 +598,9 @@ impl PriorBook {
         for len in (1..=recent_actions.len()).rev() {
             let context = recent_actions[recent_actions.len() - len..].to_vec();
             if let Some(actions) = self.context_entries.get(&(context, state.to_string())) {
-                let mut actions = actions.clone();
-                sort_actions(&mut actions);
-                if let Some(k) = top_k {
-                    actions.truncate(k);
-                }
                 return ContextQueryResult {
                     matched_order: len,
-                    candidates: actions,
+                    candidates: clone_ranked_actions(actions, top_k),
                 };
             }
         }
@@ -746,6 +760,38 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["c", "d", "a"]
         );
+    }
+
+    #[test]
+    fn presorted_and_unsorted_query_paths_return_identical_rankings() {
+        let unsorted = PriorBook {
+            entries: HashMap::from([(
+                "s".to_string(),
+                vec![
+                    action("b", 2, 0.5, 0.2),
+                    action("d", 4, 0.9, 0.4),
+                    action("a", 1, 0.5, 0.1),
+                    action("c", 3, 0.9, 0.3),
+                ],
+            )]),
+            ..Default::default()
+        };
+        let mut presorted = unsorted.clone();
+        presorted
+            .entries
+            .insert("s".to_string(), unsorted.query("s", None));
+
+        for top_k in [None, Some(0), Some(2), Some(usize::MAX)] {
+            let expected = unsorted.query("s", top_k);
+            assert_eq!(presorted.query("s", top_k), expected);
+
+            let mut scratch = QueryScratch::new();
+            let borrowed = presorted
+                .query_borrowed("s", top_k, &mut scratch)
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(borrowed, expected);
+        }
     }
 
     #[test]

@@ -57,6 +57,7 @@ def check_schema_versions(root=ROOT):
     for name in (
         "similarity-real-data-v1.schema.json",
         "offpolicy-integrated-arms-v1.schema.json",
+        "candidate-ordering-evaluation-v1.schema.json",
     ):
         schema = json.loads((root / "docs" / "measurements" / name).read_text())
         version = schema["$defs"]["measurement"]["properties"]["lineprior_version"]
@@ -71,6 +72,15 @@ def check_schema_versions(root=ROOT):
 def check_fixture_versions(expected, root=ROOT):
     manifest = json.loads((root / "examples" / "veridict_prior_comparison.json").read_text())
     require_equal(manifest["lineprior_version"], expected, "veridict fixture lineprior_version")
+
+    candidate = json.loads(
+        (root / "tests" / "fixtures" / "candidate_ordering_not_ready.json").read_text()
+    )
+    require_equal(
+        candidate["measurement"]["lineprior_version"],
+        expected,
+        "candidate-ordering fixture lineprior_version",
+    )
 
     for name in ("prior.jsonl", "shogi_prior.jsonl"):
         first_line = next(

@@ -26,16 +26,18 @@ node -e 'const p=require("./examples/wasm/package.json"); if (p.devDependencies.
 python3 -c 'import ast; ast.parse(open("examples/python/roundtrip.py").read())'
 python3 scripts/check_measurement_schemas.py
 python3 scripts/test_measurement_validator_messages.py
+python3 scripts/test_validate_candidate_ordering.py
 python3 scripts/test_measure_similarity.py
 python3 scripts/test_prepare_sekirei_similarity.py
 python3 scripts/test_audit_offpolicy_readiness.py
 python3 scripts/test_audit_gate_history_readiness.py
 python3 scripts/validate_measurement_artifact.py similarity docs/measurements/similarity-sekirei-2026-10-03.json --require-explicit-lineage --expected-lineprior-version 0.12.0
+python3 scripts/validate_measurement_artifact.py candidate-ordering tests/fixtures/candidate_ordering_not_ready.json --require-explicit-lineage
 python3 scripts/validate_offpolicy_readiness.py docs/measurements/offpolicy-sekirei-readiness-2026-10-03.json --expected-lineprior-version 0.12.0
 python3 scripts/validate_gate_history_readiness.py docs/measurements/gate-history-sekirei-readiness-2026-10-03.json --expected-lineprior-version 0.12.0
 python3 scripts/validate_sekirei_case_study.py docs/case-studies/sekirei-opening-book-2026-10-03.json --expected-lineprior-version 0.12.0
 test -s crates/lineprior-cli/tests/measurement_schema.rs
-python3 -c 'import ast; [ast.parse(open(path).read()) for path in ("scripts/version_contract.py", "scripts/test_version_contract.py", "scripts/measure_similarity.py", "scripts/test_measure_similarity.py", "scripts/prepare_sekirei_similarity.py", "scripts/test_prepare_sekirei_similarity.py", "scripts/audit_offpolicy_readiness.py", "scripts/test_audit_offpolicy_readiness.py", "scripts/validate_offpolicy_readiness.py", "scripts/audit_gate_history_readiness.py", "scripts/test_audit_gate_history_readiness.py", "scripts/validate_gate_history_readiness.py", "scripts/compare_offpolicy_arms.py", "scripts/measure_offpolicy_arms.py", "scripts/validate_measurement_artifact.py", "scripts/check_measurement_schemas.py", "scripts/test_measurement_validator_messages.py", "scripts/validate_ecosystem_runtime.py", "scripts/validate_wasm_runtime.py", "scripts/validate_npm_package_runtime.py", "scripts/validate_sekirei_case_study.py")]'
+python3 -c 'import ast; [ast.parse(open(path).read()) for path in ("scripts/version_contract.py", "scripts/test_version_contract.py", "scripts/measure_similarity.py", "scripts/test_measure_similarity.py", "scripts/prepare_sekirei_similarity.py", "scripts/test_prepare_sekirei_similarity.py", "scripts/audit_offpolicy_readiness.py", "scripts/test_audit_offpolicy_readiness.py", "scripts/validate_offpolicy_readiness.py", "scripts/audit_gate_history_readiness.py", "scripts/test_audit_gate_history_readiness.py", "scripts/validate_gate_history_readiness.py", "scripts/compare_offpolicy_arms.py", "scripts/measure_offpolicy_arms.py", "scripts/validate_measurement_artifact.py", "scripts/check_measurement_schemas.py", "scripts/test_measurement_validator_messages.py", "scripts/test_validate_candidate_ordering.py", "scripts/validate_ecosystem_runtime.py", "scripts/validate_wasm_runtime.py", "scripts/validate_npm_package_runtime.py", "scripts/validate_sekirei_case_study.py")]'
 test -x scripts/run_ecosystem_matrix_smoke.sh
 sh -n scripts/run_ecosystem_matrix_smoke.sh
 test -x scripts/run_npm_package_smoke.sh

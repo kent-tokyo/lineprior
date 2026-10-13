@@ -176,7 +176,7 @@ fn bench_macro_action_extraction(c: &mut Criterion) {
     });
 }
 
-fn ranked_query_book(actions_per_state: usize) -> PriorBook {
+fn ranked_query_book(actions_per_state: usize, presorted: bool) -> PriorBook {
     let actions = (0..actions_per_state)
         .rev()
         .map(|index| PriorAction {
@@ -189,17 +189,23 @@ fn ranked_query_book(actions_per_state: usize) -> PriorBook {
             confidence: 0.5,
         })
         .collect();
-    PriorBook {
+    let mut book = PriorBook {
         entries: HashMap::from([("query-state".to_string(), actions)]),
         ..Default::default()
+    };
+    if presorted {
+        let ranked = book.query("query-state", None);
+        book.entries.insert("query-state".to_string(), ranked);
     }
+    book
 }
 
-/// Compares the existing owned query with the reusable borrowed path. Both
-/// sort the same unsorted 64-action state and return the same top eight; the
-/// borrowed case reuses its index allocation and does not clone actions.
+/// Compares owned and borrowed queries for both an ad-hoc unsorted book and
+/// the canonical ranking produced by normal builds. Every case returns the
+/// same top eight; borrowed queries avoid cloning action values.
 fn bench_ranked_query(c: &mut Criterion) {
-    let book = ranked_query_book(64);
+    let book = ranked_query_book(64, false);
+    let presorted = ranked_query_book(64, true);
     let mut group = c.benchmark_group("ranked_query_64_actions_top8");
     group.bench_function("owned_clone_sort", |b| {
         b.iter(|| black_box(book.query("query-state", Some(8))))
@@ -210,6 +216,21 @@ fn bench_ranked_query(c: &mut Criterion) {
         b.iter(|| {
             let prior_sum = book
                 .query_borrowed("query-state", Some(8), &mut scratch)
+                .map(|candidate| candidate.prior)
+                .sum::<f64>();
+            black_box(prior_sum)
+        })
+    });
+
+    group.bench_function("owned_presorted_topk", |b| {
+        b.iter(|| black_box(presorted.query("query-state", Some(8))))
+    });
+
+    let mut presorted_scratch = QueryScratch::with_capacity(8);
+    group.bench_function("borrowed_presorted_topk", |b| {
+        b.iter(|| {
+            let prior_sum = presorted
+                .query_borrowed("query-state", Some(8), &mut presorted_scratch)
                 .map(|candidate| candidate.prior)
                 .sum::<f64>();
             black_box(prior_sum)

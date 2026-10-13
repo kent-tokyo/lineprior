@@ -12,13 +12,14 @@ for CLI options and [docs.rs](https://docs.rs/lineprior) for the Rust API.
 | [IPS/DR evaluation](measurements/offpolicy-real-data.md) | Required propensity, overlap, bootstrap, and paired arms |
 | [GateModel readiness](measurements/gate-model-real-history.md) | Candidate admission rules and the requirements for real-history validation |
 | [Runtime and WASM](measurements/ecosystem-compatibility.md) | Maintained CI matrix and package boundary |
-| [Candidate-ordering integration](case-studies/candidate-ordering-integration.md) | Paired downstream evaluation and adoption criteria |
+| [Candidate-ordering integration](case-studies/candidate-ordering-integration.md) | Coverage preflight, paired evaluation artifact, and adoption criteria |
 | [Historical benchmark](benchmarks/v0.11.0-m4-arm64-2026-09-02.md) | One synthetic Apple M4 snapshot; not a current performance claim |
 
 ## Schemas and validators
 
-The JSON Schemas under [`measurements/`](measurements/) cover raw off-policy and gate rows,
-integrated measurement artifacts, similarity reports, and the optional prior-artifact sidecar.
+The JSON Schemas under [`measurements/`](measurements/) cover candidate-ordering evaluations, raw
+off-policy and gate rows, integrated measurement artifacts, similarity reports, and the optional
+prior-artifact sidecar.
 Use these commands for semantic checks that JSON Schema does not express:
 
 ```bash
@@ -27,6 +28,7 @@ lineprior validate offpolicy.jsonl --kind offpolicy
 lineprior validate gate-history.jsonl --kind gate
 lineprior verify-artifact --manifest prior.manifest.json --input observations.jsonl --book prior.jsonl
 python3 scripts/check_measurement_schemas.py
+python3 scripts/validate_measurement_artifact.py candidate-ordering report.json --require-explicit-lineage
 sh scripts/check_candidate_contract.sh
 ```
 

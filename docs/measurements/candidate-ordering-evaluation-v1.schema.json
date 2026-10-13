@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kent-tokyo/lineprior/blob/main/docs/measurements/candidate-ordering-evaluation-v1.schema.json",
+  "title": "lineprior candidate-ordering-evaluation-v1 artifact",
+  "type": "object",
+  "required": ["protocol", "measurement", "preregistration", "preflight", "arms", "decision"],
+  "properties": {
+    "protocol": {"const": "candidate-ordering-evaluation-v1"},
+    "measurement": {"$ref": "#/$defs/measurement"},
+    "preregistration": {"$ref": "#/$defs/preregistration"},
+    "preflight": {"$ref": "#/$defs/usage"},
+    "arms": {
+      "type": "object",
+      "required": ["off", "on"],
+      "properties": {
+        "off": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/arm"}]},
+        "on": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/arm"}]}
+      },
+      "additionalProperties": false
+    },
+    "decision": {"$ref": "#/$defs/decision"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "unit": {"type": "number", "minimum": 0, "maximum": 1},
+    "interval": {
+      "type": "object",
+      "required": ["lower", "upper"],
+      "properties": {"lower": {"type": "number"}, "upper": {"type": "number"}},
+      "additionalProperties": false
+    },
+    "measurement": {
+      "type": "object",
+      "required": ["dataset_id", "split", "lineprior_version", "prior_config_fingerprint", "downstream_commit", "toolchain", "hardware", "seed", "input_sha256"],
+      "properties": {
+        "dataset_id": {"type": "string", "minLength": 1},
+        "split": {"type": "string", "minLength": 1},
+        "lineprior_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "prior_config_fingerprint": {
+          "oneOf": [{"type": "integer", "minimum": 0}, {"type": "string", "minLength": 1}]
+        },
+        "downstream_commit": {"type": "string", "minLength": 1},
+        "toolchain": {"type": "string", "minLength": 1},
+        "hardware": {"type": "string", "minLength": 1},
+        "seed": {"type": "integer", "minimum": 0},
+        "input_sha256": {
+          "type": "object",
+          "required": ["observations", "heldout_cases", "prior_book", "off_results", "on_results"],
+          "properties": {
+            "observations": {"$ref": "#/$defs/digest"},
+            "heldout_cases": {"$ref": "#/$defs/digest"},
+            "prior_book": {"$ref": "#/$defs/digest"},
+            "off_results": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+            "on_results": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "preregistration": {
+      "type": "object",
+      "required": ["quality_metric", "quality_direction", "quality_noninferiority_margin", "cost_metric", "cost_direction", "minimum_prior_selections", "minimum_prior_selection_rate", "maximum_case_budget", "uncertainty_method", "decision_rule"],
+      "properties": {
+        "quality_metric": {"type": "string", "minLength": 1},
+        "quality_direction": {"enum": ["higher", "lower"]},
+        "quality_noninferiority_margin": {"type": "number", "minimum": 0},
+        "cost_metric": {"type": "string", "minLength": 1},
+        "cost_direction": {"enum": ["higher", "lower"]},
+        "minimum_prior_selections": {"type": "integer", "minimum": 1},
+        "minimum_prior_selection_rate": {"$ref": "#/$defs/unit"},
+        "maximum_case_budget": {"type": "integer", "minimum": 1},
+        "uncertainty_method": {"type": "string", "minLength": 1},
+        "decision_rule": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "usage": {
+      "type": "object",
+      "required": ["eligible_decisions", "prior_selections", "prior_abstentions", "unavailable_fallbacks", "selection_rate", "fallback_reasons", "passed_coverage_gate"],
+      "properties": {
+        "eligible_decisions": {"type": "integer", "minimum": 0},
+        "prior_selections": {"type": "integer", "minimum": 0},
+        "prior_abstentions": {"type": "integer", "minimum": 0},
+        "unavailable_fallbacks": {"type": "integer", "minimum": 0},
+        "selection_rate": {"$ref": "#/$defs/unit"},
+        "fallback_reasons": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+        "passed_coverage_gate": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "arm": {
+      "type": "object",
+      "required": ["cases", "quality_estimate", "quality_interval", "cost_estimate", "cost_interval"],
+      "properties": {
+        "cases": {"type": "integer", "minimum": 1},
+        "quality_estimate": {"type": "number"},
+        "quality_interval": {"$ref": "#/$defs/interval"},
+        "cost_estimate": {"type": "number"},
+        "cost_interval": {"$ref": "#/$defs/interval"},
+        "usage": {"$ref": "#/$defs/usage"}
+      },
+      "additionalProperties": false
+    },
+    "decision": {
+      "type": "object",
+      "required": ["status", "quality_noninferiority_met", "cost_improvement_met", "rationale"],
+      "properties": {
+        "status": {"enum": ["NOT_READY", "PASS", "FAIL", "INCONCLUSIVE"]},
+        "quality_noninferiority_met": {"type": ["boolean", "null"]},
+        "cost_improvement_met": {"type": ["boolean", "null"]},
+        "rationale": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    }
+  }
+}

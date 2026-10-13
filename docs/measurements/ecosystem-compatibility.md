@@ -1,6 +1,6 @@
 # Runtime and WASM compatibility evidence
 
-This document records the compatibility checks maintained for `lineprior` `0.12.5`. It defines
+This document records the compatibility checks maintained for `lineprior` `0.12.6`. It defines
 the current evidence boundary; it is not a promise that every runtime version is supported.
 
 ## Maintained CI matrix

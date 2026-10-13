@@ -68,7 +68,7 @@ and reports warnings.
 `build` writes a schema-v1 metadata header followed by deterministically ordered state entries:
 
 ```text
-{"prior_book_schema_version":1,"producer_version":"0.12.5","build_config":{...},"build_config_fingerprint":7308171529403319118}
+{"prior_book_schema_version":1,"producer_version":"0.12.6","build_config":{...},"build_config_fingerprint":7308171529403319118}
 {"state":"state_a","actions":[{"action":"action_x","count":3,"weighted_count":3.0,"success_rate":0.667,"mean_score":0.633,"prior":0.557,"confidence":0.130}]}
 ```
 
@@ -131,7 +131,8 @@ Run `lineprior <command> --help` for all options.
 
 - `PriorBook::query_borrowed` returns ranked `&PriorAction` values through a reusable
   `QueryScratch` index buffer for repeated read-only lookups. The existing owned `query` API
-  remains unchanged.
+  remains unchanged. Canonically built books reuse their stored ranking; ad-hoc unsorted books are
+  normalized at the query boundary.
 - Variable-order context, sequence scoring, `PriorTrie`, bounded macro-actions, terminal credit,
   and weighted multi-source book merging are available in the core library.
 - `lineprior-similarity` searches caller-supplied finite feature vectors. It does not generate
