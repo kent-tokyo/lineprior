@@ -40,7 +40,8 @@ Then validate, build, inspect, and query the book:
 
 ```bash
 lineprior validate observations.jsonl
-lineprior build observations.jsonl --out prior.jsonl --min-count 2
+lineprior build observations.jsonl --out prior.jsonl --min-count 2 \
+  --artifact-manifest manifest.json
 lineprior verify-artifact --manifest manifest.json --input observations.jsonl --book prior.jsonl
 lineprior summary prior.jsonl
 lineprior query prior.jsonl --state state_a --top-k 5
@@ -83,6 +84,19 @@ semantics, and schema-v1 book metadata. Legacy or headerless books return a prov
 Artifact schemas and validation commands are indexed in
 [`docs/README.md`](./docs/README.md).
 
+For reproducible exact-match telemetry, `batch-query` validates a schema-v1 book against its
+manifest before writing one ordered result per versioned query row:
+
+```bash
+lineprior batch-query prior.jsonl examples/batch_queries.jsonl \
+  --artifact-manifest manifest.json --out batch-report.jsonl --top-k 5
+```
+
+The report records exact input and book hashes, the build fingerprint, thresholds, candidate
+counts, and explicit `matched`, `unseen_state`, or `insufficient_support` status. It only copies
+observed actions from the frozen book; it does not generate actions or predict outcomes. See the
+[batch-query contract](./docs/batch-query.md).
+
 ## Ranking, confidence, and evaluation
 
 The default ranker combines log weighted count, smoothed success rate, and smoothed mean score,
@@ -120,6 +134,7 @@ the real decision loop.
 | `summary` | Report coverage, confidence, entropy, and context support |
 | `validate` | Validate observation, off-policy, or gate-history JSONL |
 | `verify-artifact` | Verify a sidecar against input bytes and prior-book metadata |
+| `batch-query` | Write deterministic exact-match telemetry for versioned query rows |
 | `eval` / `tune` | Evaluate one config or tune it on a fixed split |
 | `pack` / `unpack` | Convert JSONL and LPB v1 |
 | `offpolicy` | Compute IPS, SNIPS, DR, overlap, and bootstrap intervals |

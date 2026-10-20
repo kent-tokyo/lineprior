@@ -4,7 +4,8 @@ mod commands;
 
 use clap::{Parser, Subcommand};
 use commands::{
-    binary, build, eval, gate, offpolicy, query, summary, tune, validate, verify_artifact,
+    batch_query, binary, build, eval, gate, offpolicy, query, summary, tune, validate,
+    verify_artifact,
 };
 use std::process::ExitCode;
 
@@ -21,6 +22,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Query a frozen book over versioned JSONL rows and write telemetry.
+    BatchQuery(batch_query::BatchQueryArgs),
     /// Build a prior book from a JSONL observation log.
     Build(build::BuildArgs),
     /// Evaluate prior quality on held-out data.
@@ -49,6 +52,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     let result = match cli.command {
+        Commands::BatchQuery(args) => batch_query::run(args),
         Commands::Build(args) => build::run(args),
         Commands::Eval(args) => eval::run(args),
         Commands::Gate(args) => gate::run(args),

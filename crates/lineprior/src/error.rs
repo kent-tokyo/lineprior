@@ -101,6 +101,21 @@ pub enum Error {
         found: String,
     },
 
+    #[error(
+        "line {line}: unsupported batch-query schema version {found}; supported version is {supported}"
+    )]
+    UnsupportedBatchQuerySchemaVersion {
+        line: usize,
+        found: u32,
+        supported: u32,
+    },
+
+    #[error("line {line}: invalid batch-query row: {message}")]
+    InvalidBatchQueryRow { line: usize, message: String },
+
+    #[error("invalid batch-query config: {message}")]
+    InvalidBatchQueryConfig { message: String },
+
     /// Raised only when `BuildConfig::context_order > 0`: deriving a
     /// sequence's recent-action window while streaming requires that
     /// sequence's own rows be contiguous and in increasing `step` order.

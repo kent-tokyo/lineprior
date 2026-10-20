@@ -39,7 +39,8 @@ cargo install lineprior-cli
 
 ```bash
 lineprior validate observations.jsonl
-lineprior build observations.jsonl --out prior.jsonl --min-count 2
+lineprior build observations.jsonl --out prior.jsonl --min-count 2 \
+  --artifact-manifest manifest.json
 lineprior verify-artifact --manifest manifest.json --input observations.jsonl --book prior.jsonl
 lineprior summary prior.jsonl
 lineprior query prior.jsonl --state state_a --top-k 5
@@ -81,6 +82,19 @@ bookのbyte列をSHA-256で結び、dataset、split、adapter、lineageをbook s
 旧形式またはheaderless bookの場合はprovenance不足をwarningで返します。artifact schemaと
 検証方法は[`docs/README.md`](./docs/README.md)にまとめています。
 
+再現可能なexact-match telemetryには`batch-query`を使います。schema-v1 bookとmanifestを
+照合してから、version付きqueryの入力順に1件ずつ結果を書きます。
+
+```bash
+lineprior batch-query prior.jsonl examples/batch_queries.jsonl \
+  --artifact-manifest manifest.json --out batch-report.jsonl --top-k 5
+```
+
+reportには入力とbookのhash、build fingerprint、threshold、候補数、`matched`、
+`unseen_state`、`insufficient_support`の状態を記録します。frozen bookで観測済みのactionだけを
+複写し、action生成やoutcome予測は行いません。詳細は
+[batch-query契約](./docs/batch-query.md)を参照してください。
+
 ## ranking、confidence、評価
 
 既定のrankingは、weighted countの対数、平滑化したsuccess rate、平滑化したmean scoreを
@@ -117,6 +131,7 @@ ranking指標が良くてもdownstream改善の証明にはなりません。実
 | `summary` | coverage、confidence、entropy、context supportを要約 |
 | `validate` | observation、off-policy、gate-history JSONLを検証 |
 | `verify-artifact` | sidecarを入力byte列とprior-book metadataに照合 |
+| `batch-query` | version付きqueryの決定的なexact-match telemetryを出力 |
 | `eval` / `tune` | 固定splitでconfigを評価または調整 |
 | `pack` / `unpack` | JSONLとLPB v1を変換 |
 | `offpolicy` | IPS、SNIPS、DR、overlap、bootstrap intervalを計算 |

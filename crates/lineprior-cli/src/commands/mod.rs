@@ -1,3 +1,4 @@
+pub mod batch_query;
 pub mod binary;
 pub mod build;
 pub mod eval;
