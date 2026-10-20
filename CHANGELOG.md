@@ -9,6 +9,13 @@ release may include Rust source-breaking changes; such changes are called out ex
 
 ## [Unreleased]
 
+### Added
+
+- Added a deterministic `batch-query` library and CLI boundary for exact-match telemetry. Versioned
+  query rows preserve input order and report matched or explicit abstention outcomes, while a
+  schema-v1 book, its sidecar manifest, exact byte hashes, build fingerprint, and query controls
+  are recorded or verified before output is created.
+
 ## [0.12.6] - 2026-10-14
 
 ### Added

@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod artifact;
+mod batch;
 mod binary;
 mod build;
 mod error;
@@ -29,6 +30,11 @@ mod tune;
 pub use artifact::{
     PRIOR_ARTIFACT_MANIFEST_SCHEMA, PriorArtifactBookCompatibility, PriorArtifactLineage,
     PriorArtifactManifestV1, PriorArtifactSummary,
+};
+pub use batch::{
+    BATCH_QUERY_INPUT_SCHEMA_VERSION, BATCH_QUERY_REPORT_SCHEMA, BatchQueryCandidate,
+    BatchQueryConfig, BatchQueryInputV1, BatchQueryReportHeaderV1, BatchQueryResultV1,
+    BatchQueryStatus, evaluate_batch_queries, parse_batch_query_jsonl,
 };
 pub use binary::{load_prior_book_binary, save_prior_book_binary};
 pub use build::{BuildOutput, BuildStats, IncrementalPriorBuilder, build_prior_book};

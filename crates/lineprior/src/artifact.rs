@@ -139,6 +139,18 @@ impl PriorArtifactManifestV1 {
         )
     }
 
+    /// Compare the exact prior-book digest without requiring the original
+    /// observation stream. This supports read-only consumers that need to
+    /// bind a frozen book to its manifest but never reopen the training data.
+    pub fn verify_book_digest(&self, prior_book_sha256: &str) -> Result<()> {
+        self.validate()?;
+        verify_digest(
+            "prior_book_sha256",
+            &self.prior_book_sha256,
+            prior_book_sha256,
+        )
+    }
+
     /// Cross-check the prior-book header against this manifest.
     ///
     /// Legacy and headerless books remain readable, but callers can use the
@@ -210,7 +222,7 @@ fn verify_metadata(field: &'static str, expected: &str, found: &str) -> Result<(
     }
 }
 
-fn validate_sha256(field: &'static str, value: &str) -> Result<()> {
+pub(crate) fn validate_sha256(field: &'static str, value: &str) -> Result<()> {
     let valid = value.len() == 64
         && value
             .bytes()
@@ -388,6 +400,13 @@ mod tests {
             manifest.verify_digests(&"1".repeat(64), &"a".repeat(64)),
             Err(Error::ArtifactDigestMismatch {
                 field: "input_sha256",
+                ..
+            })
+        ));
+        assert!(matches!(
+            manifest.verify_book_digest(&"b".repeat(64)),
+            Err(Error::ArtifactDigestMismatch {
+                field: "prior_book_sha256",
                 ..
             })
         ));

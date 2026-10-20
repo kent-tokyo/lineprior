@@ -39,6 +39,7 @@ fixed-version rules. Structural schema validation alone does not establish those
 
 ## Operations and recipes
 
+- [Deterministic batch-query telemetry](batch-query.md)
 - [Publishing workspace crates](publishing.md)
 - [Typed adapter boundaries](../examples/adapters.md)
 - [veridict prior on/off protocol](../examples/veridict_prior_comparison.md)

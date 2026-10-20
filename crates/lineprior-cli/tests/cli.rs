@@ -224,6 +224,163 @@ fn sha256(path: &Path) -> String {
     format!("{:x}", Sha256::digest(std::fs::read(path).unwrap()))
 }
 
+fn batch_fixture(name: &str) -> (PathBuf, PathBuf) {
+    let book = temp_path(&format!("{name}_book.jsonl"));
+    let manifest = temp_path(&format!("{name}_manifest.json"));
+    let _ = std::fs::remove_file(&book);
+    let _ = std::fs::remove_file(&manifest);
+    Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "build",
+            fixture("mixed_outcomes.jsonl").to_str().unwrap(),
+            "--out",
+            book.to_str().unwrap(),
+            "--artifact-manifest",
+            manifest.to_str().unwrap(),
+            "--dataset-id",
+            "batch-fixture-v1",
+            "--split",
+            "train",
+        ])
+        .assert()
+        .success();
+    (book, manifest)
+}
+
+#[test]
+fn batch_query_writes_deterministic_ordered_provenance_report() {
+    let (book, manifest) = batch_fixture("batch_query_deterministic");
+    let queries = temp_path("batch_query_deterministic_input.jsonl");
+    let out_a = temp_path("batch_query_deterministic_a.jsonl");
+    let out_b = temp_path("batch_query_deterministic_b.jsonl");
+    for path in [&queries, &out_a, &out_b] {
+        let _ = std::fs::remove_file(path);
+    }
+    std::fs::write(
+        &queries,
+        concat!(
+            "{\"batch_query_schema_version\":1,\"query_id\":\"q-unseen\",\"state\":\"missing\"}\n",
+            "{\"batch_query_schema_version\":1,\"query_id\":\"q-known\",\"state\":\"state_a\",\"candidate_budget\":1}\n",
+        ),
+    )
+    .unwrap();
+
+    for out in [&out_a, &out_b] {
+        Command::cargo_bin("lineprior")
+            .unwrap()
+            .args([
+                "batch-query",
+                book.to_str().unwrap(),
+                queries.to_str().unwrap(),
+                "--artifact-manifest",
+                manifest.to_str().unwrap(),
+                "--out",
+                out.to_str().unwrap(),
+                "--top-k",
+                "2",
+            ])
+            .assert()
+            .success();
+    }
+
+    let bytes_a = std::fs::read(&out_a).unwrap();
+    assert_eq!(bytes_a, std::fs::read(&out_b).unwrap());
+    let rows = String::from_utf8(bytes_a)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["schema"], "lineprior.batch-query-report.v1");
+    assert_eq!(rows[0]["query_input_sha256"], sha256(&queries));
+    assert_eq!(rows[0]["prior_book_sha256"], sha256(&book));
+    assert_eq!(rows[0]["query_count"], 2);
+    assert_eq!(rows[1]["query_id"], "q-unseen");
+    assert_eq!(rows[1]["status"], "unseen_state");
+    assert_eq!(rows[1]["selected_count"], 0);
+    assert_eq!(rows[2]["query_id"], "q-known");
+    assert_eq!(rows[2]["status"], "matched");
+    assert_eq!(rows[2]["selected_count"], 1);
+    let action = rows[2]["candidates"][0]["action"].as_str().unwrap();
+    assert!(matches!(action, "action_x" | "action_y"));
+
+    for path in [book, manifest, queries, out_a, out_b] {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+#[test]
+fn batch_query_rejects_future_rows_before_creating_output() {
+    let (book, manifest) = batch_fixture("batch_query_future");
+    let queries = temp_path("batch_query_future_input.jsonl");
+    let out = temp_path("batch_query_future_output.jsonl");
+    let _ = std::fs::remove_file(&out);
+    std::fs::write(
+        &queries,
+        "{\"batch_query_schema_version\":2,\"query_id\":\"q\",\"state\":\"state_a\"}\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "batch-query",
+            book.to_str().unwrap(),
+            queries.to_str().unwrap(),
+            "--artifact-manifest",
+            manifest.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unsupported batch-query schema"));
+    assert!(!out.exists());
+
+    for path in [book, manifest, queries] {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+#[test]
+fn batch_query_rejects_book_provenance_drift_before_output() {
+    let (book, manifest) = batch_fixture("batch_query_drift");
+    let queries = temp_path("batch_query_drift_input.jsonl");
+    let out = temp_path("batch_query_drift_output.jsonl");
+    let _ = std::fs::remove_file(&out);
+    std::fs::write(
+        &queries,
+        "{\"batch_query_schema_version\":1,\"query_id\":\"q\",\"state\":\"state_a\"}\n",
+    )
+    .unwrap();
+    let mut changed = std::fs::read(&book).unwrap();
+    changed.push(b'\n');
+    std::fs::write(&book, changed).unwrap();
+
+    let output = Command::cargo_bin("lineprior")
+        .unwrap()
+        .args([
+            "batch-query",
+            book.to_str().unwrap(),
+            queries.to_str().unwrap(),
+            "--artifact-manifest",
+            manifest.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("prior_book_sha256 mismatch"));
+    assert!(!out.exists());
+
+    for path in [book, manifest, queries] {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 #[test]
 fn pack_command_rejects_malformed_input_without_creating_output() {
     let input = temp_path("pack_malformed_input.jsonl");
