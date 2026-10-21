@@ -9,12 +9,21 @@ release may include Rust source-breaking changes; such changes are called out ex
 
 ## [Unreleased]
 
+## [0.12.7] - 2026-10-21
+
 ### Added
 
 - Added a deterministic `batch-query` library and CLI boundary for exact-match telemetry. Versioned
   query rows preserve input order and report matched or explicit abstention outcomes, while a
   schema-v1 book, its sidecar manifest, exact byte hashes, build fingerprint, and query controls
   are recorded or verified before output is created.
+
+### Compatibility
+
+- Prior-book schema v1, compact LPB v1, and optional artifact manifests remain compatible.
+- `lineprior::Error` gains batch-query parsing and configuration variants; exhaustive matches must
+  handle the new variants.
+- All five workspace crates and internal dependency requirements are version-locked at `0.12.7`.
 
 ## [0.12.6] - 2026-10-14
 

@@ -68,7 +68,7 @@ warningを返します。
 `build`はschema-v1 metadata headerの後に、決定的に並べたstate entryを書きます。
 
 ```text
-{"prior_book_schema_version":1,"producer_version":"0.12.6","build_config":{...},"build_config_fingerprint":7308171529403319118}
+{"prior_book_schema_version":1,"producer_version":"0.12.7","build_config":{...},"build_config_fingerprint":7308171529403319118}
 {"state":"state_a","actions":[{"action":"action_x","count":3,"weighted_count":3.0,"success_rate":0.667,"mean_score":0.633,"prior":0.557,"confidence":0.130}]}
 ```
 

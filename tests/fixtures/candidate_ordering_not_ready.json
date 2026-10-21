@@ -3,7 +3,7 @@
   "measurement": {
     "dataset_id": "synthetic-contract-v1",
     "split": "heldout",
-    "lineprior_version": "0.12.6",
+    "lineprior_version": "0.12.7",
     "prior_config_fingerprint": 123,
     "downstream_commit": "fixture-commit",
     "toolchain": "stable-fixture",
